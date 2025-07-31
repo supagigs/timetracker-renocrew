@@ -1,0 +1,28 @@
+{
+  "name": "supatimetracker",
+  "version": "1.0.0",
+  "description": "Time Tracker for Supagigs",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "test": "npm run dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/supagigs/Supatimetracker.git"
+  },
+  "keywords": [
+    "TimeTracker"
+  ],
+  "author": "Shree Mundade",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/supagigs/Supatimetracker/issues"
+  },
+  "homepage": "https://github.com/supagigs/Supatimetracker#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.53.0",
+    "electron": "^28.0.0"
+  }
+}
