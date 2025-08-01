@@ -1,9 +1,8 @@
 const { createClient } = require('@supabase/supabase-js');
 
 // Supabase configuration - in production, use environment variables
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://yrnihgsmwmlzizcqjvyf.supabase.co';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlybmloZ3Ntd21seml6Y3FqdnlmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIwNjMyMzQsImV4cCI6MjA1NzYzOTIzNH0.o-ygn-MwnFyxwbldJLzkI9tcTmtaPqDJX2WkQK2Nyi0';
-
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://wvrinoyisybtusypcjez.supabase.co';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind2cmlub3lpc3lidHVzeXBjamV6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDUzOTI0ODgsImV4cCI6MjA2MDk2ODQ4OH0.Ngbe3VedoxifGN2YuEXQV4S9OEOgYVR2T9yz9u-cYj4';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let startTime = null;
