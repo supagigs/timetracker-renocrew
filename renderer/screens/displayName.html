@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Display Name - Time Tracker</title>
+  <link rel="stylesheet" href="../styles/common.css">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 connect-src 'self' https://*.supabase.co;
+                 script-src 'self' https://cdn.jsdelivr.net;
+                 style-src 'self';
+                 img-src 'self' data: blob:;
+                 media-src 'self' data: blob:;">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../scripts/supabaseClient.js"></script>
+  <script src="../scripts/utils.js"></script>
+  <script src="../scripts/displayName.js" defer></script>
+</head>
+<body>
+  <div class="container">
+    <h1>Welcome!</h1>
+    <p>Let's personalize your experience</p>
+    
+    <div class="form-group">
+      <input type="text" id="displayName" placeholder="Enter your display name" required>
+      <button id="saveBtn" class="btn-primary">Continue</button>
+    </div>
+    
+    <div class="info-text">
+      <p>This will be shown on your dashboard</p>
+    </div>
+  </div>
+</body>
+</html>
