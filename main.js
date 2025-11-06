@@ -11,6 +11,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 900,
     height: 700,
+    icon: path.join(__dirname, 'SupagigsLogo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

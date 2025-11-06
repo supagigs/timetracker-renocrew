@@ -819,6 +819,44 @@ input[type="email"]:disabled, input[type="text"]:disabled {
   }
 }
 
+/* Clock In - Project Selection Styles */
+.project-selection-group {
+  display: none;
+  margin: 20px 0;
+}
+
+.project-selection-group.show {
+  display: block;
+}
+
+.project-selection-label {
+  display: block;
+  margin-bottom: 8px;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.project-select-full {
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.project-select-full.hidden {
+  display: none;
+}
+
+.no-projects-message {
+  display: none;
+  color: #fbbf24;
+  font-size: 0.9rem;
+  margin-top: 8px;
+}
+
+.no-projects-message.show {
+  display: block;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .container, .tracker-container, .report-container {

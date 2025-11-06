@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load projects for Freelancers
   if (isFreelancer) {
-    projectSelectionGroup.style.display = 'block';
+    projectSelectionGroup.classList.add('show');
     await loadAssignedProjects();
   }
 
@@ -80,13 +80,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       if (error) {
         console.error('Error loading assigned projects:', error);
-        NotificationService.showError('Failed to load assigned projects.');
+        
+        // Check if the error is because the table doesn't exist
+        if (error.code === 'PGRST205' || error.message?.includes('Could not find the table')) {
+          console.warn('project_assignments table does not exist. Please run the database migration.');
+          // Show user-friendly message instead of error
+          projectSelect.classList.add('hidden');
+          noProjectsMessage.textContent = 'Project assignments feature is not set up. Please contact your administrator to run the database migration.';
+          noProjectsMessage.classList.add('show');
+          startSessionBtn.disabled = true;
+        } else {
+          NotificationService.showError('Failed to load assigned projects.');
+        }
         return;
       }
 
       if (!assignments || assignments.length === 0) {
-        projectSelect.style.display = 'none';
-        noProjectsMessage.style.display = 'block';
+        projectSelect.classList.add('hidden');
+        noProjectsMessage.classList.add('show');
         startSessionBtn.disabled = true;
         return;
       }
@@ -102,7 +113,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       });
 
-      noProjectsMessage.style.display = 'none';
+      projectSelect.classList.remove('hidden');
+      noProjectsMessage.classList.remove('show');
     } catch (error) {
       console.error('Error in loadAssignedProjects:', error);
       NotificationService.showError('An error occurred while loading projects.');
