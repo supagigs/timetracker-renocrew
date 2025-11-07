@@ -18,18 +18,19 @@
   <script src="../scripts/displayName.js" defer></script>
 </head>
 <body>
-  <div class="container">
-    <h1>Welcome!</h1>
-    <p>Let's personalize your experience</p>
-    
-    <div class="form-group">
-      <input type="text" id="displayName" placeholder="Enter your display name" required>
-      <button id="saveBtn" class="btn-primary">Continue</button>
+  <div class="profile-card">
+    <div class="profile-header">
+      <h1>Welcome!</h1>
+      <p>Let's personalize your experience</p>
     </div>
-    
-    <div class="info-text">
-      <p>This will be shown on your dashboard</p>
+
+    <div class="profile-form">
+      <label for="displayName" class="sr-only">Display name</label>
+      <input type="text" id="displayName" placeholder="Enter your display name" required class="auth-input">
+      <button id="saveBtn" class="btn-primary profile-submit">Continue</button>
     </div>
+
+    <p class="profile-helper">This will be shown on your dashboard</p>
   </div>
 </body>
 </html>

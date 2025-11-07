@@ -17,62 +17,89 @@
   <script src="../scripts/utils.js"></script>
   <script src="../scripts/login.js" defer></script>
 </head>
-<body>
-  <div class="container">
-    <h1>Time Tracker</h1>
-    <p>Track your productivity and work time</p>
-    
-    <div class="form-group">
-      <input type="email" id="email" placeholder="Enter your email" required>
-      
-      <!-- Category dropdown (only shown for new users) -->
-      <div id="categoryGroup" class="form-group" style="display: none;">
-        <label for="category" style="display: block; color: #cbd5e1; margin-bottom: 10px; font-size: 0.9rem; text-align: left;">
-          Select your category:
-        </label>
-        <select id="category" class="session-select" style="width: 100%;">
-          <option value="">-- Select Category --</option>
-          <option value="Client">Client</option>
-          <option value="Freelancer">Freelancer</option>
-        </select>
+<body class="auth-body">
+  <div class="auth-background">
+    <div class="auth-glow auth-glow-primary"></div>
+    <div class="auth-glow auth-glow-accent"></div>
+  </div>
+
+  <div class="auth-wrapper">
+    <div class="auth-logo">
+      <div class="auth-logo-icon">
+        <span>⏱</span>
       </div>
-      
-      <!-- Projects section (only shown for Clients) -->
-      <div id="projectsGroup" class="form-group" style="display: none;">
-        <label style="display: block; color: #cbd5e1; margin-bottom: 10px; font-size: 0.9rem; text-align: left;">
-          Add Projects (you can add multiple):
-        </label>
-        <div id="projectsContainer" style="margin-bottom: 10px;">
-          <!-- Projects will be added here dynamically -->
-        </div>
-        <div style="display: flex; gap: 10px;">
-          <input 
-            type="text" 
-            id="newProjectInput" 
-            placeholder="Enter project name" 
-            style="flex: 1; padding: 10px 15px; border: 2px solid #475569; border-radius: 8px; background: #334155; color: #ffffff; font-size: 1rem;"
-            onkeypress="if(event.key === 'Enter') addProject()"
-          />
-          <button 
-            type="button" 
-            onclick="addProject()" 
-            class="btn-secondary" 
-            style="padding: 10px 20px; white-space: nowrap;"
+      <div class="auth-logo-text">
+        <p class="auth-logo-title">Time Tracker</p>
+        <p class="auth-logo-subtitle">Track your productivity and work time</p>
+      </div>
+    </div>
+
+    <div class="auth-card">
+      <div class="auth-card__header">
+        <h1>Track Your Time</h1>
+        <p>
+          Boost your productivity with accurate time tracking and detailed insights
+          into your work patterns.
+        </p>
+      </div>
+
+      <div class="auth-form">
+        <label for="email" class="sr-only">Email address</label>
+        <div class="auth-input-group">
+          <input
+            type="email"
+            id="email"
+            placeholder="your@email.com"
+            required
+            class="auth-input"
           >
-            Add Project
-          </button>
         </div>
-        <div id="projectsList" style="margin-top: 10px; min-height: 30px;">
-          <!-- Selected projects will be displayed here -->
+
+        <!-- Category dropdown (only shown for new users) -->
+        <div id="categoryGroup" class="auth-field-group" style="display: none;">
+          <label for="category">Select your category</label>
+          <select id="category" class="auth-select">
+            <option value="">-- Select Category --</option>
+            <option value="Client">Client</option>
+            <option value="Freelancer">Freelancer</option>
+          </select>
         </div>
+
+        <!-- Projects section (only shown for Clients) -->
+        <div id="projectsGroup" class="auth-field-group" style="display: none;">
+          <label for="newProjectInput">Add Projects (you can add multiple)</label>
+          <div class="auth-inline-fields">
+            <input
+              type="text"
+              id="newProjectInput"
+              placeholder="Enter project name"
+              class="auth-input"
+              onkeypress="if(event.key === 'Enter'){ event.preventDefault(); addProject(); }"
+            >
+            <button
+              type="button"
+              onclick="addProject()"
+              class="btn-secondary auth-secondary-btn"
+            >
+              Add Project
+            </button>
+          </div>
+          <div id="projectsList" class="project-chip-container">
+            <!-- Selected projects will be displayed here -->
+          </div>
+        </div>
+
+        <button id="loginBtn" class="btn-primary auth-submit">Login / Sign Up</button>
       </div>
-      
-      <button id="loginBtn" class="btn-primary">Login / Sign Up</button>
     </div>
-    
-    <div class="info-text">
-      <p>Enter your email to start tracking your time</p>
-    </div>
+
+    <p class="auth-helper-text">
+      Enter your email to get started. We’ll create an account or log you in instantly.
+    </p>
+
+    <p class="auth-footer-text">
+      By continuing, you agree to our Terms of Service and Privacy Policy.
+    </p>
   </div>
 </body>
 </html>

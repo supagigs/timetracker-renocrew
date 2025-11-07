@@ -18,20 +18,22 @@
   <script src="../scripts/projects.js" defer></script>
 </head>
 <body>
-  <div class="container">
-    <h1>My Projects</h1>
-    
-    <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-      <button id="backBtn" class="btn-secondary">← Back to Home</button>
-      <button id="addProjectBtn" class="btn-primary">+ Add Project</button>
+  <div class="projects-shell">
+    <div class="projects-header">
+      <div class="projects-title">
+        <h1>My Projects</h1>
+        <p>Manage your client workspaces and assignments</p>
+      </div>
+      <div class="projects-actions">
+        <button id="backBtn" class="btn-secondary projects-nav-btn">← Back to Home</button>
+        <button id="addProjectBtn" class="btn-primary projects-add-btn">+ Add Project</button>
+      </div>
     </div>
 
-    <div id="projectsContainer">
-      <div id="loadingMessage" style="text-align: center; color: #94a3b8; padding: 40px;">
-        Loading projects...
-      </div>
-      <div id="projectsList" style="display: none;"></div>
-      <div id="noProjectsMessage" style="display: none; text-align: center; color: #94a3b8; padding: 40px;">
+    <div id="projectsContainer" class="projects-container">
+      <div id="loadingMessage" class="projects-placeholder">Loading projects...</div>
+      <div id="projectsList" class="projects-list" style="display: none;"></div>
+      <div id="noProjectsMessage" class="projects-placeholder" style="display: none;">
         <p>No projects found. Click "Add Project" to create your first project.</p>
       </div>
     </div>

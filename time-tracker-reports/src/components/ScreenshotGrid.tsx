@@ -67,7 +67,7 @@ export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
 
   if (screenshots.length === 0) {
     return (
-      <p className="rounded-xl bg-slate-800 p-6 text-center text-slate-400">
+      <p className="rounded-xl border border-border bg-card p-6 text-center text-muted-foreground">
         No screenshots available for this session.
       </p>
     );
@@ -83,14 +83,14 @@ export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
           return (
             <div
               key={shot.id}
-              className="flex flex-col rounded-xl bg-slate-800 p-3 shadow transition hover:shadow-lg overflow-hidden"
+              className="flex flex-col overflow-hidden rounded-xl border border-border bg-card p-3 shadow-sm transition hover:shadow-md"
               onMouseEnter={() => setActiveScreenshot(shot)}
               onMouseLeave={() =>
                 setActiveScreenshot((prev) => (prev?.id === shot.id ? null : prev))
               }
               onClick={() => setActiveScreenshot(shot)}
             >
-              <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black flex-shrink-0">
+              <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-muted flex-shrink-0">
                 <img
                   src={shot.screenshot_data}
                   alt={alt}
@@ -99,7 +99,7 @@ export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
                   draggable={false}
                 />
               </div>
-              <div className="mt-2 text-xs text-slate-400">
+              <div className="mt-2 text-xs text-muted-foreground">
                 Session: {shot.session_id}
                 <br />
                 {formattedDate}
@@ -119,6 +119,7 @@ export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
     </>
   );
 }
+
 
 
 

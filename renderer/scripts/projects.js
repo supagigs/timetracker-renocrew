@@ -217,65 +217,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     projectsList.style.display = 'block';
     projectsList.innerHTML = '';
 
-    const container = document.createElement('div');
-    container.style.cssText = 'display: grid; gap: 16px;';
-
-    projects.forEach((project, index) => {
+    projects.forEach(project => {
       const projectCard = document.createElement('div');
-      projectCard.style.cssText = `
-        background: linear-gradient(135deg, rgba(51, 65, 85, 0.95) 0%, rgba(30, 41, 59, 0.95) 100%);
-        border: 1px solid #475569;
-        border-radius: 12px;
-        padding: 20px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        transition: all 0.3s ease;
-      `;
-      
-      projectCard.addEventListener('mouseenter', () => {
-        projectCard.style.borderColor = '#64748b';
-        projectCard.style.transform = 'translateY(-2px)';
-        projectCard.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
-      });
-      
-      projectCard.addEventListener('mouseleave', () => {
-        projectCard.style.borderColor = '#475569';
-        projectCard.style.transform = 'translateY(0)';
-        projectCard.style.boxShadow = 'none';
-      });
+      projectCard.className = 'project-card';
 
       const projectInfo = document.createElement('div');
-      projectInfo.style.cssText = 'flex: 1;';
+      projectInfo.className = 'project-card__info';
 
       const projectName = document.createElement('h3');
-      projectName.style.cssText = 'margin: 0 0 8px 0; color: #e2e8f0; font-size: 1.2rem; font-weight: 600;';
+      projectName.className = 'project-card__title';
       projectName.textContent = project.project_name;
 
       const projectDate = document.createElement('p');
-      projectDate.style.cssText = 'margin: 0; color: #94a3b8; font-size: 0.9rem;';
+      projectDate.className = 'project-card__meta';
       const createdDate = new Date(project.created_at);
-      projectDate.textContent = `Created: ${createdDate.toLocaleDateString('en-US', { 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric' 
+      projectDate.textContent = `Created: ${createdDate.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
       })}`;
 
       projectInfo.appendChild(projectName);
       projectInfo.appendChild(projectDate);
 
-      // Load and display assignments
       const assignmentsDiv = document.createElement('div');
-      assignmentsDiv.style.cssText = 'margin-top: 12px;';
+      assignmentsDiv.className = 'project-card__assignments';
       loadProjectAssignments(project.id, assignmentsDiv);
-
       projectInfo.appendChild(assignmentsDiv);
 
-      // Assign button
       const assignButton = document.createElement('button');
       assignButton.textContent = 'Assign to Freelancer';
-      assignButton.className = 'btn-secondary';
-      assignButton.style.cssText = 'margin-left: 16px;';
+      assignButton.className = 'btn-secondary project-card__assign-btn';
       assignButton.addEventListener('click', () => {
         currentProjectId = project.id;
         freelancerEmailInput.value = '';
@@ -287,11 +259,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       projectCard.appendChild(projectInfo);
       projectCard.appendChild(assignButton);
-
       projectsList.appendChild(projectCard);
     });
-
-    projectsList.appendChild(container);
   }
 
   async function loadProjectAssignments(projectId, container) {
@@ -310,47 +279,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       if (assignments && assignments.length > 0) {
         const assignmentsTitle = document.createElement('p');
-        assignmentsTitle.style.cssText = 'margin: 8px 0 4px 0; color: #cbd5e1; font-size: 0.9rem; font-weight: 600;';
+        assignmentsTitle.className = 'project-card__assignments-title';
         assignmentsTitle.textContent = 'Assigned to:';
         container.appendChild(assignmentsTitle);
 
         const assignmentsList = document.createElement('div');
-        assignmentsList.style.cssText = 'display: flex; flex-wrap: wrap; gap: 8px;';
+        assignmentsList.className = 'project-card__assignment-list';
 
         assignments.forEach(assignment => {
           const assignmentTag = document.createElement('div');
-          assignmentTag.style.cssText = `
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: rgba(59, 130, 246, 0.2);
-            border: 1px solid rgba(59, 130, 246, 0.4);
-            padding: 6px 12px;
-            border-radius: 6px;
-            font-size: 0.85rem;
-          `;
+          assignmentTag.className = 'project-card__assignment-chip';
 
           const emailSpan = document.createElement('span');
-          emailSpan.style.cssText = 'color: #93c5fd;';
+          emailSpan.className = 'project-card__assignment-email';
           emailSpan.textContent = assignment.freelancer_email;
 
           const removeBtn = document.createElement('button');
           removeBtn.textContent = '×';
-          removeBtn.style.cssText = `
-            background: rgba(239, 68, 68, 0.3);
-            border: none;
-            color: #fca5a5;
-            border-radius: 50%;
-            width: 20px;
-            height: 20px;
-            cursor: pointer;
-            font-size: 16px;
-            line-height: 1;
-            padding: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          `;
+          removeBtn.className = 'project-card__assignment-remove';
           removeBtn.addEventListener('click', async () => {
             if (confirm(`Remove ${assignment.freelancer_email} from this project?`)) {
               await removeAssignment(assignment.id, projectId);
@@ -365,7 +311,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         container.appendChild(assignmentsList);
       } else {
         const noAssignments = document.createElement('p');
-        noAssignments.style.cssText = 'margin: 8px 0 0 0; color: #64748b; font-size: 0.85rem; font-style: italic;';
+        noAssignments.className = 'project-card__empty';
         noAssignments.textContent = 'No freelancers assigned yet';
         container.appendChild(noAssignments);
       }

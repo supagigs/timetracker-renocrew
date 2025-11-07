@@ -149,8 +149,8 @@ export default function ScreenshotSelector({
     return (
       <section className="space-y-4">
         <div>
-          <h2 className="text-xl font-semibold">Session Screenshots</h2>
-          <p className="text-sm text-slate-400">No sessions recorded in the last 30 days.</p>
+          <h2 className="text-xl font-semibold text-foreground">Session Screenshots</h2>
+          <p className="text-sm text-muted-foreground">No sessions recorded in the last 30 days.</p>
         </div>
       </section>
     );
@@ -160,15 +160,15 @@ export default function ScreenshotSelector({
     <section className="space-y-4">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold">Session Screenshots</h2>
+          <h2 className="text-xl font-semibold text-foreground">Session Screenshots</h2>
           {selectedSessionId && (
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-muted-foreground">
               Session ID {selectedSessionId} • {screenshots.length} image{screenshots.length !== 1 ? 's' : ''}
             </p>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <label htmlFor="session-select" className="text-sm text-slate-300">
+          <label htmlFor="session-select" className="text-sm text-muted-foreground">
             Select Session:
           </label>
           <select
@@ -178,7 +178,7 @@ export default function ScreenshotSelector({
               const sessionId = e.target.value ? parseInt(e.target.value, 10) : undefined;
               setSelectedSessionId(sessionId);
             }}
-            className="rounded-lg bg-slate-700 px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-slate-500"
+            className="rounded-lg border border-border bg-white px-4 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
           >
             {sessions.map((session) => (
               <option key={session.id} value={session.id}>
@@ -190,17 +190,17 @@ export default function ScreenshotSelector({
       </div>
 
       {error && (
-        <div className="rounded-lg bg-red-900/50 p-4 text-red-200">
+        <div className="rounded-lg border border-destructive bg-destructive/20 p-4 text-sm text-destructive-foreground">
           <strong>Error:</strong> {error}
         </div>
       )}
 
       {loading ? (
-        <div className="rounded-xl bg-slate-800 p-6 text-center text-slate-400">
+        <div className="rounded-xl border border-border bg-card p-6 text-center text-muted-foreground">
           Loading screenshots...
         </div>
       ) : screenshots.length === 0 ? (
-        <div className="rounded-xl bg-slate-800 p-6 text-center text-slate-400">
+        <div className="rounded-xl border border-border bg-card p-6 text-center text-muted-foreground">
           No screenshots available for this session.
         </div>
       ) : (

@@ -266,29 +266,30 @@ function updateProjectsDisplay() {
   if (!projectsList) return;
   
   if (!window.userProjects || window.userProjects.length === 0) {
-    projectsList.innerHTML = '<p style="color: #94a3b8; font-size: 0.85rem; font-style: italic;">No projects added yet</p>';
+    projectsList.innerHTML = '<p class="auth-empty-text">No projects added yet</p>';
     return;
   }
   
   // Clear existing content
   projectsList.innerHTML = '';
-  
+
   const container = document.createElement('div');
-  container.style.cssText = 'display: flex; flex-wrap: wrap; gap: 8px;';
-  
+  container.className = 'project-chip-list';
+
   window.userProjects.forEach((project, index) => {
     const projectDiv = document.createElement('div');
-    projectDiv.style.cssText = 'display: flex; align-items: center; gap: 6px; background: #334155; padding: 6px 12px; border-radius: 6px; border: 1px solid #475569;';
-    
+    projectDiv.className = 'project-chip';
+
     const projectSpan = document.createElement('span');
-    projectSpan.style.cssText = 'color: #cbd5e1; font-size: 0.9rem;';
+    projectSpan.className = 'project-chip__label';
     projectSpan.textContent = project;
-    
+
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.textContent = '×';
-    removeBtn.style.cssText = 'background: #ef4444; color: white; border: none; border-radius: 4px; width: 20px; height: 20px; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; display: flex; align-items: center; justify-content: center;';
+    removeBtn.className = 'project-chip__remove';
     removeBtn.title = 'Remove project';
+    removeBtn.setAttribute('aria-label', `Remove project ${project}`);
     removeBtn.onclick = function() {
       removeProject(project);
     };

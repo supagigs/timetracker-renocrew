@@ -1,10 +1,13 @@
-import { format } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
 import Image from 'next/image';
 import SummaryCard from '@/components/SummaryCard';
 import WeeklyActivityChart from '@/components/WeeklyActivityChart';
 import ScreenshotSelector from '@/components/ScreenshotSelector';
 import FreelancerSelector from '@/components/FreelancerSelector';
+import ClientOverview from '@/components/ClientOverview';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
+import { DashboardShell } from '@/components/dashboard';
+import { redirect } from 'next/navigation';
 
 type TimeSession = {
   id: number;
@@ -27,6 +30,16 @@ type Screenshot = {
   session_id: number;
   screenshot_data: string;
   captured_at: string;
+};
+
+type TeamMemberSummary = {
+  email: string;
+  displayName: string | null;
+  todayActiveSeconds: number;
+  last30ActiveSeconds: number;
+  lastActiveAt: string | null;
+  hasActiveSession: boolean;
+  totalSessions: number;
 };
 
 async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]> {
@@ -83,6 +96,102 @@ async function fetchScreenshots(userEmail: string, sessionId?: number): Promise<
   }
 
   return (data ?? []) as Screenshot[];
+}
+
+async function fetchClientTeamMembers(clientEmail: string): Promise<TeamMemberSummary[]> {
+  const supabase = createServerSupabaseClient();
+
+  const { data: assignments, error: assignmentsError } = await supabase
+    .from('client_freelancer_assignments')
+    .select('freelancer_email')
+    .eq('client_email', clientEmail)
+    .eq('is_active', true);
+
+  if (assignmentsError) {
+    console.error('Error fetching client assignments:', assignmentsError);
+    throw assignmentsError;
+  }
+
+  const freelancerEmails = (assignments ?? [])
+    .map((assignment) => assignment.freelancer_email)
+    .filter((email): email is string => Boolean(email));
+
+  if (freelancerEmails.length === 0) {
+    return [];
+  }
+
+  const uniqueFreelancerEmails = Array.from(new Set(freelancerEmails));
+
+  const { data: users, error: usersError } = await supabase
+    .from('users')
+    .select('email, display_name')
+    .in('email', uniqueFreelancerEmails);
+
+  if (usersError) {
+    console.error('Error fetching freelancer details:', usersError);
+    throw usersError;
+  }
+
+  const userMap = new Map<string, string | null>();
+  (users ?? []).forEach((user) => {
+    userMap.set(user.email, user.display_name ?? null);
+  });
+
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(endDate.getDate() - 29);
+
+  const startDateStr = format(startDate, 'yyyy-MM-dd');
+  const endDateStr = format(endDate, 'yyyy-MM-dd');
+  const todayStr = endDateStr;
+
+  const { data: sessionRows, error: sessionsError } = await supabase
+    .from('time_sessions')
+    .select('user_email, session_date, start_time, end_time, active_duration')
+    .in('user_email', uniqueFreelancerEmails)
+    .gte('session_date', startDateStr)
+    .lte('session_date', endDateStr)
+    .order('start_time', { ascending: false });
+
+  if (sessionsError) {
+    console.error('Error fetching freelancer sessions:', sessionsError);
+    throw sessionsError;
+  }
+
+  const sessionsByUser = new Map<string, typeof sessionRows>();
+  (sessionRows ?? []).forEach((session) => {
+    const list = sessionsByUser.get(session.user_email) ?? [];
+    list.push(session);
+    sessionsByUser.set(session.user_email, list);
+  });
+
+  return uniqueFreelancerEmails.map((email) => {
+    const memberSessions = sessionsByUser.get(email) ?? [];
+
+    const todayActiveSeconds = memberSessions
+      .filter((session) => session.session_date === todayStr)
+      .reduce((total, session) => total + (session.active_duration ?? 0), 0);
+
+    const last30ActiveSeconds = memberSessions.reduce(
+      (total, session) => total + (session.active_duration ?? 0),
+      0,
+    );
+
+    const lastSession = memberSessions[0];
+    const lastActiveAt = lastSession ? lastSession.end_time ?? lastSession.start_time ?? null : null;
+
+    const hasActiveSession = memberSessions.some((session) => session.end_time === null);
+
+    return {
+      email,
+      displayName: userMap.get(email) ?? null,
+      todayActiveSeconds,
+      last30ActiveSeconds,
+      lastActiveAt,
+      hasActiveSession,
+      totalSessions: memberSessions.length,
+    } satisfies TeamMemberSummary;
+  });
 }
 
 async function fetchUserName(userEmail: string): Promise<string | null> {
@@ -244,86 +353,149 @@ function buildProjectSummary(sessions: TimeSession[]) {
 
 export default async function ReportsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ userEmail: string }>;
+  searchParams: Record<string, string | string[] | undefined>;
 }) {
   const { userEmail } = await params;
   const decodedEmail = decodeURIComponent(userEmail);
-  
+  const requestedFreelancer = (() => {
+    const value = searchParams?.freelancer;
+    if (Array.isArray(value)) {
+      return value[0];
+    }
+    return value ?? null;
+  })();
+
+  const defaultSummary = {
+    labels: [],
+    activeHours: [],
+    idleHours: [],
+    totalHours: 0,
+    totalIdleSeconds: 0,
+    avgIdlePercent: 0,
+    avgDailyHours: 0,
+  };
+
   let sessions: TimeSession[] = [];
-  let summary;
+  let summary = defaultSummary;
   let projectSummary: Array<{ id: number; name: string; totalHours: number; totalSeconds: number }> = [];
   let screenshots: Screenshot[] = [];
   let errorMessage: string | null = null;
   let latestSessionId: number | undefined;
-  let userName: string | null = null;
+  let viewerName: string | null = null;
+  let reportOwnerName: string | null = null;
   let userCategory: string | null = null;
   let isClient = false;
-  let reportEmail = decodedEmail; // Email of the person whose report we're showing
-  let clientEmailForSelector = decodedEmail; // Client email to pass to selector
+  let reportEmail: string | null = decodedEmail;
+  const clientEmailForSelector = decodedEmail;
+  let teamMembers: TeamMemberSummary[] = [];
+  let showTeamOverview = false;
 
   try {
     const supabase = createServerSupabaseClient();
-    
+
+    // Fetch viewer details (the person whose email is in the URL)
+    viewerName = await fetchUserName(decodedEmail);
+
     // Fetch user category to determine if this is a Client
     userCategory = await fetchUserCategory(decodedEmail);
     isClient = userCategory === 'Client';
 
-    // If the user is a Client, we need to determine which freelancer's report to show
+    // If the user is a Client, build team overview and decide whether to show an individual report
     if (isClient) {
-      clientEmailForSelector = decodedEmail; // Set the client email for the selector
-      
-      // Check if there's a freelancer assigned to this client
-      // If the URL email is a Client, we'll show the first freelancer's report
-      const { data: assignments } = await supabase
-        .from('client_freelancer_assignments')
-        .select('freelancer_email')
-        .eq('client_email', decodedEmail)
-        .eq('is_active', true)
-        .limit(1)
-        .single();
-      
-      if (assignments) {
-        reportEmail = assignments.freelancer_email;
-      } else {
-        // No freelancers assigned, show empty report
-        reportEmail = decodedEmail;
+      teamMembers = await fetchClientTeamMembers(decodedEmail);
+      const assignedFreelancers = teamMembers.map((member) => member.email);
+      const hasRequestedFreelancer =
+        requestedFreelancer && assignedFreelancers.includes(requestedFreelancer);
+
+      if (requestedFreelancer && !hasRequestedFreelancer) {
+        redirect(`/reports/${encodeURIComponent(decodedEmail)}`);
       }
+
+      showTeamOverview = !hasRequestedFreelancer;
+      reportEmail = hasRequestedFreelancer ? requestedFreelancer : decodedEmail;
     } else {
-      // For freelancers, show their own report
-      // The dropdown should NOT be visible for freelancers
       reportEmail = decodedEmail;
     }
 
-    // Fetch user name for the report owner
-    userName = await fetchUserName(reportEmail);
-    
-    sessions = await fetchLastMonthSessions(reportEmail);
-    summary = buildMonthlySummary(sessions);
-    projectSummary = buildProjectSummary(sessions);
-    latestSessionId = sessions[0]?.id;
-    screenshots = await fetchScreenshots(reportEmail, latestSessionId);
+    if (reportEmail && !showTeamOverview) {
+      // Fetch user name for the report owner
+      reportOwnerName = await fetchUserName(reportEmail);
+
+      sessions = await fetchLastMonthSessions(reportEmail);
+      summary = buildMonthlySummary(sessions);
+      projectSummary = buildProjectSummary(sessions);
+      latestSessionId = sessions[0]?.id;
+      screenshots = await fetchScreenshots(reportEmail, latestSessionId);
+    }
   } catch (error) {
     console.error('Error loading reports:', error);
     errorMessage = error instanceof Error ? error.message : 'Failed to load reports';
-    summary = {
-      labels: [],
-      activeHours: [],
-      idleHours: [],
-      totalHours: 0,
-      totalIdleSeconds: 0,
-      avgIdlePercent: 0,
-      avgDailyHours: 0,
-    };
+    summary = defaultSummary;
     projectSummary = [];
   }
 
+  if (!errorMessage && isClient) {
+    const queryEmail = requestedFreelancer ?? null;
+    if (reportEmail === decodedEmail) {
+      // Viewing own data; remove stale freelancer param if present
+      if (queryEmail) {
+        redirect(`/reports/${userEmail}`);
+      }
+    } else if (queryEmail !== reportEmail) {
+      redirect(`/reports/${userEmail}?freelancer=${encodeURIComponent(reportEmail)}`);
+    }
+  }
   // Use display name if available, otherwise fallback to email
-  const displayName = userName || reportEmail;
+  const reportDisplayName = reportOwnerName || reportEmail || decodedEmail;
+  const viewerDisplayName = viewerName || decodedEmail;
+
+  const overviewMembers = teamMembers
+    .map((member) => {
+      const status: 'active' | 'offline' | 'no-data' = member.hasActiveSession
+        ? 'active'
+        : member.totalSessions === 0
+        ? 'no-data'
+        : 'offline';
+
+      const lastActiveLabel = member.lastActiveAt
+        ? formatDistanceToNow(new Date(member.lastActiveAt), { addSuffix: true })
+        : 'No activity yet';
+
+      return {
+        email: member.email,
+        displayName: member.displayName || member.email,
+        todayActive: formatSecondsToHoursMinutes(member.todayActiveSeconds),
+        last30Active: formatSecondsToHoursMinutes(member.last30ActiveSeconds),
+        lastActiveLabel,
+        status,
+      };
+    })
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  const overviewMetrics = {
+    totalMembers: teamMembers.length,
+    currentlyWorking: teamMembers.filter((member) => member.hasActiveSession).length,
+    offlineMembers: teamMembers.filter(
+      (member) => !member.hasActiveSession && member.totalSessions > 0,
+    ).length,
+    noActivityMembers: teamMembers.filter((member) => member.totalSessions === 0).length,
+    totalActiveToday: formatSecondsToHoursMinutes(
+      teamMembers.reduce((total, member) => total + member.todayActiveSeconds, 0),
+    ),
+  };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white">
-      <div className="mx-auto max-w-6xl space-y-10 px-6 py-10">
+    <DashboardShell
+      userName={viewerDisplayName}
+      userEmail={decodedEmail}
+      userRole={userCategory}
+      showNotifications={false}
+      showMessages={false}
+    >
+      <div className="space-y-8">
         <header className="space-y-3">
           <div className="flex items-center gap-4">
             <Image
@@ -331,108 +503,122 @@ export default async function ReportsPage({
               alt="Supatimetracker logo"
               width={56}
               height={56}
-              className="h-14 w-14 rounded-xl border border-slate-700 bg-slate-900 object-contain shadow-lg"
+              className="h-14 w-14 rounded-xl border border-border bg-secondary object-contain shadow"
               priority
             />
             <div>
-              <h1 className="text-3xl font-bold">Reports for {displayName}</h1>
-              <p className="text-slate-400">Summary of the last 30 days</p>
-              {userName && (
-                <p className="text-sm text-slate-500">{reportEmail}</p>
+              <h1 className="text-3xl font-bold text-foreground">
+                {showTeamOverview ? 'Team overview' : `Reports for ${reportDisplayName}`}
+              </h1>
+              <p className="text-sm text-muted-foreground">
+                {showTeamOverview
+                  ? 'Monitor your freelancers at a glance and jump into detailed reports when needed.'
+                  : 'Summary of the last 30 days'}
+              </p>
+              {!showTeamOverview && reportOwnerName && (
+                <p className="text-xs text-muted-foreground">{reportEmail}</p>
               )}
             </div>
           </div>
           {errorMessage && (
-            <div className="mt-2 rounded-lg bg-red-900/50 p-4 text-red-200">
+            <div className="mt-2 rounded-lg border border-destructive bg-destructive/20 p-4 text-sm text-destructive-foreground">
               <strong>Error:</strong> {errorMessage}
             </div>
           )}
         </header>
 
-        {/* Show freelancer selector only if user is a Client */}
-        {isClient && (
+        {isClient && !showTeamOverview && (
           <FreelancerSelector
             clientEmail={clientEmailForSelector}
             currentFreelancerEmail={reportEmail}
           />
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <SummaryCard title="Total Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
-          <SummaryCard title="Avg. Daily Work" value={formatHoursMinutes(summary.avgDailyHours)} />
-          <SummaryCard title="Avg. Idle %" value={`${summary.avgIdlePercent.toFixed(1)}%`} />
-          <SummaryCard title="Total Idle" value={formatSecondsToHoursMinutes(summary.totalIdleSeconds)} />
-        </section>
-
-        {/* Project Time Summary */}
-        {projectSummary.length > 0 && (
-          <section className="rounded-xl bg-slate-800 p-6 shadow">
-            <h2 className="mb-4 text-xl font-semibold">Time by Project (Last 30 Days)</h2>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-slate-700">
-                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Project Name</th>
-                    <th className="px-4 py-3 text-right text-sm font-medium text-slate-300">Total Time</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projectSummary.map((project) => (
-                    <tr key={project.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                      <td className="px-4 py-3 text-slate-200">{project.name}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-green-400">
-                        {formatHoursMinutes(project.totalHours)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
-
-        {/* Daily Activity Chart */}
-        <section className="rounded-xl bg-slate-800 p-6 shadow">
-          <h2 className="mb-4 text-xl font-semibold">Daily Activity (Last 30 Days)</h2>
-          <WeeklyActivityChart
-            labels={summary.labels}
-            activeHours={summary.activeHours}
-            idleHours={summary.idleHours}
+        {showTeamOverview ? (
+          <ClientOverview
+            clientName={viewerName}
+            clientEmail={decodedEmail}
+            members={overviewMembers}
+            metrics={overviewMetrics}
           />
-        </section>
+        ) : (
+          <>
+            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <SummaryCard title="Total Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
+              <SummaryCard title="Avg. Daily Work" value={formatHoursMinutes(summary.avgDailyHours)} />
+              <SummaryCard title="Avg. Idle %" value={`${summary.avgIdlePercent.toFixed(1)}%`} />
+              <SummaryCard title="Total Idle" value={formatSecondsToHoursMinutes(summary.totalIdleSeconds)} />
+            </section>
 
-        {/* Project Breakdown Chart */}
-        {projectSummary.length > 0 && (
-          <section className="rounded-xl bg-slate-800 p-6 shadow">
-            <h2 className="mb-4 text-xl font-semibold">Time Distribution by Project</h2>
-            <WeeklyActivityChart
-              labels={projectSummary.map(p => p.name)}
-              activeHours={projectSummary.map(p => p.totalHours)}
-              idleHours={[]}
-            />
-          </section>
+            {projectSummary.length > 0 && (
+              <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
+                <h2 className="mb-4 text-xl font-semibold text-foreground">Time by Project (Last 30 Days)</h2>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="px-4 py-3 text-left font-medium text-muted-foreground">Project Name</th>
+                        <th className="px-4 py-3 text-right font-medium text-muted-foreground">Total Time</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {projectSummary.map((project) => (
+                        <tr key={project.id} className="border-b border-border/60 transition-colors hover:bg-secondary/60">
+                          <td className="px-4 py-3 text-foreground">{project.name}</td>
+                          <td className="px-4 py-3 text-right font-semibold text-emerald-600">
+                            {formatHoursMinutes(project.totalHours)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
+              <h2 className="mb-4 text-xl font-semibold text-foreground">Daily Activity (Last 30 Days)</h2>
+              <WeeklyActivityChart
+                labels={summary.labels}
+                activeHours={summary.activeHours}
+                idleHours={summary.idleHours}
+              />
+            </section>
+
+            {projectSummary.length > 0 && (
+              <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
+                <h2 className="mb-4 text-xl font-semibold text-foreground">Time Distribution by Project</h2>
+                <WeeklyActivityChart
+                  labels={projectSummary.map((p) => p.name)}
+                  activeHours={projectSummary.map((p) => p.totalHours)}
+                  idleHours={[]}
+                />
+              </section>
+            )}
+
+            <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
+              <h2 className="mb-4 text-xl font-semibold text-foreground">Screenshots</h2>
+              <ScreenshotSelector
+                userEmail={reportEmail}
+                sessions={sessions.filter((session) => {
+                  const sessionDateStr = session.session_date;
+                  const endDate = new Date();
+                  const startDate = new Date();
+                  startDate.setDate(endDate.getDate() - 29);
+
+                  const startDateStr = format(startDate, "yyyy-MM-dd");
+                  const endDateStr = format(endDate, "yyyy-MM-dd");
+
+                  return sessionDateStr >= startDateStr && sessionDateStr <= endDateStr;
+                })}
+                initialScreenshots={screenshots}
+                initialSessionId={latestSessionId}
+              />
+            </section>
+          </>
         )}
-
-        <ScreenshotSelector
-          userEmail={reportEmail}
-          sessions={sessions.filter(session => {
-            // Ensure we only show sessions from the last 30 days
-            // Compare date strings directly (YYYY-MM-DD format)
-            const sessionDateStr = session.session_date;
-            const endDate = new Date();
-            const startDate = new Date();
-            startDate.setDate(endDate.getDate() - 29); // 30 days total
-            
-            const startDateStr = format(startDate, 'yyyy-MM-dd');
-            const endDateStr = format(endDate, 'yyyy-MM-dd');
-            
-            return sessionDateStr >= startDateStr && sessionDateStr <= endDateStr;
-          })}
-          initialScreenshots={screenshots}
-          initialSessionId={latestSessionId}
-        />
       </div>
-    </div>
+    </DashboardShell>
   );
 }
 

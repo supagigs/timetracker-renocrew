@@ -1061,39 +1061,30 @@ document.addEventListener('DOMContentLoaded', () => {
       .sort((a, b) => b.totalTime - a.totalTime);
 
     sortedProjects.forEach(project => {
-      // Use the pre-calculated totalTime
       const totalTime = project.totalTime;
-      
+
       const projectItem = document.createElement('div');
-      projectItem.style.cssText = `
-        background: #334155;
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #475569;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-      `;
+      projectItem.className = 'project-time-card';
 
       const projectNameDiv = document.createElement('div');
-      projectNameDiv.style.cssText = 'flex: 1;';
-      
+      projectNameDiv.className = 'project-time-card__info';
+
       const projectName = document.createElement('h4');
-      projectName.style.cssText = 'margin: 0 0 5px 0; color: #e2e8f0; font-size: 1rem; font-weight: 600;';
+      projectName.className = 'project-time-card__title';
       projectName.textContent = project.name;
 
       const projectId = document.createElement('p');
-      projectId.style.cssText = 'margin: 0; color: #94a3b8; font-size: 0.85rem;';
+      projectId.className = 'project-time-card__subtitle';
       projectId.textContent = `Project ID: ${project.id}`;
 
       projectNameDiv.appendChild(projectName);
       projectNameDiv.appendChild(projectId);
 
       const timeDisplay = document.createElement('div');
-      timeDisplay.style.cssText = 'text-align: right;';
-      
+      timeDisplay.className = 'project-time-card__time';
+
       const timeValue = document.createElement('span');
-      timeValue.style.cssText = 'color: #10b981; font-size: 1.3rem; font-weight: 700; font-family: "Courier New", monospace;';
+      timeValue.className = 'project-time-card__value';
       timeValue.textContent = formatTime(totalTime);
 
       timeDisplay.appendChild(timeValue);
