@@ -8,7 +8,7 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error('SUPABASE_ANON_KEY:', SUPABASE_ANON_KEY ? 'Present' : 'Missing');
   
   // Show user-friendly error message
-  if (typeof document !== 'undefined') {
+  if (typeof document !== 'undefined' && document.body) {
     const errorDiv = document.createElement('div');
     errorDiv.className = 'message error';
     errorDiv.style.cssText = `
@@ -31,13 +31,44 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
       Please create a .env file with your Supabase credentials.
     `;
     document.body.appendChild(errorDiv);
+  } else if (typeof document !== 'undefined') {
+    // Wait for DOM to be ready
+    document.addEventListener('DOMContentLoaded', () => {
+      if (document.body) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'message error';
+        errorDiv.style.cssText = `
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: #ff4444;
+          color: white;
+          padding: 15px 20px;
+          border-radius: 8px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+          z-index: 10000;
+          max-width: 400px;
+          text-align: center;
+        `;
+        errorDiv.innerHTML = `
+          <strong>Configuration Error</strong><br>
+          Missing Supabase environment variables.<br>
+          Please create a .env file with your Supabase credentials.
+        `;
+        document.body.appendChild(errorDiv);
+      }
+    });
   }
 } else {
   // Initialize Supabase client
   try {
-    // Check if supabase is available globally
-    if (typeof supabase === 'undefined') {
-      throw new Error('Supabase library not loaded');
+    // Check if supabase is available globally (from CDN)
+    // The CDN script should expose it as a global 'supabase' object
+    if (typeof supabase === 'undefined' || typeof supabase.createClient !== 'function') {
+      // Wait a bit for CDN script to load if it's still loading
+      console.warn('Supabase library not found, waiting for CDN to load...');
+      throw new Error('Supabase library not loaded. Make sure the CDN script is loaded before this script.');
     }
     
     window.supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {

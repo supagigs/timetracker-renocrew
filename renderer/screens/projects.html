@@ -21,8 +21,9 @@
   <div class="container">
     <h1>My Projects</h1>
     
-    <div style="margin-bottom: 20px;">
-      <button id="backBtn" class="btn-secondary" style="margin-bottom: 20px;">← Back to Home</button>
+    <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+      <button id="backBtn" class="btn-secondary">← Back to Home</button>
+      <button id="addProjectBtn" class="btn-primary">+ Add Project</button>
     </div>
 
     <div id="projectsContainer">
@@ -31,7 +32,25 @@
       </div>
       <div id="projectsList" style="display: none;"></div>
       <div id="noProjectsMessage" style="display: none; text-align: center; color: #94a3b8; padding: 40px;">
-        <p>No projects found. Projects can be added during signup.</p>
+        <p>No projects found. Click "Add Project" to create your first project.</p>
+      </div>
+    </div>
+
+    <!-- Add Project Modal -->
+    <div id="addProjectModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); z-index: 1000; align-items: center; justify-content: center; flex-direction: column;">
+      <div style="background: #1e293b; border-radius: 12px; padding: 30px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
+        <h2 style="margin-top: 0; color: #e2e8f0;">Add New Project</h2>
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label for="projectNameInput" style="display: block; margin-bottom: 8px; color: #cbd5e1; font-weight: 600;">
+            Project Name:
+          </label>
+          <input type="text" id="projectNameInput" placeholder="Enter project name" style="width: 100%; padding: 12px; margin-bottom: 10px; border: 2px solid #475569; border-radius: 10px; font-size: 1rem; background: #334155; color: #ffffff; box-sizing: border-box;">
+          <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 5px;">Enter a unique name for your project.</p>
+        </div>
+        <div class="button-group" style="margin-top: 20px;">
+          <button id="saveProjectBtn" class="btn-primary">Save Project</button>
+          <button id="cancelAddProjectBtn" class="btn-secondary">Cancel</button>
+        </div>
       </div>
     </div>
 
@@ -43,7 +62,7 @@
           <label for="freelancerEmailInput" style="display: block; margin-bottom: 8px; color: #cbd5e1; font-weight: 600;">
             Freelancer Email:
           </label>
-          <input type="email" id="freelancerEmailInput" class="session-input" placeholder="freelancer@example.com" style="width: 100%; padding: 12px; margin-bottom: 10px;">
+          <input type="email" id="freelancerEmailInput" placeholder="freelancer@example.com" style="width: 100%; padding: 12px; margin-bottom: 10px; border: 2px solid #475569; border-radius: 10px; font-size: 1rem; background: #334155; color: #ffffff; box-sizing: border-box;">
           <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 5px;">Enter the email of the freelancer to assign this project to.</p>
         </div>
         <div class="button-group" style="margin-top: 20px;">

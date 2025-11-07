@@ -4,6 +4,7 @@ class IdleTracker {
   constructor(options = {}) {
     this.idleThreshold = options.idleThreshold || 30; // seconds of inactivity before considered idle
     this.checkInterval = options.checkInterval || 1000; // check every second
+    this.confirmIdleMs = options.confirmIdleMs || 1500; // additional debounce before declaring idle
     this.isTracking = false;
     this.isIdle = false;
     this.lastActivityTime = Date.now();
@@ -18,6 +19,7 @@ class IdleTracker {
     
     this.checkIntervalId = null;
     this.systemIdlePollIntervalId = null;
+    this.idleConfirmTimeoutId = null; // debounce timer handle
     this.useSystemIdle = options.useSystemIdle !== false; // default true
     this.boundHandleActivity = this.handleActivity.bind(this); // Bind once for better performance and cleanup
     this.setupEventListeners();
@@ -97,6 +99,11 @@ class IdleTracker {
     }
 
     this.lastActivityTime = Date.now();
+    // Any real activity cancels pending idle confirmation
+    if (this.idleConfirmTimeoutId) {
+      clearTimeout(this.idleConfirmTimeoutId);
+      this.idleConfirmTimeoutId = null;
+    }
     
     // If we were idle, end the idle period
     if (this.isIdle) {
@@ -142,7 +149,7 @@ class IdleTracker {
           const idleSeconds = await window.electronAPI.getSystemIdleTime();
           if (typeof idleSeconds === 'number' && idleSeconds >= 0) {
             if (idleSeconds >= this.idleThreshold && !this.isIdle) {
-              this.startIdlePeriod();
+              this.scheduleIdleConfirmation();
             } else if (idleSeconds < this.idleThreshold && this.isIdle) {
               this.endIdlePeriod();
             }
@@ -188,8 +195,24 @@ class IdleTracker {
     const timeSinceLastActivity = (now - this.lastActivityTime) / 1000; // Convert to seconds
 
     if (timeSinceLastActivity >= this.idleThreshold && !this.isIdle) {
-      this.startIdlePeriod();
+      this.scheduleIdleConfirmation();
     }
+  }
+
+  scheduleIdleConfirmation() {
+    // Prevent multiple timers
+    if (this.idleConfirmTimeoutId || this.isIdle) {
+      return;
+    }
+    this.idleConfirmTimeoutId = setTimeout(() => {
+      this.idleConfirmTimeoutId = null;
+      // Re-check before declaring idle
+      const now = Date.now();
+      const timeSinceLastActivity = (now - this.lastActivityTime) / 1000;
+      if (timeSinceLastActivity >= this.idleThreshold && !this.isIdle) {
+        this.startIdlePeriod();
+      }
+    }, this.confirmIdleMs);
   }
 
   startIdlePeriod() {

@@ -9,7 +9,7 @@
         content="default-src 'self';
                  connect-src 'self' https://*.supabase.co https://cdn.jsdelivr.net;
                  script-src 'self' https://cdn.jsdelivr.net;
-                 style-src 'self';
+                 style-src 'self' 'unsafe-inline';
                  img-src 'self' data: blob: https://*.supabase.co;
                  media-src 'self' data: blob:;">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -21,23 +21,29 @@
 </head>
 <body>
   <div class="report-container">
-    <h1>Time Reports</h1>
+    <div class="logo-header">
+      <img src="../../SupagigsLogo.png" alt="Supatimetracker logo">
+      <div class="logo-text">
+        <h1 class="logo-title">Supatimetracker Reports</h1>
+        <p class="logo-tagline">Insights from your tracked sessions</p>
+      </div>
+    </div>
     
-    <!-- 7-Day Chart Section -->
+    <!-- Monthly Chart Section -->
     <div class="chart-section">
-      <h2>Last 7 Days Activity</h2>
+      <h2>Last 30 Days Activity</h2>
       <div class="chart-container">
-        <canvas id="weeklyChart" width="800" height="400"></canvas>
+        <canvas id="monthlyChart" width="800" height="400"></canvas>
       </div>
     </div>
 
     <!-- Summary Statistics -->
     <div class="summary-section">
-      <h2>Weekly Summary</h2>
+      <h2>Monthly Summary</h2>
       <div class="summary-stats">
         <div class="summary-item">
-          <span class="summary-label">Total Hours This Week:</span>
-          <span id="totalHoursWeek" class="summary-value">0</span>
+          <span class="summary-label">Total Hours This Month:</span>
+          <span id="totalHoursMonth" class="summary-value">0</span>
         </div>
         <div class="summary-item">
           <span class="summary-label">Average Daily Hours:</span>
@@ -48,8 +54,8 @@
           <span id="mostProductiveDay" class="summary-value">-</span>
         </div>
         <div class="summary-item">
-          <span class="summary-label">Total Idle Time This Week:</span>
-          <span id="totalIdleTimeWeek" class="summary-value">0</span>
+          <span class="summary-label">Total Idle Time This Month:</span>
+          <span id="totalIdleTimeMonth" class="summary-value">0</span>
         </div>
         <div class="summary-item">
           <span class="summary-label">Average Idle Percentage:</span>

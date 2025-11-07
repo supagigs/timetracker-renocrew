@@ -1,9 +1,9 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const weeklyChart = document.getElementById('weeklyChart');
-  const totalHoursWeek = document.getElementById('totalHoursWeek');
+  const monthlyChart = document.getElementById('monthlyChart');
+  const totalHoursMonth = document.getElementById('totalHoursMonth');
   const avgDailyHours = document.getElementById('avgDailyHours');
   const mostProductiveDay = document.getElementById('mostProductiveDay');
-  const totalIdleTimeWeek = document.getElementById('totalIdleTimeWeek');
+  const totalIdleTimeMonth = document.getElementById('totalIdleTimeMonth');
   const avgIdlePercentage = document.getElementById('avgIdlePercentage');
   const homeBtn = document.getElementById('homeBtn');
   const trackerBtn = document.getElementById('trackerBtn');
@@ -13,11 +13,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const sessionsMap = {}; // id -> session details
   const screenshotOffset = {}; // Track pagination offset for each session
 
-  // Load weekly data
-  loadWeeklyData();
+  // Load monthly data
+  loadMonthlyData();
   loadSessions();
 
-  function loadWeeklyData() {
+  function loadMonthlyData() {
     const email = StorageService.getItem('userEmail');
     if (!email) {
       alert('No user email found. Please login again.');
@@ -25,36 +25,49 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Get last 7 days
+    // Get last 30 days
     const endDate = new Date();
     const startDate = new Date();
-    startDate.setDate(endDate.getDate() - 6);
+    startDate.setDate(endDate.getDate() - 29); // 30 days total (0-29 = 30 days)
 
-    console.log('Loading weekly data for email:', email);
+    console.log('Loading monthly data for email:', email);
     console.log('Date range:', startDate.toISOString().split('T')[0], 'to', endDate.toISOString().split('T')[0]);
 
-    supabase
+    window.supabase
       .from('time_sessions')
-      .select('*')
+      .select('id, session_date, active_duration, idle_duration, break_duration, start_time, end_time')
       .eq('user_email', email)
       .gte('session_date', startDate.toISOString().split('T')[0])
       .lte('session_date', endDate.toISOString().split('T')[0])
       .then(({ data, error }) => {
         if (error) {
-          console.error('Error loading weekly data:', error);
+          console.error('Error loading monthly data:', error);
+          console.error('Error details:', JSON.stringify(error, null, 2));
           // Show fallback data
-          processWeeklyData([]);
+          processMonthlyData([]);
           return;
         }
 
-        console.log('Weekly data loaded:', data);
+        console.log('Monthly data loaded:', data);
         console.log('Number of sessions found:', data ? data.length : 0);
-        processWeeklyData(data || []);
+        
+        // Log sample session data to verify fields
+        if (data && data.length > 0) {
+          console.log('Sample session data:', {
+            id: data[0].id,
+            session_date: data[0].session_date,
+            active_duration: data[0].active_duration,
+            idle_duration: data[0].idle_duration,
+            break_duration: data[0].break_duration
+          });
+        }
+        
+        processMonthlyData(data || []);
       })
       .catch(err => {
-        console.error('Network error loading weekly data:', err);
+        console.error('Network error loading monthly data:', err);
         // Show fallback data
-        processWeeklyData([]);
+        processMonthlyData([]);
       });
   }
 
@@ -62,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const email = StorageService.getItem('userEmail');
     if (!email) return;
 
-    supabase
+    window.supabase
       .from('time_sessions')
       .select('id, start_time, end_time, session_date, active_duration, idle_duration, break_count')
       .eq('user_email', email)
@@ -199,7 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Skip date filtering to avoid timeout issues - just query without date filter
       console.log(`Query params: session_id=${sessionId} (parsed: ${parseInt(sessionId)}), user_email=${email}`);
       
-      const { data: screenshots, error } = await supabase
+      const { data: screenshots, error } = await window.supabase
         .from('screenshots')
         .select('*')
         .eq('session_id', parseInt(sessionId))
@@ -281,7 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
       
       // Fetch one extra to detect if there are more
       const end = currentOffset + limit; // inclusive end to get limit+1
-      const { data: screenshots, error } = await supabase
+      const { data: screenshots, error } = await window.supabase
         .from('screenshots')
         .select('*')
         .eq('session_id', parseInt(sessionId))
@@ -330,7 +343,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const limit = limits[Math.min(retryCount, limits.length - 1)];
       const fetchLimit = limit + 1;
       
-      const { data: screenshots, error } = await supabase
+      const { data: screenshots, error } = await window.supabase
         .from('screenshots')
         .select('*')
         .eq('session_id', parseInt(sessionId))
@@ -515,11 +528,7 @@ document.addEventListener('DOMContentLoaded', () => {
       
       img.className = 'screenshot-image';
       img.addEventListener('click', () => {
-        if (screenshot.isLocal) {
-          openScreenshotModal(`file://${screenshot.filePath}`);
-        } else {
-          openScreenshotModal(screenshot.screenshot_data);
-        }
+        handleScreenshotClick(screenshot);
       });
       
       const info = document.createElement('div');
@@ -588,15 +597,219 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function openScreenshotModal(imageSrc) {
+  async function handleScreenshotClick(screenshot) {
+    try {
+      const imageSrc = resolveScreenshotSource(screenshot);
+      if (!imageSrc) {
+        console.warn('Unable to determine image source for screenshot:', screenshot);
+        NotificationService?.showError?.('Unable to load screenshot preview.');
+        return;
+      }
+
+      openFloatingScreenshot(imageSrc, {
+        title: screenshot?.session_id ? `Session ${screenshot.session_id}` : 'Screenshot Preview',
+        timestamp: screenshot?.captured_at || null
+      });
+    } catch (error) {
+      console.error('Error handling screenshot click:', error);
+      const fallbackSrc = resolveScreenshotSource(screenshot);
+      if (fallbackSrc) {
+        console.log('Falling back to alternate source:', fallbackSrc);
+        openFloatingScreenshot(fallbackSrc, {
+          title: screenshot?.session_id ? `Session ${screenshot.session_id}` : 'Screenshot Preview',
+          timestamp: screenshot?.captured_at || null
+        });
+      }
+    }
+  }
+
+  function resolveScreenshotSource(screenshot) {
+    if (!screenshot) return null;
+    if (screenshot.isLocal && screenshot.filePath) {
+      const normalizedPath = screenshot.filePath.replace(/\\/g, '/');
+      if (/^file:/.test(normalizedPath)) {
+        return normalizedPath;
+      }
+      if (/^\//.test(normalizedPath)) {
+        return `file://${normalizedPath}`;
+      }
+      return `file:///${normalizedPath}`;
+    }
+    if (screenshot.screenshot_data && /^http/.test(screenshot.screenshot_data)) {
+      return screenshot.screenshot_data;
+    }
+    return screenshot.screenshot_data || null;
+  }
+
+  function openFloatingScreenshot(imageSrc, { title = 'Screenshot Preview', timestamp = null } = {}) {
+    console.log('openFloatingScreenshot called with:', { imageSrc, title, timestamp });
+    try {
+      const existing = document.getElementById('pip-screenshot-viewer');
+      if (existing) {
+        console.log('Existing PiP viewer detected, removing');
+        existing.remove();
+      }
+
+      const container = document.createElement('div');
+      container.id = 'pip-screenshot-viewer';
+      container.className = 'pip-viewer';
+
+      container.innerHTML = `
+        <div class="pip-viewer-titlebar">
+          <div class="pip-title">
+            <span class="pip-title-text">${title}</span>
+            ${timestamp ? `<span class="pip-subtitle">${new Date(timestamp).toLocaleString()}</span>` : ''}
+          </div>
+          <div class="pip-controls">
+            <button type="button" class="pip-control" data-action="reset" title="Reset Position">⤢</button>
+            <button type="button" class="pip-control" data-action="close" title="Close Viewer">✕</button>
+          </div>
+        </div>
+        <div class="pip-content">
+          <img class="pip-image" src="${imageSrc}" alt="Screenshot Preview" draggable="false" />
+        </div>
+      `;
+
+      document.body.appendChild(container);
+      const titlebar = container.querySelector('.pip-viewer-titlebar');
+      const content = container.querySelector('.pip-content');
+      const closeButton = container.querySelector('[data-action="close"]');
+      const resetButton = container.querySelector('[data-action="reset"]');
+      const imageElement = container.querySelector('.pip-image');
+
+      const state = {
+        isDragging: false,
+        offsetX: 0,
+        offsetY: 0,
+        lastX: 0,
+        lastY: 0,
+        isImageLoaded: false
+      };
+
+      const resetPosition = () => {
+        const { innerWidth, innerHeight } = window;
+        const rect = container.getBoundingClientRect();
+        const defaultX = Math.max(16, innerWidth - rect.width - 24);
+        const defaultY = Math.max(16, innerHeight - rect.height - 24);
+        container.style.left = `${defaultX}px`;
+        container.style.top = `${defaultY}px`;
+        state.lastX = defaultX;
+        state.lastY = defaultY;
+      };
+
+      const handleMouseDown = (event) => {
+        console.log('PiP handleMouseDown event');
+        if (event.button !== undefined && event.button !== 0) {
+          return;
+        }
+        state.isDragging = true;
+        const point = event.touches ? event.touches[0] : event;
+        if (!point) return;
+        const { clientX, clientY } = point;
+        const rect = container.getBoundingClientRect();
+        state.offsetX = clientX - rect.left;
+        state.offsetY = clientY - rect.top;
+        document.body.classList.add('pip-dragging');
+      };
+
+      const handleMouseMove = (event) => {
+        if (!state.isDragging) return;
+        const point = event.touches ? event.touches[0] : event;
+        if (!point) return;
+        const { clientX, clientY } = point;
+        const newX = clientX - state.offsetX;
+        const newY = clientY - state.offsetY;
+        const maxX = window.innerWidth - container.offsetWidth - 8;
+        const maxY = window.innerHeight - container.offsetHeight - 8;
+        state.lastX = Math.max(8, Math.min(newX, maxX));
+        state.lastY = Math.max(8, Math.min(newY, maxY));
+        container.style.left = `${state.lastX}px`;
+        container.style.top = `${state.lastY}px`;
+      };
+
+      const handleMouseUp = () => {
+        if (!state.isDragging) return;
+        state.isDragging = false;
+        document.body.classList.remove('pip-dragging');
+      };
+
+      titlebar.addEventListener('mousedown', handleMouseDown);
+      titlebar.addEventListener('touchstart', handleMouseDown, { passive: false });
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('touchmove', handleMouseMove, { passive: false });
+      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('touchend', handleMouseUp);
+
+      container.addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const action = button.dataset.action;
+        if (action === 'close') {
+          console.log('Closing PiP viewer via control');
+          cleanup();
+        } else if (action === 'reset') {
+          console.log('Resetting PiP viewer position');
+          resetPosition();
+        }
+      });
+
+      const cleanup = () => {
+        titlebar.removeEventListener('mousedown', handleMouseDown);
+        titlebar.removeEventListener('touchstart', handleMouseDown);
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('touchmove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('touchend', handleMouseUp);
+        document.body.classList.remove('pip-dragging');
+        if (container.parentElement) {
+          container.parentElement.removeChild(container);
+        }
+      };
+
+      content.addEventListener('dblclick', cleanup);
+      const handleKeydown = (event) => {
+        if (event.key === 'Escape') {
+          cleanup();
+        }
+      };
+      window.addEventListener('keydown', handleKeydown);
+
+      if (imageElement) {
+        imageElement.addEventListener('load', () => {
+          console.log('PiP image loaded successfully');
+          state.isImageLoaded = true;
+          resetPosition();
+        });
+        imageElement.addEventListener('error', () => {
+          console.error('PiP image failed to load');
+          state.isImageLoaded = true;
+          resetPosition();
+        });
+        if (imageElement.complete) {
+          state.isImageLoaded = true;
+          console.log('PiP image already complete');
+          resetPosition();
+        }
+      } else {
+        console.warn('PiP image element not found');
+        resetPosition();
+      }
+
+    } catch (error) {
+      console.error('Error opening floating screenshot viewer:', error);
+      openScreenshotModalFallback(imageSrc);
+    }
+  }
+
+  function openScreenshotModalFallback(imageSrc) {
     const modal = document.createElement('div');
     modal.className = 'screenshot-modal';
     modal.innerHTML = `<img src="${imageSrc}" alt="Screenshot">`;
-    
+
     modal.addEventListener('click', () => {
       document.body.removeChild(modal);
     });
-    
+
     document.body.appendChild(modal);
   }
 
@@ -608,8 +821,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function formatHoursMinutes(totalHours) {
+    // Ensure we have a valid number
+    if (!totalHours || isNaN(totalHours) || totalHours < 0) {
+      return '0h 0m';
+    }
+    
     const hours = Math.floor(totalHours);
-    const minutes = Math.floor((totalHours - hours) * 60); // Use Math.floor instead of Math.round
+    const minutes = Math.round((totalHours - hours) * 60); // Use Math.round for better accuracy
+    
+    // Handle edge case where rounding minutes gives 60
+    if (minutes >= 60) {
+      return `${hours + 1}h 0m`;
+    }
     
     if (hours === 0 && minutes === 0) {
       return '0h 0m';
@@ -622,19 +845,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function processWeeklyData(data) {
-    console.log('Processing weekly data:', data);
+  function processMonthlyData(data) {
+    console.log('Processing monthly data:', data);
+    console.log('Number of sessions:', data ? data.length : 0);
     
     // Group data by date
     const dailyData = {};
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     
-    // Initialize all 7 days with 0 hours
-    for (let i = 6; i >= 0; i--) {
+    // Initialize all 30 days with 0 hours
+    for (let i = 29; i >= 0; i--) {
       const date = new Date();
       date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T')[0];
-      const dayName = days[date.getDay()];
+      // Format as "MMM DD" for better readability
+      const dayName = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       dailyData[dateStr] = { day: dayName, hours: 0, idleHours: 0 };
     }
 
@@ -646,15 +870,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const dateStr = session.session_date;
         if (dailyData[dateStr]) {
           // Only count active_duration, not total session time
-          const activeHours = (session.active_duration || 0) / 3600; // Convert to hours
-          const idleHours = (session.idle_duration || 0) / 3600; // Convert to hours
+          // Ensure we're using the correct field and converting properly
+          const activeDurationSeconds = parseInt(session.active_duration) || 0;
+          const idleDurationSeconds = parseInt(session.idle_duration) || 0;
+          
+          const activeHours = activeDurationSeconds / 3600; // Convert seconds to hours
+          const idleHours = idleDurationSeconds / 3600; // Convert seconds to hours
+          
           dailyData[dateStr].hours += activeHours;
           dailyData[dateStr].idleHours += idleHours;
-          //console.log(`Session on ${dateStr}: ${activeHours.toFixed(2)} active hours, ${idleHours.toFixed(2)} idle hours`);
+          
+          console.log(`Session ${session.id} on ${dateStr}: ${activeDurationSeconds}s active (${activeHours.toFixed(2)}h), ${idleDurationSeconds}s idle (${idleHours.toFixed(2)}h)`);
+        } else {
+          console.warn(`Session date ${dateStr} not in date range`);
         }
       });
     } else {
-      console.log('No session data provided to processWeeklyData');
+      console.log('No session data provided to processMonthlyData');
     }
 
     // Create chart data
@@ -667,11 +899,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const totalHours = hours.reduce((sum, h) => sum + h, 0);
     const totalIdleHours = idleHours.reduce((sum, h) => sum + h, 0);
     
+    console.log('Calculated totals:', {
+      totalHours: totalHours,
+      totalIdleHours: totalIdleHours,
+      hoursArray: hours,
+      idleHoursArray: idleHours
+    });
+    
     // Count days with actual work (hours > 0)
     const daysWithWork = hours.filter(h => h > 0).length;
     
-    // Calculate average hours per day (only for days with work)
-    const avgHours = daysWithWork > 0 ? totalHours / daysWithWork : 0;
+    // Calculate average hours per day
+    // If no days with work, average across all 30 days (including zeros)
+    const avgHours = daysWithWork > 0 ? totalHours / daysWithWork : totalHours / 30;
     
     // Calculate average idle percentage
     const totalWorkTime = totalHours + totalIdleHours;
@@ -685,7 +925,7 @@ document.addEventListener('DOMContentLoaded', () => {
       mostProductiveDayText = labels[mostProductiveIndex];
     }
 
-    console.log('Weekly Summary:', {
+    console.log('Monthly Summary:', {
       totalHours: formatHoursMinutes(totalHours),
       totalIdleHours: formatHoursMinutes(totalIdleHours),
       avgIdlePercent: avgIdlePercent + '%',
@@ -696,24 +936,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Update summary stats with hours and minutes format
-    totalHoursWeek.textContent = formatHoursMinutes(totalHours);
+    totalHoursMonth.textContent = formatHoursMinutes(totalHours);
     avgDailyHours.textContent = formatHoursMinutes(avgHours);
     mostProductiveDay.textContent = mostProductiveDayText;
-    totalIdleTimeWeek.textContent = formatHoursMinutes(totalIdleHours);
+    totalIdleTimeMonth.textContent = formatHoursMinutes(totalIdleHours);
     avgIdlePercentage.textContent = avgIdlePercent + '%';
 
     console.log('Creating chart with labels:', labels, 'and hours:', hours);
     // Create chart
-    createWeeklyChart(labels, hours, idleHours);
+    createMonthlyChart(labels, hours, idleHours);
   }
 
-  function createWeeklyChart(labels, hours, idleHours = []) {
-    console.log('Creating weekly chart with data:', { labels, hours, idleHours });
-    const ctx = weeklyChart.getContext('2d');
+  function createMonthlyChart(labels, hours, idleHours = []) {
+    console.log('Creating monthly chart with data:', { labels, hours, idleHours });
+    const ctx = monthlyChart.getContext('2d');
     
     // Destroy existing chart if it exists
-    if (window.weeklyChartInstance) {
-      window.weeklyChartInstance.destroy();
+    if (window.monthlyChartInstance) {
+      window.monthlyChartInstance.destroy();
     }
     
     // Create datasets for active and idle time
@@ -740,7 +980,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
     
-    window.weeklyChartInstance = new Chart(ctx, {
+    window.monthlyChartInstance = new Chart(ctx, {
       type: 'bar',
       data: {
         labels: labels,
@@ -761,6 +1001,12 @@ document.addEventListener('DOMContentLoaded', () => {
             title: {
               display: true,
               text: 'Days'
+            },
+            ticks: {
+              maxRotation: 45,
+              minRotation: 45,
+              autoSkip: true,
+              maxTicksLimit: 15 // Show approximately every other day for better readability
             }
           }
         },

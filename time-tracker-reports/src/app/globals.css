@@ -114,3 +114,33 @@
     grid-template-columns: repeat(4, 1fr);
   }
 }
+
+.pip-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  z-index: 1050;
+  pointer-events: none;
+}
+
+.pip-overlay-content {
+  max-width: min(90vw, 1400px);
+  max-height: 90vh;
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 30px 70px rgba(15, 23, 42, 0.55);
+  pointer-events: none;
+}
+
+.pip-overlay-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #0f172a;
+  display: block;
+  pointer-events: none;
+}

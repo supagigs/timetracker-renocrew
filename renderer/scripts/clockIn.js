@@ -152,20 +152,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         sessionData.project_id = parseInt(projectSelect.value);
       }
 
-      const { data, error } = await supabase
+      console.log('Creating session with data:', sessionData);
+
+      const { data, error } = await window.supabase
         .from('time_sessions')
         .insert([sessionData])
         .select();
 
       if (error) {
         console.error('Error creating session:', error);
-        NotificationService.showError('Error starting session. Please try again.');
+        console.error('Error details:', JSON.stringify(error, null, 2));
+        NotificationService.showError(`Error starting session: ${error.message}`);
         return;
       }
 
       if (data && data[0]) {
         const sessionId = data[0].id;
         console.log('Session created with ID:', sessionId);
+        console.log('Created session data:', data[0]);
+        console.log('Session project_id:', data[0].project_id);
         
         // Store session data including the database ID
         StorageService.setItem('sessionStartTime', sessionStartTime);
@@ -177,6 +182,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Go to tracker page
         window.location.href = 'tracker.html';
+      } else {
+        console.error('No data returned from session creation');
+        NotificationService.showError('Error starting session: No data returned');
       }
     } catch (error) {
       console.error('Error starting session:', error);

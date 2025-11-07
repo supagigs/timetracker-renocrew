@@ -9,7 +9,7 @@
         content="default-src 'self';
                  connect-src 'self' https://*.supabase.co https://cdn.jsdelivr.net;
                  script-src 'self' https://cdn.jsdelivr.net;
-                 style-src 'self';
+                 style-src 'self' 'unsafe-inline';
                  img-src 'self' data: blob:;
                  media-src 'self' data: blob:;">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -22,6 +22,12 @@
 <body>
   <div class="tracker-container">
     <h1>Time Tracker</h1>
+    
+    <!-- Project Name Display (for Freelancers) -->
+    <div id="projectNameSection" style="display: none; margin-bottom: 20px; padding: 15px; background: #334155; border-radius: 10px; border: 1px solid #475569;">
+      <p style="margin: 0; color: #94a3b8; font-size: 0.9rem;">Working on:</p>
+      <h3 id="projectNameDisplay" style="margin: 5px 0 0 0; color: #e2e8f0; font-size: 1.2rem; font-weight: 600;"></h3>
+    </div>
     
     <!-- Timer Section -->
     <div class="timer-section">
@@ -84,11 +90,27 @@
       </div>
     </div>
 
+    <!-- Project Time Tracking (for Freelancers) -->
+    <div id="projectTimeSection" class="stats-section" style="display: none;">
+      <h2>Time by Project (Today)</h2>
+      <div id="projectTimeList" style="display: grid; gap: 12px; margin-top: 15px;">
+        <!-- Project times will be dynamically added here -->
+      </div>
+    </div>
+
     <!-- Pie Chart Section -->
     <div class="chart-section">
       <h2>Current Session's Activity Distribution</h2>
       <div class="chart-container">
         <canvas id="activityChart" width="400" height="200"></canvas>
+      </div>
+    </div>
+
+    <!-- Project Time Distribution Chart (for Freelancers) -->
+    <div id="projectChartSection" class="chart-section" style="display: none;">
+      <h2>Today's Time Distribution by Project</h2>
+      <div class="chart-container">
+        <canvas id="projectChart" width="400" height="200"></canvas>
       </div>
     </div>
 

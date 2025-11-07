@@ -13,8 +13,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Reports Dashboard",
-  description: "Displays the reports for the current week",
+  title: "Supatimetracker",
+  description: "Supatimetracker reports portal",
+  icons: {
+    icon: "/supagigs-logo.png",
+    apple: "/supagigs-logo.png",
+  },
 };
 
 export default function RootLayout({

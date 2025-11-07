@@ -53,6 +53,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLocalScreenshots: (email, startTime, endTime) => {
     return ipcRenderer.invoke('get-local-screenshots', email, startTime, endTime);
   },
+
+  openLocalScreenshot: (filePath) => {
+    return ipcRenderer.invoke('open-local-screenshot', filePath);
+  },
+
+  openScreenshotPictureInPicture: (imageSrc) => {
+    return ipcRenderer.invoke('open-picture-in-picture', imageSrc);
+  },
   
   // System idle helpers
   getSystemIdleTime: () => {
@@ -114,5 +122,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Update idle state in main process
   updateIdleState: (isIdle) => {
     ipcRenderer.send('update-idle-state', isIdle);
+  },
+  
+  // Timer state management
+  setTimerActive: (active) => {
+    return ipcRenderer.invoke('set-timer-active', active);
+  },
+  
+  getTimerActive: () => {
+    return ipcRenderer.invoke('get-timer-active');
+  },
+
+  setUserLoggedIn: (loggedIn) => {
+    return ipcRenderer.invoke('set-user-logged-in', loggedIn);
   }
 });

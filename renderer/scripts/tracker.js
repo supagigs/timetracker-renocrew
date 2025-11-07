@@ -11,8 +11,11 @@ document.addEventListener('DOMContentLoaded', () => {
   let breakCount = 0; // Track number of individual breaks taken
   let screenshotInterval;
   let activityChart = null; // Store chart instance for updates
+  let projectChart = null; // Store project chart instance for updates
   let idleTracker = null; // Idle time tracker instance
   let totalIdleTime = 0; // Total idle time accumulated
+  let isIdle = false; // Track idle state
+  let idleStartTime = null;
 
   // DOM elements
   const activeTimeDisplay = document.getElementById('activeTimeDisplay');
@@ -28,9 +31,24 @@ document.addEventListener('DOMContentLoaded', () => {
   const reportBtn = document.getElementById('reportBtn');
   const homeBtn = document.getElementById('homeBtn');
   const logoutBtn = document.getElementById('logoutBtn');
+  const projectNameSection = document.getElementById('projectNameSection');
+  const projectNameDisplay = document.getElementById('projectNameDisplay');
+  const projectTimeSection = document.getElementById('projectTimeSection');
+  const projectTimeList = document.getElementById('projectTimeList');
+  
+  let projectTimeData = new Map(); // Store project times: projectId -> {name, time, currentSessionTime}
 
   // Initialize
   init();
+
+  // Helper function to update timer state in main process
+  function updateTimerStateInMainProcess(active) {
+    if (window.electronAPI && window.electronAPI.setTimerActive) {
+      window.electronAPI.setTimerActive(active).catch(err => {
+        console.error('Error updating timer state in main process:', err);
+      });
+    }
+  }
 
   function init() {
     const email = StorageService.getItem('userEmail');
@@ -51,6 +69,8 @@ document.addEventListener('DOMContentLoaded', () => {
     totalActiveDuration = parseInt(StorageService.getItem('activeDuration') || '0');
     breakCount = parseInt(StorageService.getItem('breakCount') || '0');
     totalIdleTime = parseInt(StorageService.getItem('totalIdleTime') || '0');
+    isIdle = StorageService.getItem('isIdle') === 'true';
+    idleStartTime = StorageService.getItem('idleStartTime');
 
     // Convert string dates back to Date objects
     if (sessionStartTime) {
@@ -68,9 +88,17 @@ document.addEventListener('DOMContentLoaded', () => {
       console.log('Restored break start time:', breakStartTime);
     }
 
+    if (idleStartTime) {
+      idleStartTime = new Date(idleStartTime);
+      console.log('Restored idle start time:', idleStartTime);
+    }
+
     if (sessionStartTime) {
       updateTimer();
       if (isActive) {
+        // Notify main process that timer is active
+        updateTimerStateInMainProcess(true);
+        
         if (isOnBreak) {
           // Resume break state
           breakBtn.textContent = 'End Break';
@@ -86,17 +114,34 @@ document.addEventListener('DOMContentLoaded', () => {
         // Show notification that timer was restored from background
         NotificationService.showInfo('Timer restored from background. Your session is still active.');
         
+        if (isIdle) {
+          console.log('Session restored while idle; active timer paused.');
+        }
+
         // Restore screenshot capture if it should be active
         const screenshotCaptureActive = StorageService.getItem('screenshotCaptureActive') === 'true';
         if (screenshotCaptureActive) {
           console.log('Restoring screenshot capture from background');
           startScreenshotCapture();
         }
+      } else {
+        // Notify main process that timer is not active
+        updateTimerStateInMainProcess(false);
       }
     }
 
     loadTodayStats();
     updateActivityChart();
+    
+    // Load project distribution chart for freelancers
+    const userCategory = StorageService.getItem('userCategory');
+    if (userCategory === 'Freelancer') {
+      loadProjectDistributionChart();
+      loadProjectName();
+      loadProjectTimes();
+      // Update project times every 5 seconds
+      setInterval(updateProjectTimes, 5000);
+    }
     
     // Initialize idle tracker
     initializeIdleTracker();
@@ -118,6 +163,23 @@ document.addEventListener('DOMContentLoaded', () => {
       checkInterval: 1000, // Check every second
       onIdleStart: () => {
         console.log('🔴 User became idle - red dot will appear on next screenshot');
+        if (isActive && !isOnBreak && !isIdle) {
+          if (workStartTime) {
+            const now = new Date();
+            const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
+            if (workElapsed > 0) {
+              totalActiveDuration += workElapsed;
+              StorageService.setItem('activeDuration', totalActiveDuration.toString());
+            }
+          }
+          workStartTime = null;
+          StorageService.removeItem('workStartTime');
+        }
+
+        isIdle = true;
+        StorageService.setItem('isIdle', 'true');
+        idleStartTime = new Date();
+        StorageService.setItem('idleStartTime', idleStartTime.toISOString());
         // Notify main process that user is idle
         if (window.electronAPI && window.electronAPI.updateIdleState) {
           console.log('Sending idle state to main process: true');
@@ -130,6 +192,14 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log(`🟢 User became active after ${idleDuration.toFixed(1)}s idle time`);
         totalIdleTime += idleDuration;
         StorageService.setItem('totalIdleTime', totalIdleTime.toString());
+        isIdle = false;
+        StorageService.setItem('isIdle', 'false');
+        StorageService.removeItem('idleStartTime');
+
+        if (isActive && !isOnBreak) {
+          workStartTime = new Date();
+          StorageService.setItem('workStartTime', workStartTime.toISOString());
+        }
         // Notify main process that user is active again
         if (window.electronAPI && window.electronAPI.updateIdleState) {
           console.log('Sending idle state to main process: false');
@@ -153,8 +223,16 @@ document.addEventListener('DOMContentLoaded', () => {
       workStartTime = new Date().toISOString();
       StorageService.setItem('isActive', 'true');
       StorageService.setItem('workStartTime', workStartTime);
+      if (isIdle) {
+        isIdle = false;
+        StorageService.setItem('isIdle', 'false');
+        StorageService.removeItem('idleStartTime');
+      }
       startBtn.disabled = true;
       breakBtn.disabled = false;
+      
+      // Notify main process that timer is active
+      updateTimerStateInMainProcess(true);
       
       // Start idle tracking when work begins
       if (idleTracker) {
@@ -173,6 +251,9 @@ document.addEventListener('DOMContentLoaded', () => {
       isActive = false;
       StorageService.setItem('isActive', 'false');
       StorageService.removeItem('workStartTime');
+      isIdle = false;
+      StorageService.setItem('isIdle', 'false');
+      StorageService.removeItem('idleStartTime');
       startBtn.textContent = 'Start';
       startBtn.disabled = false;
       breakBtn.disabled = true;
@@ -194,6 +275,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const workElapsed = Math.floor((new Date() - new Date(workStartTime)) / 1000);
         totalActiveDuration += workElapsed;
         StorageService.setItem('activeDuration', totalActiveDuration.toString());
+      }
+
+      if (isIdle) {
+        isIdle = false;
+        StorageService.setItem('isIdle', 'false');
+        StorageService.removeItem('idleStartTime');
       }
       
       isOnBreak = true;
@@ -219,6 +306,9 @@ document.addEventListener('DOMContentLoaded', () => {
       isOnBreak = false;
       StorageService.setItem('isOnBreak', 'false');
       StorageService.removeItem('breakStartTime'); // Clear break start time
+      isIdle = false;
+      StorageService.setItem('isIdle', 'false');
+      StorageService.removeItem('idleStartTime');
       breakBtn.textContent = 'Take Break';
       breakBtn.className = 'btn-warning';
       breakBtn.disabled = false;
@@ -243,50 +333,65 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function clockOut() {
+    const wasActive = isActive;
+    const wasIdle = isIdle;
+    const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
+    const previousIdleStartTime = idleStartTime ? new Date(idleStartTime) : null;
+    const previousTotalActiveDuration = totalActiveDuration;
+
     // Immediately stop timer and calculate final time when button is clicked
     // This prevents any additional time from being counted after user clicks Clock Out
     const clockOutTime = new Date();
+
+    let finalActiveDuration = totalActiveDuration;
+    if (wasActive && !isOnBreak && !wasIdle && previousWorkStartTime) {
+      const workElapsed = Math.floor((clockOutTime - previousWorkStartTime) / 1000);
+      if (workElapsed > 0) {
+        finalActiveDuration += workElapsed;
+      }
+    }
+
     clearInterval(timerInterval);
     stopScreenshotCapture();
-    
+
     // Stop idle tracking
     if (idleTracker) {
       idleTracker.stopTracking();
     }
-    
+
     // Mark session as ended immediately
     isActive = false;
     StorageService.setItem('isActive', 'false');
-    
+    isIdle = false;
+    StorageService.setItem('isIdle', 'false');
+    workStartTime = null;
+    StorageService.removeItem('workStartTime');
+    idleStartTime = null;
+    StorageService.removeItem('idleStartTime');
+
+    // Notify main process that timer is not active
+    updateTimerStateInMainProcess(false);
+
     if (confirm('Are you sure you want to clock out? This will end your current session.')) {
       try {
-        // Calculate final durations using the time when Clock Out was clicked
-        const sessionDuration = Math.floor((clockOutTime - new Date(sessionStartTime)) / 1000);
-        
-        // Calculate final active duration based on actual work periods tracked
-        let finalActiveDuration = totalActiveDuration;
-        
-        // If currently working (not on break), add the current work time
-        if (isActive && !isOnBreak && workStartTime) {
-          const workElapsed = Math.floor((clockOutTime - new Date(workStartTime)) / 1000);
-          finalActiveDuration = totalActiveDuration + workElapsed;
-        }
-        
+        const sessionStart = sessionStartTime instanceof Date ? sessionStartTime : new Date(sessionStartTime);
+        const sessionDuration = sessionStart ? Math.floor((clockOutTime - sessionStart) / 1000) : 0;
+
         console.log('Clock out calculation details:', {
           sessionDuration,
           totalActiveDuration,
           totalBreakDuration,
           finalActiveDuration,
-          isActive,
-          isOnBreak,
-          workStartTime: workStartTime ? new Date(workStartTime) : null,
+          wasActive,
+          wasIdle,
+          workStartTime: previousWorkStartTime,
           clockOutTime
         });
 
 
         // Get final idle time
-        const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : 0;
-        
+        const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
+
         // Save session to database and wait for completion
         await saveSession(sessionDuration, totalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
 
@@ -300,7 +405,11 @@ document.addEventListener('DOMContentLoaded', () => {
         StorageService.removeItem('activeDuration');
         StorageService.removeItem('breakCount');
         StorageService.removeItem('totalIdleTime');
-        
+        StorageService.removeItem('isIdle');
+        StorageService.removeItem('idleStartTime');
+
+        totalActiveDuration = finalActiveDuration;
+
         // Reset idle tracker
         if (idleTracker) {
           idleTracker.destroy(); // Use destroy() instead of reset() for complete cleanup
@@ -316,11 +425,41 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } else {
       // User cancelled - restore timer and session state
-      isActive = true;
-      StorageService.setItem('isActive', 'true');
-      timerInterval = setInterval(updateTimer, 1000);
-      if (workStartTime) {
-        startScreenshotCapture();
+      totalActiveDuration = previousTotalActiveDuration;
+      StorageService.setItem('activeDuration', previousTotalActiveDuration.toString());
+
+      isActive = wasActive;
+      StorageService.setItem('isActive', wasActive ? 'true' : 'false');
+
+      isIdle = wasIdle;
+      if (wasIdle) {
+        idleStartTime = previousIdleStartTime;
+        StorageService.setItem('isIdle', 'true');
+        if (idleStartTime) {
+          StorageService.setItem('idleStartTime', idleStartTime.toISOString());
+        }
+      } else {
+        StorageService.setItem('isIdle', 'false');
+        StorageService.removeItem('idleStartTime');
+        idleStartTime = null;
+      }
+
+      if (wasActive) {
+        if (previousWorkStartTime && !wasIdle) {
+          workStartTime = previousWorkStartTime;
+          StorageService.setItem('workStartTime', previousWorkStartTime.toISOString());
+        }
+
+        updateTimerStateInMainProcess(true);
+        timerInterval = setInterval(updateTimer, 1000);
+
+        if (previousWorkStartTime && !wasIdle && !isOnBreak) {
+          startScreenshotCapture();
+        }
+
+        if (idleTracker) {
+          idleTracker.startTracking();
+        }
       }
     }
   }
@@ -328,7 +467,36 @@ document.addEventListener('DOMContentLoaded', () => {
   async function saveSession(totalDuration, breakDuration, activeDuration, idleDuration = 0, breakCountVal = 0) {
     const email = StorageService.getItem('userEmail');
     const today = new Date().toISOString().split('T')[0];
-    const selectedProjectId = StorageService.getItem('selectedProjectId');
+    let selectedProjectId = StorageService.getItem('selectedProjectId');
+
+    // If project_id is not in storage, try to get it from the existing session
+    if (!selectedProjectId && currentSessionId) {
+      try {
+        const { data: existingSession } = await window.supabase
+          .from('time_sessions')
+          .select('project_id')
+          .eq('id', parseInt(currentSessionId))
+          .single();
+        
+        if (existingSession && existingSession.project_id) {
+          selectedProjectId = existingSession.project_id.toString();
+          console.log('Retrieved project_id from existing session:', selectedProjectId);
+        }
+      } catch (err) {
+        console.log('Could not retrieve project_id from existing session:', err);
+      }
+    }
+
+    console.log('Saving session with data:', {
+      currentSessionId,
+      email,
+      selectedProjectId,
+      totalDuration,
+      breakDuration,
+      activeDuration,
+      idleDuration,
+      breakCountVal
+    });
 
     try {
       if (currentSessionId) {
@@ -342,11 +510,17 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         // Include project_id if available (for Freelancers)
+        // Always include it if it was set, even if cleared from storage
         if (selectedProjectId) {
           updateData.project_id = parseInt(selectedProjectId);
+          console.log('Including project_id in update:', updateData.project_id);
+        } else {
+          console.log('No project_id available for this session');
         }
 
-        const { data, error } = await supabase
+        console.log('Updating session with data:', updateData);
+
+        const { data, error } = await window.supabase
           .from('time_sessions')
           .update(updateData)
           .eq('id', parseInt(currentSessionId))
@@ -354,16 +528,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (error) {
           console.error('Error updating session:', error);
+          console.error('Error details:', JSON.stringify(error, null, 2));
+          NotificationService.showError(`Failed to update session: ${error.message}`);
           throw new Error(`Failed to update session: ${error.message}`);
         } else {
           console.log('Session updated successfully:', data);
+          if (data && data[0]) {
+            console.log('Updated session includes project_id:', data[0].project_id);
+            console.log('Updated session active_duration:', data[0].active_duration);
+          }
         }
       } else {
         // Fallback: create new session (shouldn't happen with new flow)
         console.warn('No currentSessionId found, creating new session');
         const insertData = {
           user_email: email,
-          start_time: sessionStartTime,
+          start_time: sessionStartTime ? (sessionStartTime instanceof Date ? sessionStartTime.toISOString() : sessionStartTime) : new Date().toISOString(),
           end_time: new Date().toISOString(),
           break_duration: breakDuration,
           active_duration: activeDuration,
@@ -375,9 +555,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // Include project_id if available (for Freelancers)
         if (selectedProjectId) {
           insertData.project_id = parseInt(selectedProjectId);
+          console.log('Including project_id in insert:', insertData.project_id);
         }
 
-        const { data, error } = await supabase
+        console.log('Inserting new session with data:', insertData);
+
+        const { data, error } = await window.supabase
           .from('time_sessions')
           .insert([insertData])
           .select()
@@ -385,13 +568,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (error) {
           console.error('Error saving session:', error);
+          console.error('Error details:', JSON.stringify(error, null, 2));
+          NotificationService.showError(`Failed to save session: ${error.message}`);
           throw new Error(`Failed to save session: ${error.message}`);
         } else {
           console.log('Session saved successfully:', data);
+          if (data) {
+            console.log('Saved session includes project_id:', data.project_id);
+            console.log('Saved session active_duration:', data.active_duration);
+          }
         }
       }
     } catch (error) {
       console.error('Error saving session:', error);
+      NotificationService.showError(`Error saving session: ${error.message || 'Unknown error'}`);
     }
   }
 
@@ -402,7 +592,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Calculate current active time based on current state
     let currentActiveTime = totalActiveDuration;
-    if (isActive && !isOnBreak && workStartTime) {
+    if (isActive && !isOnBreak && !isIdle && workStartTime) {
       // Currently working - calculate from work start time
       const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
       currentActiveTime = totalActiveDuration + workElapsed;
@@ -422,8 +612,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Calculate total session time (active + break)
-    const totalSessionTime = currentActiveTime + currentBreakTime;
+    // Calculate total session time (active + break + idle)
+    const currentIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
+    const totalSessionTime = currentActiveTime + currentBreakTime + currentIdleTime;
 
     // Debug logging
     //console.log('updateTimer - isActive:', isActive, 'isOnBreak:', isOnBreak);
@@ -431,9 +622,6 @@ document.addEventListener('DOMContentLoaded', () => {
     //console.log('updateTimer - totalBreakDuration:', totalBreakDuration, 'currentBreakTime:', currentBreakTime);
     //console.log('updateTimer - totalActiveDuration:', totalActiveDuration, 'currentActiveTime:', currentActiveTime);
 
-    // Calculate current idle time
-    const currentIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
-    
     // Update all four displays
     activeTimeDisplay.textContent = formatTime(currentActiveTime);
     breakTimeDisplay.textContent = formatTime(currentBreakTime);
@@ -447,6 +635,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (Math.floor(Date.now() / 1000) % 5 === 0) {
       updateActivityChart();
       loadTodayStats();
+      // Update project chart and times if user is freelancer
+      const userCategory = StorageService.getItem('userCategory');
+      if (userCategory === 'Freelancer') {
+        loadProjectDistributionChart();
+        updateProjectTimes();
+      }
     }
   }
 
@@ -511,14 +705,14 @@ document.addEventListener('DOMContentLoaded', () => {
           
           // Only add current work time if user has explicitly started work AND is currently active
           // This prevents automatic time counting on login without user action
-          if (isActive && !isOnBreak && workStartTime) {
+          if (isActive && !isOnBreak && !isIdle && workStartTime) {
             const now = new Date();
             const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
             currentActiveTime = totalActiveDuration + workElapsed;
             console.log(`Adding current work time: ${workElapsed}s (total: ${currentActiveTime}s)`);
-          } else if (isActive && !isOnBreak && !workStartTime) {
+          } else if (isActive && !isOnBreak && (!workStartTime || isIdle)) {
             // User is marked as active but hasn't started work yet - don't count time
-            console.log('User is active but work not started - not counting time');
+            console.log('User is active but work not started or currently idle - not counting time');
             currentActiveTime = totalActiveDuration; // Only count previously accumulated time
           }
           
@@ -564,7 +758,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Show current session data when database is unavailable
     let currentActiveTime = totalActiveDuration;
     
-    if (isActive && !isOnBreak && workStartTime) {
+    if (isActive && !isOnBreak && !isIdle && workStartTime) {
       const now = new Date();
       const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
       currentActiveTime = totalActiveDuration + workElapsed;
@@ -601,7 +795,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentActiveTime = totalActiveDuration;
     let currentBreakTime = totalBreakDuration;
     
-    if (isActive && !isOnBreak && workStartTime) {
+    if (isActive && !isOnBreak && !isIdle && workStartTime) {
       const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
       currentActiveTime = totalActiveDuration + workElapsed;
     }
@@ -642,6 +836,495 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
       });
+    }
+  }
+
+  async function loadProjectName() {
+    try {
+      const selectedProjectId = StorageService.getItem('selectedProjectId');
+      
+      // If not in storage, try to get from current session
+      let projectId = selectedProjectId;
+      if (!projectId && currentSessionId) {
+        const { data: session } = await window.supabase
+          .from('time_sessions')
+          .select('project_id')
+          .eq('id', parseInt(currentSessionId))
+          .maybeSingle();
+        
+        if (session && session.project_id) {
+          projectId = session.project_id.toString();
+        }
+      }
+
+      if (!projectId || !window.supabase) {
+        if (projectNameSection) {
+          projectNameSection.style.display = 'none';
+        }
+        return;
+      }
+
+      // Fetch project name
+      const { data: project, error } = await SupabaseService.handleRequest(() =>
+        window.supabase
+          .from('projects')
+          .select('project_name')
+          .eq('id', parseInt(projectId))
+          .maybeSingle()
+      );
+
+      if (error) {
+        console.error('Error loading project name:', error);
+        if (projectNameSection) {
+          projectNameSection.style.display = 'none';
+        }
+        return;
+      }
+
+      if (project && project.project_name && projectNameDisplay && projectNameSection) {
+        projectNameDisplay.textContent = project.project_name;
+        projectNameSection.style.display = 'block';
+      } else {
+        if (projectNameSection) {
+          projectNameSection.style.display = 'none';
+        }
+      }
+    } catch (error) {
+      console.error('Error in loadProjectName:', error);
+      if (projectNameSection) {
+        projectNameSection.style.display = 'none';
+      }
+    }
+  }
+
+  async function loadProjectTimes() {
+    try {
+      const email = StorageService.getItem('userEmail');
+      const today = new Date().toISOString().split('T')[0];
+      if (!email || !window.supabase) {
+        return;
+      }
+
+      // Fetch all completed time sessions with project_id for today (only those with end_time)
+      const { data: sessions, error } = await SupabaseService.handleRequest(() =>
+        window.supabase
+          .from('time_sessions')
+          .select(`
+            project_id,
+            active_duration,
+            end_time,
+            projects (
+              id,
+              project_name
+            )
+          `)
+          .eq('user_email', email)
+          .eq('session_date', today)
+          .not('project_id', 'is', null)
+          .not('end_time', 'is', null) // Only completed sessions
+      );
+
+      if (error) {
+        console.error('Error loading project times:', error);
+        return;
+      }
+
+      // Reset the map
+      projectTimeData.clear();
+
+      // Aggregate time by project from completed sessions
+      // Exclude current session if it exists in the results
+      if (sessions) {
+        sessions.forEach(session => {
+          // Skip current session if it's in the results (shouldn't happen since we filter by end_time, but just in case)
+          if (currentSessionId && session.id === parseInt(currentSessionId)) {
+            return;
+          }
+
+          if (session.projects && session.project_id) {
+            const projectId = session.project_id;
+            const projectName = session.projects.project_name || `Project ${projectId}`;
+            const activeDuration = Number(session.active_duration) || 0;
+
+            if (projectTimeData.has(projectId)) {
+              const existing = projectTimeData.get(projectId);
+              const existingTime = Number(existing?.time) || 0;
+              const existingCurrentSession = Number(existing?.currentSessionTime) || 0;
+
+              projectTimeData.set(projectId, {
+                name: projectName,
+                time: existingTime + activeDuration,
+                currentSessionTime: existingCurrentSession,
+              });
+            } else {
+              projectTimeData.set(projectId, {
+                name: projectName,
+                time: activeDuration,
+                currentSessionTime: 0,
+              });
+            }
+          }
+        });
+      }
+
+      // Now add current session time if active
+      updateProjectTimes();
+    } catch (error) {
+      console.error('Error in loadProjectTimes:', error);
+    }
+  }
+
+  function updateProjectTimes() {
+    // Add current active session time to the current project
+    const selectedProjectId = StorageService.getItem('selectedProjectId');
+    
+    if (!selectedProjectId) {
+      updateProjectTimesDisplay();
+      return;
+    }
+
+    const projectIdInt = parseInt(selectedProjectId);
+    
+    // Calculate current active time if timer is running
+    let currentActiveTime = 0;
+    if (isActive && !isOnBreak && !isIdle && workStartTime) {
+      const now = new Date();
+      const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
+      currentActiveTime = totalActiveDuration + workElapsed;
+    } else if (totalActiveDuration > 0) {
+      // If not currently active but has accumulated time, use that
+      currentActiveTime = totalActiveDuration;
+    }
+
+    // Get project name if not already in map
+    if (!projectTimeData.has(projectIdInt)) {
+      // Try to get from existing session or fetch
+      if (projectNameDisplay && projectNameDisplay.textContent) {
+        projectTimeData.set(projectIdInt, {
+          name: projectNameDisplay.textContent,
+          time: 0, // No completed sessions yet
+          currentSessionTime: currentActiveTime
+        });
+      } else {
+        // Fetch project name
+        loadProjectName().then(() => {
+          if (projectNameDisplay && projectNameDisplay.textContent) {
+            projectTimeData.set(projectIdInt, {
+              name: projectNameDisplay.textContent,
+              time: 0, // No completed sessions yet
+              currentSessionTime: currentActiveTime
+            });
+            updateProjectTimesDisplay();
+          }
+        });
+        return; // Will update display after name is loaded
+      }
+    } else {
+      // Update existing project time
+      // existing.time = sum of completed sessions for this project
+      // currentActiveTime = current session's active time
+      // We track them separately to avoid double counting
+      const existing = projectTimeData.get(projectIdInt) || { name: '', time: 0, currentSessionTime: 0 };
+      const existingTime = Number(existing.time) || 0;
+
+      projectTimeData.set(projectIdInt, {
+        name: existing.name,
+        time: existingTime, // Keep completed sessions time unchanged
+        currentSessionTime: currentActiveTime, // Update current session time
+      });
+    }
+    
+    updateProjectTimesDisplay();
+  }
+
+  function updateProjectTimesDisplay() {
+    if (!projectTimeList || !projectTimeSection) {
+      return;
+    }
+
+    // Show section only if there are projects
+    if (projectTimeData.size === 0) {
+      projectTimeSection.style.display = 'none';
+      return;
+    }
+
+    projectTimeSection.style.display = 'block';
+    projectTimeList.innerHTML = '';
+
+    // Sort projects by total time (descending)
+    const sortedProjects = Array.from(projectTimeData.entries())
+      .map(([id, data]) => ({ 
+        id, 
+        ...data, 
+        totalTime: (Number(data.time) || 0) + (Number(data.currentSessionTime) || 0) 
+      }))
+      .sort((a, b) => b.totalTime - a.totalTime);
+
+    sortedProjects.forEach(project => {
+      // Use the pre-calculated totalTime
+      const totalTime = project.totalTime;
+      
+      const projectItem = document.createElement('div');
+      projectItem.style.cssText = `
+        background: #334155;
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #475569;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      `;
+
+      const projectNameDiv = document.createElement('div');
+      projectNameDiv.style.cssText = 'flex: 1;';
+      
+      const projectName = document.createElement('h4');
+      projectName.style.cssText = 'margin: 0 0 5px 0; color: #e2e8f0; font-size: 1rem; font-weight: 600;';
+      projectName.textContent = project.name;
+
+      const projectId = document.createElement('p');
+      projectId.style.cssText = 'margin: 0; color: #94a3b8; font-size: 0.85rem;';
+      projectId.textContent = `Project ID: ${project.id}`;
+
+      projectNameDiv.appendChild(projectName);
+      projectNameDiv.appendChild(projectId);
+
+      const timeDisplay = document.createElement('div');
+      timeDisplay.style.cssText = 'text-align: right;';
+      
+      const timeValue = document.createElement('span');
+      timeValue.style.cssText = 'color: #10b981; font-size: 1.3rem; font-weight: 700; font-family: "Courier New", monospace;';
+      timeValue.textContent = formatTime(totalTime);
+
+      timeDisplay.appendChild(timeValue);
+
+      projectItem.appendChild(projectNameDiv);
+      projectItem.appendChild(timeDisplay);
+      projectTimeList.appendChild(projectItem);
+    });
+  }
+
+  async function loadProjectDistributionChart() {
+    try {
+      const email = StorageService.getItem('userEmail');
+      const today = new Date().toISOString().split('T')[0];
+      if (!email || !window.supabase) {
+        return;
+      }
+
+      // Fetch all time sessions with project_id for this user
+      const { data: sessions, error } = await SupabaseService.handleRequest(() =>
+        window.supabase
+          .from('time_sessions')
+          .select(`
+            id,
+            project_id,
+            active_duration,
+            projects (
+              id,
+              project_name
+            )
+          `)
+          .eq('user_email', email)
+          .eq('session_date', today)
+          .not('project_id', 'is', null)
+      );
+
+      if (error) {
+        console.error('Error loading project distribution:', error);
+        return;
+      }
+
+      const projectChartSection = document.getElementById('projectChartSection');
+      const sessionList = Array.isArray(sessions) ? sessions : [];
+
+      // Aggregate time by project
+      const projectTimeMap = new Map();
+      
+      sessionList.forEach(session => {
+        if (session.projects && session.project_id) {
+          const projectId = session.project_id;
+          const projectName = session.projects.project_name || `Project ${projectId}`;
+          const activeDuration = Number(session.active_duration) || 0;
+
+          if (projectTimeMap.has(projectId)) {
+            projectTimeMap.set(projectId, {
+              name: projectName,
+              time: projectTimeMap.get(projectId).time + activeDuration
+            });
+          } else {
+            projectTimeMap.set(projectId, {
+              name: projectName,
+              time: activeDuration
+            });
+          }
+        }
+      });
+
+      // Convert to arrays for chart
+      const projectNames = [];
+      const projectTimes = [];
+      const colors = [
+        '#3B82F6', // Blue
+        '#10B981', // Green
+        '#F59E0B', // Amber
+        '#EF4444', // Red
+        '#8B5CF6', // Purple
+        '#EC4899', // Pink
+        '#06B6D4', // Cyan
+        '#F97316', // Orange
+        '#84CC16', // Lime
+        '#6366F1'  // Indigo
+      ];
+
+      projectTimeMap.forEach((value, key) => {
+        // Only include projects with time > 0
+        if (value.time > 0) {
+          projectNames.push(value.name);
+          projectTimes.push(value.time);
+        }
+      });
+
+      // Add current active session time if it has a project and hasn't been saved yet
+      const selectedProjectId = StorageService.getItem('selectedProjectId');
+      const currentSessionId = StorageService.getItem('currentSessionId');
+      if (selectedProjectId && isActive && !isOnBreak && !isIdle && workStartTime) {
+        // Check if current session is already in the fetched sessions
+        const currentSessionInList = sessionList.find(s => s.id === parseInt(currentSessionId));
+        
+        // Only add current time if session is not in the list (not saved yet) or if it's been updated since last save
+        if (!currentSessionInList || (currentSessionInList && currentSessionInList.project_id === parseInt(selectedProjectId))) {
+          const now = new Date();
+          const currentWorkTime = Math.floor((now - new Date(workStartTime)) / 1000);
+          const totalCurrentTime = totalActiveDuration + currentWorkTime;
+          
+          // If session exists in list, subtract its saved time to avoid double counting
+          const savedTime = currentSessionInList ? (currentSessionInList.active_duration || 0) : 0;
+          const additionalTime = totalCurrentTime - savedTime;
+          
+          if (additionalTime > 0) {
+            // Find project name from sessions or fetch it
+            let projectName = null;
+            const existingSession = sessionList.find(s => s.project_id === parseInt(selectedProjectId));
+            if (existingSession && existingSession.projects) {
+              projectName = existingSession.projects.project_name;
+            } else {
+              // Fetch project name if not in sessions
+              const { data: projectData } = await SupabaseService.handleRequest(() =>
+                window.supabase
+                  .from('projects')
+                  .select('project_name')
+                  .eq('id', parseInt(selectedProjectId))
+                  .maybeSingle()
+              );
+              if (projectData) {
+                projectName = projectData.project_name;
+              }
+            }
+            
+            if (projectName) {
+              const existingIndex = projectNames.indexOf(projectName);
+              
+              if (existingIndex >= 0) {
+                projectTimes[existingIndex] += additionalTime;
+              } else {
+                projectNames.push(projectName);
+                projectTimes.push(additionalTime);
+              }
+            }
+          }
+        }
+      }
+
+      // Filter out any projects with zero or negative time after adding current session
+      const validProjects = [];
+      const validTimes = [];
+      const validNames = [];
+      
+      for (let i = 0; i < projectTimes.length; i++) {
+        if (projectTimes[i] > 0) {
+          validProjects.push(i);
+          validTimes.push(projectTimes[i]);
+          validNames.push(projectNames[i]);
+        }
+      }
+
+      if (validNames.length === 0) {
+        if (projectChartSection) {
+          projectChartSection.style.display = 'none';
+        }
+        return;
+      }
+
+      // Show chart section
+      if (projectChartSection) {
+        projectChartSection.style.display = 'block';
+      }
+
+      // Format times for display (convert seconds to hours)
+      const formattedTimes = validTimes.map(time => {
+        const hours = Math.floor(time / 3600);
+        const minutes = Math.floor((time % 3600) / 60);
+        return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+      });
+
+      const chartData = {
+        labels: validNames.map((name, index) => `${name} (${formattedTimes[index]})`),
+        datasets: [{
+          data: validTimes,
+          backgroundColor: colors.slice(0, validNames.length),
+          borderWidth: 2,
+          borderColor: '#ffffff'
+        }]
+      };
+
+      const ctx = document.getElementById('projectChart').getContext('2d');
+
+      if (projectChart) {
+        // Update existing chart
+        projectChart.data = chartData;
+        projectChart.update();
+      } else {
+        // Create new chart
+        projectChart = new Chart(ctx, {
+          type: 'pie',
+          data: chartData,
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'bottom',
+                labels: {
+                  padding: 15,
+                  font: {
+                    size: 12
+                  }
+                }
+              },
+              tooltip: {
+                callbacks: {
+                  label: function(context) {
+                    const label = context.label || '';
+                    const value = context.parsed || 0;
+                    const hours = Math.floor(value / 3600);
+                    const minutes = Math.floor((value % 3600) / 60);
+                    const seconds = value % 60;
+                    const timeString = hours > 0 
+                      ? `${hours}h ${minutes}m ${seconds}s`
+                      : minutes > 0 
+                        ? `${minutes}m ${seconds}s`
+                        : `${seconds}s`;
+                    return `${label.split(' (')[0]}: ${timeString}`;
+                  }
+                }
+              }
+            }
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Error in loadProjectDistributionChart:', error);
     }
   }
 
@@ -718,7 +1401,8 @@ document.addEventListener('DOMContentLoaded', () => {
         showScreenshotNotification({
           timestamp: timestamp,
           filename: filename,
-          filePath: filePath
+          filePath: filePath,
+          dataUrl: screenshotData
         });
       } catch (fileError) {
         console.error('Error saving screenshot to local file:', fileError);
@@ -731,13 +1415,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function handleHomeNavigation() {
     if (isActive) {
-      // If timer is running, show confirmation dialog
-      const confirmMessage = 'You have an active timer running. The timer will continue in the background. Are you sure you want to go to the home page?';
-      if (confirm(confirmMessage)) {
-        // Save current state before navigation
-        saveCurrentState();
-        window.location.href = 'home.html';
-      }
+      // If timer is running, prevent navigation and ask user to clock out first
+      NotificationService.showWarning('Please clock out first before going back to home. Your timer is still running.');
+      return;
     } else {
       // No active timer, safe to navigate
       window.location.href = 'home.html';
@@ -781,7 +1461,7 @@ document.addEventListener('DOMContentLoaded', () => {
           let finalBreakDuration = totalBreakDuration;
           
           // Add current work time if not on break
-          if (isActive && !isOnBreak && workStartTime) {
+          if (isActive && !isOnBreak && !isIdle && workStartTime) {
             const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
             finalActiveDuration += workElapsed;
           }
@@ -813,6 +1493,8 @@ document.addEventListener('DOMContentLoaded', () => {
         StorageService.removeItem('activeDuration');
         StorageService.removeItem('breakCount');
         StorageService.removeItem('totalIdleTime');
+        StorageService.removeItem('isIdle');
+        StorageService.removeItem('idleStartTime');
         StorageService.removeItem('screenshotCaptureActive');
         StorageService.removeItem('userEmail');
         StorageService.removeItem('displayName');
@@ -826,6 +1508,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (idleTracker) {
           idleTracker.destroy();
           idleTracker = null;
+        }
+
+        if (window.electronAPI?.setUserLoggedIn) {
+          window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state during logout:', err));
         }
 
         // Redirect to login
@@ -871,6 +1557,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Create notification element
     const notification = document.createElement('div');
     notification.className = 'screenshot-notification';
+
+    const previewSource = data?.filePath
+      ? `file://${data.filePath}`
+      : data?.dataUrl || null;
     
     const now = new Date();
     const timeString = now.toLocaleTimeString('en-US', { 
@@ -890,6 +1580,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add click handler to dismiss
     notification.addEventListener('click', () => {
       dismissNotification(notification);
+      if (previewSource) {
+        openScreenshotPreview(previewSource);
+      }
     });
     
     // Add to document
@@ -901,6 +1594,20 @@ document.addEventListener('DOMContentLoaded', () => {
         dismissNotification(notification);
       }
     }, 3000);
+  }
+
+  function openScreenshotPreview(imageSrc) {
+    const modal = document.createElement('div');
+    modal.className = 'screenshot-modal';
+    modal.innerHTML = `<img src="${imageSrc}" alt="Screenshot Preview">`;
+
+    modal.addEventListener('click', () => {
+      if (modal.parentElement) {
+        modal.remove();
+      }
+    });
+
+    document.body.appendChild(modal);
   }
 
   // Dismiss notification with animation
@@ -944,7 +1651,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let finalBreakDuration = totalBreakDuration;
         
         // Add current work time if not on break
-        if (isActive && !isOnBreak && workStartTime) {
+        if (isActive && !isOnBreak && !isIdle && workStartTime) {
           const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
           finalActiveDuration += workElapsed;
         }
@@ -1014,7 +1721,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
   }
-  homeBtn.addEventListener('click', handleHomeNavigation);
+  if (homeBtn) {
+    homeBtn.addEventListener('click', handleHomeNavigation);
+  }
   if (logoutBtn) {
     logoutBtn.addEventListener('click', logout);
   }

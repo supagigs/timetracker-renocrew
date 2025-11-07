@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session, ipcMain, desktopCapturer, Notification, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, session, ipcMain, desktopCapturer, Notification, nativeImage, shell, dialog } = require('electron');
 const path = require('path');
 require('dotenv').config(); // ✅ Load .env here
 
@@ -7,8 +7,13 @@ try {
   app.commandLine.appendSwitch('disable-features', 'Autofill,AutofillServerCommunication');
 } catch (_) {}
 
+let mainWindow = null;
+let isTimerActive = false;
+let isUserLoggedIn = false;
+let pictureInPictureWindow = null;
+
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
     icon: path.join(__dirname, 'SupagigsLogo.png'),
@@ -19,7 +24,35 @@ function createWindow() {
     },
   });
 
-  win.loadFile('renderer/screens/login.html');
+  // Intercept window close event
+  mainWindow.on('close', (event) => {
+    if (isTimerActive) {
+      event.preventDefault();
+      dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Timer is Active',
+        message: 'Please clock out first before closing the application.',
+        detail: 'Your timer is still running. You must clock out to end your session before closing the app.',
+        buttons: ['OK']
+      });
+    } else if (isUserLoggedIn) {
+      event.preventDefault();
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Please Log Out',
+        message: 'Log out before closing the application.',
+        detail: 'To keep your data safe, please log out from the app before closing the window.',
+        buttons: ['OK']
+      });
+    }
+  });
+
+  mainWindow.loadFile('renderer/screens/login.html');
+  
+  // Handle window being closed
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 }
 
 // Get local screenshots handler
@@ -74,6 +107,174 @@ ipcMain.handle('get-local-screenshots', async (event, email, startTime, endTime)
   } catch (error) {
     console.error('Error getting local screenshots:', error);
     return [];
+  }
+});
+
+ipcMain.handle('open-local-screenshot', async (event, filePath) => {
+  if (!filePath) {
+    return false;
+  }
+  try {
+    await shell.openPath(filePath);
+    return true;
+  } catch (error) {
+    console.error('Error opening local screenshot:', error);
+    return false;
+  }
+});
+
+ipcMain.handle('open-picture-in-picture', async (event, imageSrc) => {
+  if (!imageSrc) {
+    return false;
+  }
+
+  try {
+    if (pictureInPictureWindow && !pictureInPictureWindow.isDestroyed()) {
+      pictureInPictureWindow.close();
+      pictureInPictureWindow = null;
+    }
+
+    pictureInPictureWindow = new BrowserWindow({
+      width: 960,
+      height: 600,
+      alwaysOnTop: true,
+      resizable: true,
+      movable: true,
+      minimizable: false,
+      maximizable: false,
+      frame: false,
+      titleBarStyle: 'hidden',
+      show: false,
+      backgroundColor: '#0f172a',
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    });
+
+    pictureInPictureWindow.setMenuBarVisibility(false);
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8">
+          <title>Screenshot Preview</title>
+          <style>
+            :root { color-scheme: dark; }
+            body {
+              margin: 0;
+              background: #0f172a;
+              color: #e2e8f0;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+              display: flex;
+              flex-direction: column;
+              width: 100vw;
+              height: 100vh;
+              overflow: hidden;
+              user-select: none;
+            }
+            .titlebar {
+              height: 38px;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              padding: 0 12px;
+              background: rgba(15, 23, 42, 0.92);
+              border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+              -webkit-app-region: drag;
+            }
+            .title {
+              font-size: 14px;
+              letter-spacing: 0.01em;
+            }
+            button {
+              border: none;
+              background: transparent;
+              color: #e2e8f0;
+              cursor: pointer;
+              font-size: 16px;
+              width: 28px;
+              height: 28px;
+              border-radius: 6px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              -webkit-app-region: no-drag;
+            }
+            button:hover {
+              background: rgba(148, 163, 184, 0.2);
+            }
+            .content {
+              flex: 1;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 10px;
+              background: #020617;
+            }
+            img {
+              max-width: 100%;
+              max-height: 100%;
+              border-radius: 10px;
+              box-shadow: 0 20px 40px rgba(15, 23, 42, 0.55);
+              object-fit: contain;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="titlebar">
+            <span class="title">Screenshot Preview</span>
+            <div style="display:flex; gap:6px;">
+              <button id="resizeBtn" title="Reset Size">⤢</button>
+              <button id="closeBtn" title="Close">✕</button>
+            </div>
+          </div>
+          <div class="content">
+            <img id="previewImage" alt="Screenshot preview" loading="lazy" draggable="false">
+          </div>
+          <script>
+            const imageSrc = ${JSON.stringify(imageSrc)};
+            const img = document.getElementById('previewImage');
+            const close = () => window.close();
+            document.getElementById('closeBtn').addEventListener('click', close);
+            document.getElementById('resizeBtn').addEventListener('click', () => {
+              const initialWidth = 960;
+              const initialHeight = 600;
+              window.resizeTo(initialWidth, initialHeight);
+            });
+            document.addEventListener('keydown', (event) => {
+              if (event.key === 'Escape') {
+                close();
+              }
+            });
+            img.addEventListener('dblclick', close);
+            img.src = imageSrc;
+          </script>
+        </body>
+      </html>
+    `;
+
+    await pictureInPictureWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(htmlContent));
+    pictureInPictureWindow.once('ready-to-show', () => {
+      if (pictureInPictureWindow && !pictureInPictureWindow.isDestroyed()) {
+        pictureInPictureWindow.show();
+      }
+    });
+
+    pictureInPictureWindow.on('closed', () => {
+      pictureInPictureWindow = null;
+    });
+
+    return true;
+  } catch (error) {
+    console.error('Error opening picture-in-picture window:', error);
+    if (pictureInPictureWindow && !pictureInPictureWindow.isDestroyed()) {
+      pictureInPictureWindow.close();
+      pictureInPictureWindow = null;
+    }
+    return false;
   }
 });
 
@@ -428,6 +629,23 @@ ipcMain.handle('save-active-session', async (event) => {
     console.error('Error requesting session save:', error);
     return false;
   }
+});
+
+// IPC handlers to track timer state
+ipcMain.handle('set-timer-active', (event, active) => {
+  isTimerActive = active;
+  console.log('Timer active state updated:', isTimerActive);
+  return true;
+});
+
+ipcMain.handle('get-timer-active', () => {
+  return isTimerActive;
+});
+
+ipcMain.handle('set-user-logged-in', (event, loggedIn) => {
+  isUserLoggedIn = !!loggedIn;
+  console.log('User logged in state updated:', isUserLoggedIn);
+  return true;
 });
 
 // Check if background screenshot capture is active

@@ -99,12 +99,13 @@ document.addEventListener('DOMContentLoaded', () => {
           const isOnBreak = StorageService.getItem('isOnBreak') === 'true';
           const workStartTime = StorageService.getItem('workStartTime');
           const breakStartTime = StorageService.getItem('breakStartTime');
+        const isIdle = StorageService.getItem('isIdle') === 'true';
           
           let finalActiveDuration = totalActiveDuration;
           let finalBreakDuration = totalBreakDuration;
           
           // Add current work time if not on break
-          if (isActive && !isOnBreak && workStartTime) {
+          if (isActive && !isOnBreak && !isIdle && workStartTime) {
             const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
             finalActiveDuration += workElapsed;
           }
@@ -149,7 +150,14 @@ document.addEventListener('DOMContentLoaded', () => {
         StorageService.removeItem('breakDuration');
         StorageService.removeItem('activeDuration');
         StorageService.removeItem('breakCount');
+        StorageService.removeItem('totalIdleTime');
+        StorageService.removeItem('isIdle');
+        StorageService.removeItem('idleStartTime');
         StorageService.removeItem('screenshotCaptureActive');
+
+        if (window.electronAPI?.setUserLoggedIn) {
+          window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state during logout:', err));
+        }
 
         // Redirect to login
         window.location.href = 'login.html';

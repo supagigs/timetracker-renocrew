@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, startTransition } from 'react';
 import ScreenshotGrid from './ScreenshotGrid';
 import { format } from 'date-fns';
 
@@ -56,27 +56,59 @@ export default function ScreenshotSelector({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (selectedSessionId) {
-      // If it's the initial session and we already have screenshots, don't fetch again
-      if (selectedSessionId === initialSessionId && initialScreenshots.length > 0) {
-        return;
-      }
-      
+  if (!selectedSessionId) {
+      return;
+    }
+
+    if (selectedSessionId === initialSessionId && initialScreenshots.length > 0) {
+      startTransition(() => {
+        setScreenshots(initialScreenshots);
+        setLoading(false);
+        setError(null);
+      });
+      return;
+    }
+
+    let cancelled = false;
+
+    startTransition(() => {
       setLoading(true);
       setError(null);
-      fetchScreenshotsForSession(userEmail, selectedSessionId)
-        .then((data) => {
-          console.log(`ScreenshotSelector: Received ${data.length} screenshots for session ${selectedSessionId}`);
-          setScreenshots(data);
-          setLoading(false);
-        })
-        .catch((err) => {
-          console.error('ScreenshotSelector: Error fetching screenshots:', err);
-          setError(err.message);
-          setScreenshots([]);
+    });
+
+    fetchScreenshotsForSession(userEmail, selectedSessionId)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+
+        console.log(
+          `ScreenshotSelector: Received ${data.length} screenshots for session ${selectedSessionId}`
+        );
+        setScreenshots(data);
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+
+        console.error('ScreenshotSelector: Error fetching screenshots:', err);
+        setError(err.message);
+        setScreenshots([]);
+      })
+      .finally(() => {
+        if (cancelled) {
+          return;
+        }
+
+        startTransition(() => {
           setLoading(false);
         });
-    }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedSessionId, userEmail, initialSessionId, initialScreenshots]);
 
   const formatSessionLabel = (session: TimeSession): string => {
@@ -118,7 +150,7 @@ export default function ScreenshotSelector({
       <section className="space-y-4">
         <div>
           <h2 className="text-xl font-semibold">Session Screenshots</h2>
-          <p className="text-sm text-slate-400">No sessions recorded in the last week.</p>
+          <p className="text-sm text-slate-400">No sessions recorded in the last 30 days.</p>
         </div>
       </section>
     );

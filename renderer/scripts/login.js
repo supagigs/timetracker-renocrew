@@ -33,6 +33,9 @@ function forceResetEmailField() {
 // Initialize login page
 function initializeLoginPage() {
   console.log('Initializing login page');
+  if (window.electronAPI?.setUserLoggedIn) {
+    window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state:', err));
+  }
   
   // Clear any stored email to ensure fresh login
   StorageService.removeItem('userEmail');
@@ -314,7 +317,7 @@ async function checkUserExists(email) {
     }
     
     const { data: existingUser, error } = await SupabaseService.handleRequest(() =>
-      supabase
+      window.supabase
         .from('users')
         .select('email')
         .eq('email', email)
@@ -389,7 +392,7 @@ async function handleLogin() {
 
     // Check if user exists
     const { data: existingUser, error } = await SupabaseService.handleRequest(() =>
-      supabase
+      window.supabase
         .from('users')
         .select('*')
         .eq('email', email)
@@ -432,7 +435,7 @@ async function handleLogin() {
       // Create new user with category
       console.log('Creating new user with email:', email, 'and category:', category);
       const { error: insertError } = await SupabaseService.handleRequest(() =>
-        supabase.from('users').insert([{ 
+        window.supabase.from('users').insert([{ 
           email,
           display_name: null, // Explicitly set to null, will be updated when user sets display name
           category: category // Add category
@@ -523,6 +526,9 @@ async function handleLogin() {
       // Store user email and category
       StorageService.setItem('userEmail', email);
       StorageService.setItem('userCategory', category);
+      if (window.electronAPI?.setUserLoggedIn) {
+        window.electronAPI.setUserLoggedIn(true).catch(err => console.error('Failed to update logged-in state:', err));
+      }
       
       // Navigate to display name screen for new users
       setTimeout(() => {
@@ -535,6 +541,9 @@ async function handleLogin() {
       StorageService.setItem('userEmail', email);
       if (existingUser.category) {
         StorageService.setItem('userCategory', existingUser.category);
+      }
+      if (window.electronAPI?.setUserLoggedIn) {
+        window.electronAPI.setUserLoggedIn(true).catch(err => console.error('Failed to update logged-in state:', err));
       }
       
       // Check if user has display name

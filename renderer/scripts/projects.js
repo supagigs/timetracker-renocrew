@@ -1,8 +1,13 @@
 document.addEventListener('DOMContentLoaded', async () => {
   const backBtn = document.getElementById('backBtn');
+  const addProjectBtn = document.getElementById('addProjectBtn');
   const projectsList = document.getElementById('projectsList');
   const loadingMessage = document.getElementById('loadingMessage');
   const noProjectsMessage = document.getElementById('noProjectsMessage');
+  const addProjectModal = document.getElementById('addProjectModal');
+  const projectNameInput = document.getElementById('projectNameInput');
+  const saveProjectBtn = document.getElementById('saveProjectBtn');
+  const cancelAddProjectBtn = document.getElementById('cancelAddProjectBtn');
   const assignmentModal = document.getElementById('assignmentModal');
   const freelancerEmailInput = document.getElementById('freelancerEmailInput');
   const assignBtn = document.getElementById('assignBtn');
@@ -13,6 +18,41 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Back button
   backBtn.addEventListener('click', () => {
     window.location.href = 'home.html';
+  });
+
+  // Add Project button
+  addProjectBtn.addEventListener('click', () => {
+    projectNameInput.value = '';
+    addProjectModal.style.display = 'flex';
+    addProjectModal.style.alignItems = 'center';
+    addProjectModal.style.justifyContent = 'center';
+    projectNameInput.focus();
+  });
+
+  // Cancel Add Project button
+  cancelAddProjectBtn.addEventListener('click', () => {
+    addProjectModal.style.display = 'none';
+    projectNameInput.value = '';
+  });
+
+  // Close Add Project modal on background click
+  addProjectModal.addEventListener('click', (e) => {
+    if (e.target === addProjectModal) {
+      addProjectModal.style.display = 'none';
+      projectNameInput.value = '';
+    }
+  });
+
+  // Save Project button
+  saveProjectBtn.addEventListener('click', async () => {
+    await addProject();
+  });
+
+  // Allow Enter key to save project
+  projectNameInput.addEventListener('keypress', async (e) => {
+    if (e.key === 'Enter') {
+      await addProject();
+    }
   });
 
   // Assignment modal handlers
@@ -48,6 +88,81 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load projects
   await loadProjects();
+
+  async function addProject() {
+    try {
+      const projectName = projectNameInput.value.trim();
+      
+      if (!projectName) {
+        NotificationService.showError('Please enter a project name.');
+        projectNameInput.focus();
+        return;
+      }
+
+      const email = StorageService.getItem('userEmail');
+      
+      if (!email) {
+        NotificationService.showError('User email not found. Please log in again.');
+        setTimeout(() => {
+          window.location.href = 'login.html';
+        }, 2000);
+        return;
+      }
+
+      if (!window.supabase) {
+        NotificationService.showError('Database connection not available.');
+        return;
+      }
+
+      // Check if project with same name already exists
+      const { data: existing, error: checkError } = await SupabaseService.handleRequest(() =>
+        window.supabase
+          .from('projects')
+          .select('*')
+          .eq('user_email', email)
+          .eq('project_name', projectName)
+          .maybeSingle()
+      );
+
+      if (checkError && checkError.code !== 'PGRST116') {
+        console.error('Error checking project:', checkError);
+        NotificationService.showError('Error checking project. Please try again.');
+        return;
+      }
+
+      if (existing) {
+        NotificationService.showError('A project with this name already exists.');
+        projectNameInput.focus();
+        return;
+      }
+
+      // Create project
+      const { error: insertError } = await SupabaseService.handleRequest(() =>
+        window.supabase
+          .from('projects')
+          .insert([{
+            user_email: email,
+            project_name: projectName
+          }])
+      );
+
+      if (insertError) {
+        console.error('Error creating project:', insertError);
+        NotificationService.showError('Failed to create project. Please try again.');
+        return;
+      }
+
+      NotificationService.showSuccess('Project created successfully!');
+      addProjectModal.style.display = 'none';
+      projectNameInput.value = '';
+
+      // Reload projects to show the new project
+      await loadProjects();
+    } catch (error) {
+      console.error('Error in addProject:', error);
+      NotificationService.showError('An error occurred while creating the project.');
+    }
+  }
 
   async function loadProjects() {
     try {
@@ -317,6 +432,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.error('Error assigning project:', assignError);
         NotificationService.showError('Failed to assign project. Please try again.');
         return;
+      }
+
+      // Create or update client-freelancer assignment
+      // This ensures the relationship is stored in the database
+      const { error: clientFreelancerError } = await SupabaseService.handleRequest(() =>
+        window.supabase
+          .from('client_freelancer_assignments')
+          .upsert([{
+            client_email: clientEmail,
+            freelancer_email: freelancerEmail,
+            is_active: true
+          }], {
+            onConflict: 'client_email,freelancer_email'
+          })
+      );
+
+      if (clientFreelancerError) {
+        // Log but don't fail - the project assignment was successful
+        console.warn('Error creating client-freelancer assignment:', clientFreelancerError);
+        // Continue - the project assignment is the primary action
       }
 
       NotificationService.showSuccess('Project assigned successfully!');
