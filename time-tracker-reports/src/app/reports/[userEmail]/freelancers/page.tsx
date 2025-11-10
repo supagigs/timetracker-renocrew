@@ -3,6 +3,7 @@ import { Users } from 'lucide-react';
 import { DashboardShell } from '@/components/dashboard';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
+import { format } from 'date-fns';
 
 type FreelancerSummary = {
   email: string;
@@ -54,14 +55,32 @@ async function fetchClientFreelancers(clientEmail: string): Promise<FreelancerSu
     nameMap.set(row.email, row.display_name ?? null);
   });
 
+  const { data: sessionStates, error: sessionStateError } = await supabase
+    .from('user_sessions')
+    .select('email, app_logged_in, updated_at')
+    .in('email', freelancerEmails);
+
+  if (sessionStateError) {
+    console.warn('[client-freelancers] Failed to fetch session states:', sessionStateError);
+  }
+
+  const sessionStateMap = new Map<string, { app_logged_in: boolean | null; updated_at: string | null }>();
+  (sessionStates ?? []).forEach((row) => {
+    sessionStateMap.set(row.email, {
+      app_logged_in: row.app_logged_in ?? null,
+      updated_at: row.updated_at ?? null,
+    });
+  });
+
   const endDate = new Date();
   const startDate = new Date();
   startDate.setDate(endDate.getDate() - 29);
 
-  const startDateStr = startDate.toISOString().slice(0, 10);
-  const endDateStr = endDate.toISOString().slice(0, 10);
+  const startDateStr = format(startDate, 'yyyy-MM-dd');
+  const endDateStr = format(endDate, 'yyyy-MM-dd');
+  const todayStr = endDateStr;
 
-  const { data: sessions, error: sessionsError } = await supabase
+  const { data: sessionRows, error: sessionsError } = await supabase
     .from('time_sessions')
     .select('user_email, session_date, start_time, end_time, active_duration')
     .in('user_email', freelancerEmails)
@@ -70,45 +89,54 @@ async function fetchClientFreelancers(clientEmail: string): Promise<FreelancerSu
     .order('start_time', { ascending: false });
 
   if (sessionsError) {
-    console.error('[client-freelancers] Failed to fetch freelancer sessions:', sessionsError);
-    return freelancerEmails.map((email) => ({
-      email,
-      displayName: nameMap.get(email) ?? null,
-      status: 'no-data',
-      todayActiveSeconds: 0,
-      last30ActiveSeconds: 0,
-      lastActiveAt: null,
-    }));
+    console.error('Error fetching freelancer sessions:', sessionsError);
+    throw sessionsError;
   }
 
-  const sessionsByEmail = new Map<string, typeof sessions>();
-  (sessions ?? []).forEach((session) => {
-    const list = sessionsByEmail.get(session.user_email) ?? [];
+  const sessionsByUser = new Map<string, typeof sessionRows>();
+  (sessionRows ?? []).forEach((session) => {
+    const list = sessionsByUser.get(session.user_email) ?? [];
     list.push(session);
-    sessionsByEmail.set(session.user_email, list);
+    sessionsByUser.set(session.user_email, list);
   });
 
   return freelancerEmails.map((email) => {
-    const memberSessions = sessionsByEmail.get(email) ?? [];
+    const memberSessions = sessionsByUser.get(email) ?? [];
+
     const todayActiveSeconds = memberSessions
-      .filter((session) => session.session_date === endDateStr)
-      .reduce((acc, session) => acc + (session.active_duration ?? 0), 0);
+      .filter((session) => session.session_date === todayStr)
+      .reduce((total, session) => total + (session.active_duration ?? 0), 0);
 
     const last30ActiveSeconds = memberSessions.reduce(
-      (acc, session) => acc + (session.active_duration ?? 0),
+      (total, session) => total + (session.active_duration ?? 0),
       0,
     );
 
     const lastSession = memberSessions[0];
-    const lastActiveAt = lastSession
+    const lastSessionTimestamp = lastSession
       ? lastSession.end_time ?? lastSession.start_time ?? null
       : null;
 
-    const status: FreelancerSummary['status'] = memberSessions.some((session) => session.end_time === null)
-      ? 'active'
-      : memberSessions.length === 0
-      ? 'no-data'
-      : 'offline';
+    const sessionState = sessionStateMap.get(email);
+    const updatedAtMs = sessionState?.updated_at ? Date.parse(sessionState.updated_at) : Number.NaN;
+    const isStatusRecent = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs < 1000 * 60 * 60 * 6 : false;
+
+    const lastActiveAt = Number.isFinite(updatedAtMs)
+      ? new Date(updatedAtMs).toISOString()
+      : lastSessionTimestamp;
+
+    const activeSession = memberSessions.find(
+      (session) => session.end_time === null && session.session_date === todayStr,
+    );
+
+    let status: FreelancerSummary['status'] = 'no-data';
+    if (memberSessions.length === 0) {
+      status = 'no-data';
+    } else if (sessionState?.app_logged_in === true && (activeSession || isStatusRecent)) {
+      status = 'active';
+    } else {
+      status = 'offline';
+    }
 
     return {
       email,
@@ -117,7 +145,7 @@ async function fetchClientFreelancers(clientEmail: string): Promise<FreelancerSu
       todayActiveSeconds,
       last30ActiveSeconds,
       lastActiveAt,
-    };
+    } satisfies FreelancerSummary;
   });
 }
 

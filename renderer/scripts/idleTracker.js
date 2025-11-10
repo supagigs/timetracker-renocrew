@@ -148,10 +148,22 @@ class IdleTracker {
         try {
           const idleSeconds = await window.electronAPI.getSystemIdleTime();
           if (typeof idleSeconds === 'number' && idleSeconds >= 0) {
-            if (idleSeconds >= this.idleThreshold && !this.isIdle) {
-              this.scheduleIdleConfirmation();
-            } else if (idleSeconds < this.idleThreshold && this.isIdle) {
-              this.endIdlePeriod();
+            if (idleSeconds >= this.idleThreshold) {
+              if (!this.isIdle) {
+                this.scheduleIdleConfirmation();
+              }
+            } else {
+              // System reports recent activity. Treat as user interaction even if our window is unfocused.
+              this.lastActivityTime = Date.now();
+
+              if (this.idleConfirmTimeoutId) {
+                clearTimeout(this.idleConfirmTimeoutId);
+                this.idleConfirmTimeoutId = null;
+              }
+
+              if (this.isIdle) {
+                this.endIdlePeriod();
+              }
             }
           }
         } catch (_) {}

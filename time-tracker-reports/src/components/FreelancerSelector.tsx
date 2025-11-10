@@ -39,6 +39,8 @@ export default function FreelancerSelector({
       setSelectedEmail(emailFromParams);
     } else if (currentFreelancerEmail) {
       setSelectedEmail(currentFreelancerEmail);
+    } else {
+      setSelectedEmail('');
     }
   }, [currentFreelancerEmail, searchParams]);
 
@@ -56,11 +58,13 @@ export default function FreelancerSelector({
       
       const currentFromParams = searchParams?.get('freelancer') ?? '';
 
-      if (!currentFromParams && data.length > 0) {
-        const nextEmail = data[0].email;
-        setSelectedEmail(nextEmail);
-        if (autoSelectFirst) {
+      if (!currentFromParams) {
+        if (autoSelectFirst && data.length > 0) {
+          const nextEmail = data[0].email;
+          setSelectedEmail(nextEmail);
           updateRoute(nextEmail, { replace: true });
+        } else {
+          setSelectedEmail('');
         }
       }
     } catch (error) {
@@ -72,10 +76,20 @@ export default function FreelancerSelector({
 
   function handleFreelancerChange(event: React.ChangeEvent<HTMLSelectElement>) {
     const newEmail = event.target.value;
-    if (newEmail) {
-      setSelectedEmail(newEmail);
-      updateRoute(newEmail);
+    setSelectedEmail(newEmail);
+
+    if (!newEmail) {
+      startTransition(() => {
+        const params = new URLSearchParams(searchParams?.toString() ?? '');
+        params.delete('freelancer');
+        const basePath = redirectBasePath ?? pathname;
+        const url = params.toString() ? `${basePath}?${params.toString()}` : basePath;
+        router.push(url);
+      });
+      return;
     }
+
+    updateRoute(newEmail);
   }
 
   function updateRoute(email: string, options?: { replace?: boolean }) {
@@ -121,6 +135,7 @@ export default function FreelancerSelector({
           className="min-w-[250px] rounded-lg border border-border bg-white px-4 py-2 text-sm text-foreground shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           disabled={isPending}
         >
+          <option value="">Select a freelancer</option>
           {freelancers.map((freelancer) => (
             <option key={freelancer.email} value={freelancer.email}>
               {freelancer.display_name || freelancer.email}

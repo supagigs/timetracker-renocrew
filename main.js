@@ -424,13 +424,21 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
       session_id: sessionId,
       screenshot_data: publicUrl,
       captured_at: timestamp,
-      uploaded_at: new Date().toISOString(),
-      source: 'manual',
     });
 
     if (dbErr) {
       throw dbErr;
     }
+
+    const { BrowserWindow } = require('electron');
+    BrowserWindow.getAllWindows().forEach((window) => {
+      window.webContents.send('screenshot-captured', {
+        timestamp,
+        previewDataUrl: screenshotData,
+        storageUrl: publicUrl,
+        sessionId
+      });
+    });
 
     return { ok: true, storagePath, url: publicUrl };
   } catch (e) {
@@ -514,9 +522,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           user_email: currentUserEmail,
           session_id: currentSessionId,
           screenshot_data: publicUrl,
-          captured_at: timestamp,
-          uploaded_at: new Date().toISOString(),
-          source: 'auto',
+          captured_at: timestamp
         });
 
         if (dbErr) {
@@ -529,7 +535,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
             timestamp,
             previewDataUrl: screenshotData,
             storageUrl: publicUrl,
-            sessionId: currentSessionId,
+            sessionId: currentSessionId
           });
         });
 
@@ -659,7 +665,7 @@ app.whenReady().then(() => {
   // Enforce CSP via response headers so frame-ancestors is honored
   try {
     session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
-      const csp = "default-src 'self'; connect-src 'self' https://*.supabase.co https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co; media-src 'self' data: blob:; frame-ancestors 'none'";
+      const csp = "default-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co; media-src 'self' data: blob:; frame-ancestors 'none'";
       const headers = { ...details.responseHeaders };
       headers['Content-Security-Policy'] = [csp];
       cb({ responseHeaders: headers });

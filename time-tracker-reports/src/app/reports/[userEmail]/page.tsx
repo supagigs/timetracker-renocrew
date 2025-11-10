@@ -164,17 +164,21 @@ async function fetchClientTeamMembers(clientEmail: string): Promise<TeamMemberSu
     );
 
     const lastSession = memberSessions[0];
-    const lastActiveAt = lastSession ? lastSession.end_time ?? lastSession.start_time ?? null : null;
+    const lastSessionTimestamp = lastSession
+      ? lastSession.end_time ?? lastSession.start_time ?? null
+      : null;
 
     const sessionState = sessionStateMap.get(email);
-    const activeSession = memberSessions.find(
-      (session) =>
-        session.end_time === null &&
-        session.session_date === todayStr,
-    );
-
     const updatedAtMs = sessionState?.updated_at ? Date.parse(sessionState.updated_at) : Number.NaN;
     const isStatusRecent = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs < 1000 * 60 * 60 * 6 : false;
+
+    const lastActiveAt = Number.isFinite(updatedAtMs)
+      ? new Date(updatedAtMs).toISOString()
+      : lastSessionTimestamp;
+
+    const activeSession = memberSessions.find(
+      (session) => session.end_time === null && session.session_date === todayStr,
+    );
 
     let hasActiveSession = false;
     if (sessionState?.app_logged_in === false) {

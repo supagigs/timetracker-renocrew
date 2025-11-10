@@ -168,7 +168,6 @@ document.addEventListener('DOMContentLoaded', () => {
     idleTracker = new IdleTracker({
       idleThreshold: 30, // 30 seconds of inactivity
       checkInterval: 1000, // Check every second
-      useSystemIdle: false,
       onIdleStart: () => {
         console.log('🔴 User became idle - red dot will appear on next screenshot');
         if (isActive && !isOnBreak && !isIdle) {

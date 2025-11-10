@@ -55,15 +55,7 @@
       "node_modules/**/*",
       "package.json"
     ],
-    "extraFiles": [
-      {
-        "from": "screenshots",
-        "to": "screenshots",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
+   
     "extraResources": [
       ".env"
     ],
