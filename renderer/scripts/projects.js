@@ -15,6 +15,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let currentProjectId = null;
 
+  const userEmail = StorageService.getItem('userEmail');
+  if (window.SessionSync && userEmail) {
+    window.SessionSync.setEmail(userEmail);
+    window.SessionSync.updateAppState(true);
+  }
+
+  window.addEventListener('session:remote-logout', async () => {
+    NotificationService.showWarning('You were signed out from the reports site. Please log in again from the desktop app.');
+    try {
+      if (window.SessionSync && userEmail) {
+        await window.SessionSync.updateAppState(false);
+        window.SessionSync.clear();
+      }
+    } catch (error) {
+      console.error('Failed to update session state during remote logout:', error);
+    }
+    StorageService.removeItem('userEmail');
+    StorageService.removeItem('displayName');
+    StorageService.removeItem('userCategory');
+    window.location.href = 'login.html';
+  });
+
   // Back button
   backBtn.addEventListener('click', () => {
     window.location.href = 'home.html';

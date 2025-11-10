@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, LogOut } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 
 type DashboardHeaderProps = {
@@ -14,6 +14,7 @@ export function DashboardHeader({
 }: DashboardHeaderProps) {
   const displayName = name || "Account";
   const initials = createInitials(displayName);
+  const logoutHref = "/logout?origin=header";
 
   return (
     <header className="flex items-center justify-between border-b border-border bg-card px-8 py-4">
@@ -29,10 +30,28 @@ export function DashboardHeader({
             <div className="text-xs text-muted-foreground">{email}</div>
           ) : null}
         </div>
-        <Avatar className="h-10 w-10 uppercase">
-          <AvatarImage src={undefined} alt={displayName} className="hidden" />
-          <AvatarFallback>{initials}</AvatarFallback>
-        </Avatar>
+        <details className="group relative">
+          <summary className="list-none cursor-pointer rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+            <Avatar className="h-10 w-10 uppercase transition group-open:shadow-lg">
+              <AvatarImage src={undefined} alt={displayName} className="hidden" />
+              <AvatarFallback>{initials}</AvatarFallback>
+            </Avatar>
+          </summary>
+          <div className="invisible absolute right-0 z-50 mt-3 w-48 rounded-xl border border-border bg-card/95 p-3 text-sm opacity-0 shadow-lg backdrop-blur-md transition group-open:visible group-open:opacity-100">
+            <div className="pb-3 text-xs text-muted-foreground">
+              <div className="text-sm font-semibold text-foreground">{displayName}</div>
+              {email && <div>{email}</div>}
+            </div>
+            <div className="h-px bg-border/70" />
+            <a
+              href={logoutHref}
+              className="mt-3 flex items-center gap-2 rounded-lg px-3 py-2 font-medium text-destructive transition hover:bg-destructive/10"
+            >
+              <LogOut size={16} />
+              <span>Logout</span>
+            </a>
+          </div>
+        </details>
       </div>
     </header>
   );

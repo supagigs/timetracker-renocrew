@@ -14,6 +14,7 @@ import {
   Users,
   BarChart3,
   CalendarClock,
+  Monitor,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -35,8 +36,9 @@ const DEFAULT_NAV_ITEMS = (
   { icon: <Settings size={20} />, label: "Settings", href: "#", active: false },
 ];
 
-const buildClientNavItems = (
+const buildReportsNavItems = (
   pathname: string,
+  userRole?: string | null,
   userEmail?: string | null,
 ): Array<NavItemConfig & { active: boolean }> => {
   if (!userEmail) {
@@ -49,10 +51,23 @@ const buildClientNavItems = (
   const items: NavItemConfig[] = [
     { icon: <LayoutDashboard size={20} />, label: "Overview", href: basePath },
     { icon: <FolderOpen size={20} />, label: "Projects", href: `${basePath}/projects` },
-    { icon: <Users size={20} />, label: "Freelancers", href: `${basePath}/freelancers` },
     { icon: <BarChart3 size={20} />, label: "Reports", href: `${basePath}/reports` },
     { icon: <CalendarClock size={20} />, label: "Timesheet", href: `${basePath}/timesheet` },
   ];
+
+  if (userRole === "Client") {
+    items.splice(2, 0, {
+      icon: <Users size={20} />,
+      label: "Freelancers",
+      href: `${basePath}/freelancers`,
+    });
+  }
+
+  items.splice(items.length - 1, 0, {
+    icon: <Monitor size={20} />,
+    label: "Screenshots",
+    href: `${basePath}/screenshots`,
+  });
 
   return items.map((item) => ({
     ...item,
@@ -70,8 +85,9 @@ export function Sidebar({
   userEmail?: string | null;
 }) {
   const pathname = usePathname();
-  const navItems = userRole === "Client"
-    ? buildClientNavItems(pathname, userEmail ?? undefined)
+  const hasReportsNavigation = userRole === "Client" || userRole === "Freelancer";
+  const navItems = hasReportsNavigation
+    ? buildReportsNavItems(pathname, userRole, userEmail ?? undefined)
     : DEFAULT_NAV_ITEMS(pathname);
 
   return (

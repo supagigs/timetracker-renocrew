@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let totalIdleTime = 0; // Total idle time accumulated
   let isIdle = false; // Track idle state
   let idleStartTime = null;
+  let userEmail = null;
 
   // DOM elements
   const activeTimeDisplay = document.getElementById('activeTimeDisplay');
@@ -56,6 +57,12 @@ document.addEventListener('DOMContentLoaded', () => {
       alert('No user email found. Please login again.');
       window.location.href = 'login.html';
       return;
+    }
+    userEmail = email;
+
+    if (window.SessionSync) {
+      window.SessionSync.setEmail(email);
+      window.SessionSync.updateAppState(true);
     }
 
     // Load session data
@@ -1434,82 +1441,85 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Timer state saved before navigation');
   }
 
-  async function logout() {
-    if (confirm('Are you sure you want to logout? This will end your current session.')) {
-      try {
-        // If there's an active session, save it before logging out
-        if (isActive && sessionStartTime) {
-          console.log('Saving active session before logout...');
-          
-          // Stop screenshot capture first
-          stopScreenshotCapture();
-          
-          // Calculate final durations
-          const now = new Date();
-          const sessionDuration = Math.floor((now - new Date(sessionStartTime)) / 1000);
-          
-          let finalActiveDuration = totalActiveDuration;
-          let finalBreakDuration = totalBreakDuration;
-          
-          // Add current work time if not on break
-          if (isActive && !isOnBreak && !isIdle && workStartTime) {
-            const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
-            finalActiveDuration += workElapsed;
-          }
-          
-          // Add current break time if on break
-          if (isOnBreak && breakStartTime) {
-            const breakElapsed = Math.floor((now - breakStartTime) / 1000);
-            finalBreakDuration += breakElapsed;
-          }
-          
-          // Get final idle time
-          const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : 0;
-          
-          // Save the session to database
-          await saveSession(sessionDuration, finalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
-          
-          console.log('Session saved successfully before logout');
-          NotificationService.showSuccess('Session saved before logout');
-        }
-        
-        // Clear all session data
-        StorageService.removeItem('sessionStartTime');
-        StorageService.removeItem('currentSessionId');
-        StorageService.removeItem('workStartTime');
-        StorageService.removeItem('isActive');
-        StorageService.removeItem('isOnBreak');
-        StorageService.removeItem('breakStartTime');
-        StorageService.removeItem('breakDuration');
-        StorageService.removeItem('activeDuration');
-        StorageService.removeItem('breakCount');
-        StorageService.removeItem('totalIdleTime');
-        StorageService.removeItem('isIdle');
-        StorageService.removeItem('idleStartTime');
-        StorageService.removeItem('screenshotCaptureActive');
-        StorageService.removeItem('userEmail');
-        StorageService.removeItem('displayName');
-        StorageService.removeItem('userCategory');
+  async function logout(options = {}) {
+    const { skipConfirm = false, remote = false } = options;
 
-        // Stop timers
-        clearInterval(timerInterval);
+    if (!skipConfirm) {
+      const confirmed = confirm('Are you sure you want to logout? This will end your current session.');
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    try {
+      if (isActive && sessionStartTime) {
+        console.log('Saving active session before logout...');
+
         stopScreenshotCapture();
-        
-        // Clean up idle tracker
-        if (idleTracker) {
-          idleTracker.destroy();
-          idleTracker = null;
+
+        const now = new Date();
+        const sessionDuration = Math.floor((now - new Date(sessionStartTime)) / 1000);
+
+        let finalActiveDuration = totalActiveDuration;
+        let finalBreakDuration = totalBreakDuration;
+
+        if (isActive && !isOnBreak && !isIdle && workStartTime) {
+          const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
+          finalActiveDuration += workElapsed;
         }
 
-        if (window.electronAPI?.setUserLoggedIn) {
-          window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state during logout:', err));
+        if (isOnBreak && breakStartTime) {
+          const breakElapsed = Math.floor((now - breakStartTime) / 1000);
+          finalBreakDuration += breakElapsed;
         }
 
-        // Redirect to login
-        window.location.href = 'login.html';
-        
-      } catch (error) {
-        console.error('Error during logout cleanup:', error);
+        const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : 0;
+
+        await saveSession(sessionDuration, finalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
+
+        console.log('Session saved successfully before logout');
+        NotificationService.showSuccess('Session saved before logout');
+      }
+
+      StorageService.removeItem('sessionStartTime');
+      StorageService.removeItem('currentSessionId');
+      StorageService.removeItem('workStartTime');
+      StorageService.removeItem('isActive');
+      StorageService.removeItem('isOnBreak');
+      StorageService.removeItem('breakStartTime');
+      StorageService.removeItem('breakDuration');
+      StorageService.removeItem('activeDuration');
+      StorageService.removeItem('breakCount');
+      StorageService.removeItem('totalIdleTime');
+      StorageService.removeItem('isIdle');
+      StorageService.removeItem('idleStartTime');
+      StorageService.removeItem('screenshotCaptureActive');
+      StorageService.removeItem('userEmail');
+      StorageService.removeItem('displayName');
+      StorageService.removeItem('userCategory');
+
+      clearInterval(timerInterval);
+      stopScreenshotCapture();
+
+      if (idleTracker) {
+        idleTracker.destroy();
+        idleTracker = null;
+      }
+
+      const email = userEmail || StorageService.getItem('userEmail');
+      if (window.SessionSync && email) {
+        await window.SessionSync.updateAppState(false);
+        window.SessionSync.clear();
+      }
+
+      if (window.electronAPI?.setUserLoggedIn) {
+        window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state during logout:', err));
+      }
+
+      window.location.href = 'login.html';
+    } catch (error) {
+      console.error('Error during logout cleanup:', error);
+      if (!remote) {
         NotificationService.showError('Error saving session before logout. Please try again.');
       }
     }
@@ -1716,8 +1726,13 @@ document.addEventListener('DOMContentLoaded', () => {
     homeBtn.addEventListener('click', handleHomeNavigation);
   }
   if (logoutBtn) {
-    logoutBtn.addEventListener('click', logout);
+    logoutBtn.addEventListener('click', () => logout({ skipConfirm: false, remote: false }));
   }
+
+  window.addEventListener('session:remote-logout', () => {
+    NotificationService.showWarning('You were signed out from the reports site. Please log in again from the desktop app.');
+    logout({ skipConfirm: true, remote: true });
+  });
 
   // Start timer interval
   timerInterval = setInterval(updateTimer, 1000);

@@ -1,8 +1,9 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 
 import {
   DashboardShell,
@@ -11,6 +12,9 @@ import {
   UpcomingSchedule,
   RecentActivity,
 } from "@/components/dashboard";
+import { createSupabaseBrowserClient } from "@/lib/supabaseBrowser";
+import { setUserSessionState, subscribeToSessionChanges } from "@/lib/userSessions";
+import { WEB_USER_STORAGE_KEY } from "@/lib/constants";
 
 type Category = "Client" | "Freelancer" | null;
 
@@ -30,7 +34,6 @@ type SignupFormState = {
   projects: string[];
 };
 
-const STORAGE_KEY = "supatimetracker:web-user";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Home() {
@@ -54,20 +57,126 @@ export default function Home() {
 
   const [activeView, setActiveView] = useState<"login" | "signup">("login");
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw) as AuthenticatedUser | null;
-        if (saved?.email) {
-          setUser({ ...saved, projects: saved.projects ?? [] });
-          setLoginEmail(saved.email);
-        }
+  const router = useRouter();
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+
+  const updateWebSession = useCallback(
+    async (email: string, loggedIn: boolean) => {
+      try {
+        await setUserSessionState(supabase, email, { web_logged_in: loggedIn });
+      } catch (error) {
+        console.error("[page] Failed to update web session state:", error);
       }
+    },
+    [supabase],
+  );
+
+  const performLocalLogout = useCallback(
+    (origin: string) => {
+      const targetEmail =
+        user?.email ||
+        (() => {
+          try {
+            const raw = localStorage.getItem(WEB_USER_STORAGE_KEY);
+            if (!raw) {
+              return null;
+            }
+            const saved = JSON.parse(raw) as AuthenticatedUser | null;
+            return saved?.email ?? null;
+          } catch (error) {
+            console.warn("[page] Failed to read stored user during logout:", error);
+            return null;
+          }
+        })();
+
+      if (targetEmail) {
+        void updateWebSession(targetEmail, false);
+      }
+
+      try {
+        localStorage.removeItem(WEB_USER_STORAGE_KEY);
+      } catch (error) {
+        console.warn("[page] Failed to clear stored user:", error);
+      }
+
+      setUser(null);
+      setLoginSuccess("");
+      setSignupSuccess("");
+      router.push(`/logout?origin=${origin}`);
+    },
+    [user?.email, updateWebSession, router],
+  );
+
+  useEffect(() => {
+    const raw = typeof window !== "undefined" ? localStorage.getItem(WEB_USER_STORAGE_KEY) : null;
+    if (!raw) {
+      return;
+    }
+
+    let saved: AuthenticatedUser | null = null;
+    try {
+      saved = JSON.parse(raw) as AuthenticatedUser | null;
     } catch (error) {
       console.warn("[page] Unable to parse saved user data:", error);
     }
-  }, []);
+
+    if (!saved?.email) {
+      return;
+    }
+
+    const normalized = normalizeUser(saved);
+
+    const verifySession = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("user_sessions")
+          .select("web_logged_in, app_logged_in")
+          .eq("email", normalized.email)
+          .maybeSingle();
+
+        if (error) {
+          throw error;
+        }
+
+        if (!data || data.web_logged_in === false || data.app_logged_in === false) {
+          performLocalLogout("app");
+          return;
+        }
+
+        setUser({ ...normalized, projects: normalized.projects ?? [] });
+        setLoginEmail(normalized.email);
+        void updateWebSession(normalized.email, true);
+      } catch (error) {
+        console.warn("[page] Unable to verify stored session state:", error);
+        setUser({ ...normalized, projects: normalized.projects ?? [] });
+        setLoginEmail(normalized.email);
+        void updateWebSession(normalized.email, true);
+      }
+    };
+
+    verifySession();
+  }, [supabase, updateWebSession, performLocalLogout]);
+
+  useEffect(() => {
+    if (!user?.email) {
+      return;
+    }
+
+    const unsubscribe = subscribeToSessionChanges(supabase, user.email, (payload) => {
+      const oldApp = payload.old?.app_logged_in ?? null;
+      const newApp = payload.new?.app_logged_in ?? null;
+
+      if (oldApp !== newApp && newApp === false) {
+        performLocalLogout("app");
+      }
+    });
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [user?.email, supabase, performLocalLogout]);
 
   const loginButtonDisabled = useMemo(
     () => loginPending || !EMAIL_REGEX.test(loginEmail),
@@ -101,7 +210,8 @@ export default function Home() {
 
       const authenticatedUser = normalizeUser(payload.user);
       setUser(authenticatedUser);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(authenticatedUser));
+      localStorage.setItem(WEB_USER_STORAGE_KEY, JSON.stringify(authenticatedUser));
+      void updateWebSession(authenticatedUser.email, true);
       setLoginSuccess("Login successful. Welcome back!");
       setSignupSuccess("");
     } catch (error) {
@@ -185,7 +295,8 @@ export default function Home() {
 
       const authenticatedUser = normalizeUser(payload.user);
       setUser(authenticatedUser);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(authenticatedUser));
+      localStorage.setItem(WEB_USER_STORAGE_KEY, JSON.stringify(authenticatedUser));
+      void updateWebSession(authenticatedUser.email, true);
 
       setSignupSuccess("Account created! You are ready to use the reports website.");
       setLoginSuccess("");
@@ -207,10 +318,7 @@ export default function Home() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem(STORAGE_KEY);
-    setUser(null);
-    setLoginSuccess("");
-    setSignupSuccess("");
+    performLocalLogout("manual");
   };
 
   const reportsHref = user ? `/reports/${encodeURIComponent(user.email)}` : "#";
@@ -220,8 +328,6 @@ export default function Home() {
       userName={user?.displayName || user?.email || null}
       userEmail={user?.email || null}
       userRole={user?.category || null}
-      showNotifications={false}
-      showMessages={false}
     >
       <section className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
         <div className="flex flex-col items-center gap-4">

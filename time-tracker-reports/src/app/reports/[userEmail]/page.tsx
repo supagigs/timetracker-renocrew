@@ -2,11 +2,11 @@ import { format, formatDistanceToNow } from 'date-fns';
 import Image from 'next/image';
 import SummaryCard from '@/components/SummaryCard';
 import WeeklyActivityChart from '@/components/WeeklyActivityChart';
-import ScreenshotSelector from '@/components/ScreenshotSelector';
 import FreelancerSelector from '@/components/FreelancerSelector';
 import ClientOverview from '@/components/ClientOverview';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { DashboardShell } from '@/components/dashboard';
+import { fetchFreelancerProjects, type ProjectRecord } from '@/lib/projects';
 import { redirect } from 'next/navigation';
 
 type TimeSession = {
@@ -23,13 +23,6 @@ type TimeSession = {
     id: number;
     project_name: string;
   } | null;
-};
-
-type Screenshot = {
-  id: number;
-  session_id: number;
-  screenshot_data: string;
-  captured_at: string;
 };
 
 type TeamMemberSummary = {
@@ -77,27 +70,6 @@ async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]>
   return (data ?? []) as TimeSession[];
 }
 
-async function fetchScreenshots(userEmail: string, sessionId?: number): Promise<Screenshot[]> {
-  const supabase = createServerSupabaseClient();
-  let query = supabase
-    .from('screenshots')
-    .select('id, session_id, screenshot_data, captured_at')
-    .eq('user_email', userEmail)
-    .order('captured_at', { ascending: true })
-    .limit(100);
-
-  if (sessionId) {
-    query = query.eq('session_id', sessionId);
-  }
-
-  const { data, error } = await query;
-  if (error) {
-    throw error;
-  }
-
-  return (data ?? []) as Screenshot[];
-}
-
 async function fetchClientTeamMembers(clientEmail: string): Promise<TeamMemberSummary[]> {
   const supabase = createServerSupabaseClient();
 
@@ -135,6 +107,20 @@ async function fetchClientTeamMembers(clientEmail: string): Promise<TeamMemberSu
   const userMap = new Map<string, string | null>();
   (users ?? []).forEach((user) => {
     userMap.set(user.email, user.display_name ?? null);
+  });
+
+  const { data: sessionStates, error: sessionStateError } = await supabase
+    .from('user_sessions')
+    .select('email, app_logged_in, updated_at')
+    .in('email', uniqueFreelancerEmails);
+
+  if (sessionStateError) {
+    console.warn('Error fetching user session states:', sessionStateError);
+  }
+
+  const sessionStateMap = new Map<string, { app_logged_in: boolean | null; updated_at: string | null }>();
+  (sessionStates ?? []).forEach((row) => {
+    sessionStateMap.set(row.email, { app_logged_in: row.app_logged_in ?? null, updated_at: row.updated_at ?? null });
   });
 
   const endDate = new Date();
@@ -180,7 +166,24 @@ async function fetchClientTeamMembers(clientEmail: string): Promise<TeamMemberSu
     const lastSession = memberSessions[0];
     const lastActiveAt = lastSession ? lastSession.end_time ?? lastSession.start_time ?? null : null;
 
-    const hasActiveSession = memberSessions.some((session) => session.end_time === null);
+    const sessionState = sessionStateMap.get(email);
+    const activeSession = memberSessions.find(
+      (session) =>
+        session.end_time === null &&
+        session.session_date === todayStr,
+    );
+
+    const updatedAtMs = sessionState?.updated_at ? Date.parse(sessionState.updated_at) : Number.NaN;
+    const isStatusRecent = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs < 1000 * 60 * 60 * 6 : false;
+
+    let hasActiveSession = false;
+    if (sessionState?.app_logged_in === false) {
+      hasActiveSession = false;
+    } else if (sessionState?.app_logged_in === true) {
+      hasActiveSession = Boolean(activeSession) || isStatusRecent;
+    } else {
+      hasActiveSession = Boolean(activeSession);
+    }
 
     return {
       email,
@@ -356,12 +359,12 @@ export default async function ReportsPage({
   searchParams,
 }: {
   params: Promise<{ userEmail: string }>;
-  searchParams: Record<string, string | string[] | undefined>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { userEmail } = await params;
+  const [{ userEmail }, resolvedSearchParams] = await Promise.all([params, searchParams]);
   const decodedEmail = decodeURIComponent(userEmail);
   const requestedFreelancer = (() => {
-    const value = searchParams?.freelancer;
+    const value = resolvedSearchParams?.freelancer;
     if (Array.isArray(value)) {
       return value[0];
     }
@@ -381,9 +384,7 @@ export default async function ReportsPage({
   let sessions: TimeSession[] = [];
   let summary = defaultSummary;
   let projectSummary: Array<{ id: number; name: string; totalHours: number; totalSeconds: number }> = [];
-  let screenshots: Screenshot[] = [];
   let errorMessage: string | null = null;
-  let latestSessionId: number | undefined;
   let viewerName: string | null = null;
   let reportOwnerName: string | null = null;
   let userCategory: string | null = null;
@@ -392,6 +393,7 @@ export default async function ReportsPage({
   const clientEmailForSelector = decodedEmail;
   let teamMembers: TeamMemberSummary[] = [];
   let showTeamOverview = false;
+  let assignedProjects: ProjectRecord[] = [];
 
   try {
     const supabase = createServerSupabaseClient();
@@ -427,8 +429,9 @@ export default async function ReportsPage({
       sessions = await fetchLastMonthSessions(reportEmail);
       summary = buildMonthlySummary(sessions);
       projectSummary = buildProjectSummary(sessions);
-      latestSessionId = sessions[0]?.id;
-      screenshots = await fetchScreenshots(reportEmail, latestSessionId);
+      if (!isClient) {
+        assignedProjects = await fetchFreelancerProjects(reportEmail);
+      }
     }
   } catch (error) {
     console.error('Error loading reports:', error);
@@ -487,13 +490,26 @@ export default async function ReportsPage({
     ),
   };
 
+  const projectHoursMap = new Map<number, { totalHours: number }>();
+  projectSummary.forEach((project) => {
+    projectHoursMap.set(project.id, { totalHours: project.totalHours });
+  });
+
+  const freelancerProjectOverview = assignedProjects.map((project) => ({
+    ...project,
+    totalHours: projectHoursMap.get(project.id)?.totalHours ?? 0,
+  }));
+
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const todayActiveSeconds = sessions
+    .filter((session) => session.session_date === todayStr)
+    .reduce((total, session) => total + (session.active_duration ?? 0), 0);
+
   return (
     <DashboardShell
       userName={viewerDisplayName}
       userEmail={decodedEmail}
       userRole={userCategory}
-      showNotifications={false}
-      showMessages={false}
     >
       <div className="space-y-8">
         <header className="space-y-3">
@@ -541,7 +557,7 @@ export default async function ReportsPage({
             members={overviewMembers}
             metrics={overviewMetrics}
           />
-        ) : (
+        ) : isClient ? (
           <>
             <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <SummaryCard title="Total Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
@@ -595,26 +611,66 @@ export default async function ReportsPage({
                 />
               </section>
             )}
+          </>
+        ) : (
+          <>
+            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <SummaryCard title="Assigned Projects" value={freelancerProjectOverview.length.toString()} />
+              <SummaryCard title="Total Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
+              <SummaryCard title="Active Today" value={formatSecondsToHoursMinutes(todayActiveSeconds)} />
+              <SummaryCard title="Avg. Daily Work" value={formatHoursMinutes(summary.avgDailyHours)} />
+            </section>
 
             <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
-              <h2 className="mb-4 text-xl font-semibold text-foreground">Screenshots</h2>
-              <ScreenshotSelector
-                userEmail={reportEmail}
-                sessions={sessions.filter((session) => {
-                  const sessionDateStr = session.session_date;
-                  const endDate = new Date();
-                  const startDate = new Date();
-                  startDate.setDate(endDate.getDate() - 29);
-
-                  const startDateStr = format(startDate, "yyyy-MM-dd");
-                  const endDateStr = format(endDate, "yyyy-MM-dd");
-
-                  return sessionDateStr >= startDateStr && sessionDateStr <= endDateStr;
-                })}
-                initialScreenshots={screenshots}
-                initialSessionId={latestSessionId}
-              />
+              <h2 className="mb-4 text-xl font-semibold text-foreground">Assigned Projects</h2>
+              {freelancerProjectOverview.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Your client hasn&apos;t assigned any projects to you yet.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {freelancerProjectOverview.map((project) => (
+                    <div
+                      key={project.id}
+                      className="rounded-xl border border-border/80 bg-card/60 p-4 shadow-sm transition hover:shadow-md"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-lg font-semibold text-foreground">{project.name}</h3>
+                          {project.clientEmail && (
+                            <p className="text-xs text-muted-foreground">
+                              Assigned by {project.clientName ?? project.clientEmail}
+                            </p>
+                          )}
+                          {project.description && (
+                            <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
+                              {project.description}
+                            </p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs uppercase text-muted-foreground">Tracked (30 days)</p>
+                          <p className="text-lg font-semibold text-emerald-600">
+                            {formatHoursMinutes(project.totalHours)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
+
+            {projectSummary.length > 0 && (
+              <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
+                <h2 className="mb-4 text-xl font-semibold text-foreground">Recent Activity</h2>
+                <WeeklyActivityChart
+                  labels={summary.labels.slice(-7)}
+                  activeHours={summary.activeHours.slice(-7)}
+                  idleHours={summary.idleHours.slice(-7)}
+                />
+              </section>
+            )}
           </>
         )}
       </div>

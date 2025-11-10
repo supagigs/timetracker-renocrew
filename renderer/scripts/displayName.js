@@ -1,6 +1,36 @@
 document.addEventListener('DOMContentLoaded', () => {
   const displayNameInput = document.getElementById('displayName');
   const saveBtn = document.getElementById('saveBtn');
+  const email = StorageService.getItem('userEmail');
+
+  if (!email) {
+    NotificationService.showError('No user email found. Please login again.');
+    setTimeout(() => {
+      window.location.href = 'login.html';
+    }, 2000);
+    return;
+  }
+
+  if (window.SessionSync) {
+    window.SessionSync.setEmail(email);
+    window.SessionSync.updateAppState(true);
+  }
+
+  window.addEventListener('session:remote-logout', async () => {
+    NotificationService.showWarning('You were signed out from the reports site. Please log in again from the desktop app.');
+    try {
+      if (window.SessionSync) {
+        await window.SessionSync.updateAppState(false);
+        window.SessionSync.clear();
+      }
+    } catch (error) {
+      console.error('Failed to update session state during remote logout:', error);
+    }
+    StorageService.removeItem('userEmail');
+    StorageService.removeItem('displayName');
+    StorageService.removeItem('userCategory');
+    window.location.href = 'login.html';
+  });
 
   saveBtn.addEventListener('click', async () => {
     const displayName = displayNameInput.value.trim();
@@ -10,15 +40,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!validation.valid) {
       NotificationService.showError(validation.error);
       displayNameInput.focus();
-      return;
-    }
-
-    const email = StorageService.getItem('userEmail');
-    if (!email) {
-      NotificationService.showError('No user email found. Please login again.');
-      setTimeout(() => {
-        window.location.href = 'login.html';
-      }, 2000);
       return;
     }
 

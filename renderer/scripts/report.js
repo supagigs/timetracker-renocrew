@@ -13,30 +13,51 @@ document.addEventListener('DOMContentLoaded', () => {
   const sessionsMap = {}; // id -> session details
   const screenshotOffset = {}; // Track pagination offset for each session
 
+  const userEmail = StorageService.getItem('userEmail');
+  if (!userEmail) {
+    alert('No user email found. Please login again.');
+    window.location.href = 'login.html';
+    return;
+  }
+
+  if (window.SessionSync) {
+    window.SessionSync.setEmail(userEmail);
+    window.SessionSync.updateAppState(true);
+  }
+
+  window.addEventListener('session:remote-logout', async () => {
+    NotificationService.showWarning('You were signed out from the reports site. Please log in again from the desktop app.');
+    try {
+      if (window.SessionSync) {
+        await window.SessionSync.updateAppState(false);
+        window.SessionSync.clear();
+      }
+    } catch (error) {
+      console.error('Failed to update session state during remote logout:', error);
+    }
+    StorageService.removeItem('userEmail');
+    StorageService.removeItem('displayName');
+    StorageService.removeItem('userCategory');
+    window.location.href = 'login.html';
+  });
+
   // Load monthly data
   loadMonthlyData();
   loadSessions();
 
   function loadMonthlyData() {
-    const email = StorageService.getItem('userEmail');
-    if (!email) {
-      alert('No user email found. Please login again.');
-      window.location.href = 'login.html';
-      return;
-    }
-
     // Get last 30 days
     const endDate = new Date();
     const startDate = new Date();
     startDate.setDate(endDate.getDate() - 29); // 30 days total (0-29 = 30 days)
 
-    console.log('Loading monthly data for email:', email);
+    console.log('Loading monthly data for email:', userEmail);
     console.log('Date range:', startDate.toISOString().split('T')[0], 'to', endDate.toISOString().split('T')[0]);
 
     window.supabase
       .from('time_sessions')
       .select('id, session_date, active_duration, idle_duration, break_duration, start_time, end_time')
-      .eq('user_email', email)
+      .eq('user_email', userEmail)
       .gte('session_date', startDate.toISOString().split('T')[0])
       .lte('session_date', endDate.toISOString().split('T')[0])
       .then(({ data, error }) => {
@@ -72,13 +93,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function loadSessions() {
-    const email = StorageService.getItem('userEmail');
-    if (!email) return;
-
     window.supabase
       .from('time_sessions')
       .select('id, start_time, end_time, session_date, active_duration, idle_duration, break_count')
-      .eq('user_email', email)
+      .eq('user_email', userEmail)
       .order('start_time', { ascending: false })
       .then(({ data, error }) => {
         if (error) {
@@ -155,7 +173,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    const email = StorageService.getItem('userEmail');
+    const email = userEmail;
     console.log('Loading screenshots for session:', sessionId, 'email:', email);
     
     // Reset offset when loading a new session
@@ -582,11 +600,10 @@ document.addEventListener('DOMContentLoaded', () => {
       
       loadMoreBtn.addEventListener('click', async () => {
         const sessionId = sessionSelect.value;
-        const email = StorageService.getItem('userEmail');
-        if (!sessionId || !email) return;
+        if (!sessionId || !userEmail) return;
         
         // Load more screenshots
-        await loadDatabaseScreenshots(email, sessionId, 0, true);
+        await loadDatabaseScreenshots(userEmail, sessionId, 0, true);
       });
       
       loadMoreContainer.appendChild(loadMoreBtn);

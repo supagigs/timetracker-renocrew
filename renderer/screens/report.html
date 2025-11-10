@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="../styles/common.css">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
-                 connect-src 'self' https://*.supabase.co https://cdn.jsdelivr.net;
+                 connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
                  script-src 'self' https://cdn.jsdelivr.net;
                  style-src 'self' 'unsafe-inline';
                  img-src 'self' data: blob: https://*.supabase.co;
@@ -16,6 +16,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="../scripts/supabaseClient.js"></script>
   <script src="../scripts/utils.js"></script>
+  <script src="../scripts/sessionSync.js"></script>
   <script src="../scripts/idleTracker.js"></script>
   <script src="../scripts/report.js" defer></script>
 </head>

@@ -530,6 +530,10 @@ async function handleLogin() {
       if (window.electronAPI?.setUserLoggedIn) {
         window.electronAPI.setUserLoggedIn(true).catch(err => console.error('Failed to update logged-in state:', err));
       }
+      if (window.SessionSync) {
+        window.SessionSync.setEmail(email);
+        window.SessionSync.updateAppState(true);
+      }
       
       // Navigate to display name screen for new users
       setTimeout(() => {
@@ -595,6 +599,11 @@ async function handleLogin() {
             window.location.href = './displayName.html';
           }, 1000);
         }
+      }
+
+      if (window.SessionSync) {
+        window.SessionSync.setEmail(email);
+        window.SessionSync.updateAppState(true);
       }
     }
 

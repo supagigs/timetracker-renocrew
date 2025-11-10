@@ -17,6 +17,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
+  if (window.SessionSync) {
+    window.SessionSync.setEmail(email);
+    window.SessionSync.updateAppState(true);
+  }
+
+  window.addEventListener('session:remote-logout', async () => {
+    NotificationService.showWarning('You were signed out from the reports site. Please log in again from the desktop app.');
+    try {
+      if (window.SessionSync) {
+        await window.SessionSync.updateAppState(false);
+        window.SessionSync.clear();
+      }
+    } catch (error) {
+      console.error('Failed to update session state during remote logout:', error);
+    }
+    StorageService.removeItem('userEmail');
+    StorageService.removeItem('displayName');
+    StorageService.removeItem('userCategory');
+    window.location.href = 'login.html';
+  });
+
   // Check user category
   const userCategory = StorageService.getItem('userCategory');
   const isFreelancer = userCategory === 'Freelancer';

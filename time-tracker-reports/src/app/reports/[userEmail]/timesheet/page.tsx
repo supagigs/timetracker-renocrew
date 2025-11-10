@@ -18,10 +18,102 @@ type TimesheetRow = {
   totalSeconds: number;
 };
 
+type DateRange = {
+  start: string;
+  end: string;
+};
+
+type RawSessionRow = {
+  id: number;
+  user_email: string;
+  session_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  active_duration: number | null;
+  break_duration: number | null;
+  idle_duration: number | null;
+  projects?: {
+    project_name: string | null;
+  } | null;
+};
+
+function defaultDateRange(): DateRange {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - 29);
+  return {
+    start: format(start, 'yyyy-MM-dd'),
+    end: format(end, 'yyyy-MM-dd'),
+  };
+}
+
+function normalizeDateRange(searchParams: Record<string, string | string[] | undefined>): DateRange {
+  const fallback = defaultDateRange();
+  const fromParam = searchParams.from;
+  const toParam = searchParams.to;
+
+  const coerce = (value: string | string[] | undefined): string | null => {
+    if (!value) return null;
+    if (Array.isArray(value)) {
+      return value[0]?.slice(0, 10) ?? null;
+    }
+    return value.slice(0, 10);
+  };
+
+  const start = coerce(fromParam) ?? fallback.start;
+  const end = coerce(toParam) ?? fallback.end;
+
+  if (start > end) {
+    return fallback;
+  }
+
+  return { start, end };
+}
+
+async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): Promise<RawSessionRow[]> {
+  if (emails.length === 0) {
+    return [];
+  }
+
+  const supabase = createServerSupabaseClient();
+
+  const { data, error } = await supabase
+    .from('time_sessions')
+    .select(
+      `
+        id,
+        user_email,
+        session_date,
+        start_time,
+        end_time,
+        active_duration,
+        break_duration,
+        idle_duration,
+        projects (
+          project_name
+        )
+      `,
+    )
+    .in('user_email', emails)
+    .gte('session_date', dateRange.start)
+    .lte('session_date', dateRange.end)
+    .order('session_date', { ascending: false })
+    .order('start_time', { ascending: false });
+
+  if (error) {
+    console.warn('[timesheet] Failed to load session data:', error);
+    return [];
+  }
+
+  return (data ?? []) as RawSessionRow[];
+}
+
 async function fetchClientTimesheet({
   email,
+  dateRange,
 }: {
   email: string;
+  dateRange: DateRange;
 }): Promise<TimesheetRow[]> {
   const supabase = createServerSupabaseClient();
 
@@ -63,35 +155,7 @@ async function fetchClientTimesheet({
     nameMap.set(row.email, row.display_name ?? null);
   });
 
-  const { data: sessions, error: sessionsError } = await supabase
-    .from('time_sessions')
-    .select(
-      `
-        id,
-        user_email,
-        session_date,
-        start_time,
-        end_time,
-        total_duration,
-        active_duration,
-        break_duration,
-        idle_duration,
-        projects ( project_name )
-      `,
-    )
-    .in('user_email', freelancerEmails)
-    .order('session_date', { ascending: false })
-    .order('start_time', { ascending: false })
-    .limit(200);
-
-  if (sessionsError) {
-    console.warn('[client-timesheet] Time session query returned an error, defaulting to empty list.', sessionsError);
-    return [];
-  }
-
-  if (!sessions) {
-    return [];
-  }
+  const sessions = await fetchSessionsForEmails(freelancerEmails, dateRange);
 
   return sessions.map((session) => ({
     id: session.id,
@@ -104,7 +168,50 @@ async function fetchClientTimesheet({
     activeSeconds: session.active_duration ?? 0,
     breakSeconds: session.break_duration ?? 0,
     idleSeconds: session.idle_duration ?? 0,
-    totalSeconds: session.total_duration ?? (session.active_duration ?? 0) + (session.break_duration ?? 0) + (session.idle_duration ?? 0),
+    totalSeconds:
+      (session.active_duration ?? 0) +
+      (session.break_duration ?? 0) +
+      (session.idle_duration ?? 0),
+  }));
+}
+
+async function fetchFreelancerTimesheet({
+  email,
+  dateRange,
+}: {
+  email: string;
+  dateRange: DateRange;
+}): Promise<TimesheetRow[]> {
+  const supabase = createServerSupabaseClient();
+  const { data: userRow, error: userError } = await supabase
+    .from('users')
+    .select('display_name')
+    .eq('email', email)
+    .maybeSingle();
+
+  if (userError) {
+    console.warn('[freelancer-timesheet] Could not load display name.', userError);
+  }
+
+  const displayName = userRow?.display_name ?? email;
+
+  const sessions = await fetchSessionsForEmails([email], dateRange);
+
+  return sessions.map((session) => ({
+    id: session.id,
+    freelancerEmail: session.user_email,
+    freelancerName: displayName,
+    projectName: session.projects?.project_name ?? null,
+    sessionDate: session.session_date,
+    startTime: session.start_time,
+    endTime: session.end_time,
+    activeSeconds: session.active_duration ?? 0,
+    breakSeconds: session.break_duration ?? 0,
+    idleSeconds: session.idle_duration ?? 0,
+    totalSeconds:
+      (session.active_duration ?? 0) +
+      (session.break_duration ?? 0) +
+      (session.idle_duration ?? 0),
   }));
 }
 
@@ -125,14 +232,15 @@ function formatSecondsToHoursMinutes(totalSeconds: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-export default async function ClientTimesheetPage({
+export default async function TimesheetPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ userEmail: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { userEmail } = await params;
+  const [{ userEmail }, resolvedSearchParams] = await Promise.all([params, searchParams]);
   const decodedEmail = decodeURIComponent(userEmail);
-
   const profile = await fetchUserProfile(decodedEmail);
 
   if (!profile) {
@@ -142,7 +250,7 @@ export default async function ClientTimesheetPage({
           <section className="rounded-2xl border border-border bg-card p-6 text-center shadow-sm">
             <h1 className="text-2xl font-semibold text-foreground">Account not found</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              We couldn't locate your account details. Please ensure you are logged in with the correct email.
+              We couldn&apos;t locate your account details. Please ensure you are logged in with the correct email.
             </p>
           </section>
         </div>
@@ -150,9 +258,20 @@ export default async function ClientTimesheetPage({
     );
   }
 
-  const timesheetRows = profile.category === 'Client'
-    ? await fetchClientTimesheet({ email: profile.email })
-    : [];
+  const dateRange = normalizeDateRange(resolvedSearchParams);
+
+  const isClient = profile.category === 'Client';
+  const isFreelancer = profile.category === 'Freelancer';
+
+  const timesheetRows = isClient
+    ? await fetchClientTimesheet({ email: profile.email, dateRange })
+    : isFreelancer
+      ? await fetchFreelancerTimesheet({ email: profile.email, dateRange })
+      : [];
+
+  const emptyStateMessage = isClient
+    ? 'Once your freelancers track time in the desktop app, their sessions will show up here.'
+    : 'You have no tracked sessions for the selected date range.';
 
   return (
     <DashboardShell
@@ -164,24 +283,57 @@ export default async function ClientTimesheetPage({
         <header className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Timesheet</h1>
           <p className="text-sm text-muted-foreground">
-            Review detailed session logs for each freelancer assigned to your projects.
+            {isFreelancer
+              ? 'Your recent sessions with login and logout times. Use the filter to view a specific range.'
+              : 'Review detailed session logs for each freelancer assigned to your projects.'}
           </p>
         </header>
 
-        {profile.category !== 'Client' ? (
-          <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-            <p className="text-sm text-muted-foreground">
-              Timesheets are available for client accounts only.
-            </p>
-          </section>
-        ) : timesheetRows.length === 0 ? (
+        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <form className="flex flex-col gap-4 sm:flex-row sm:items-end" method="get">
+            <div>
+              <label htmlFor="from" className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                From
+              </label>
+              <input
+                type="date"
+                id="from"
+                name="from"
+              className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                defaultValue={dateRange.start}
+                max={dateRange.end}
+              />
+            </div>
+            <div>
+              <label htmlFor="to" className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                To
+              </label>
+              <input
+                type="date"
+                id="to"
+                name="to"
+                className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                defaultValue={dateRange.end}
+                min={dateRange.start}
+              />
+            </div>
+            <button
+              type="submit"
+              className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
+            >
+              Apply Filters
+            </button>
+          </form>
+        </section>
+
+        {timesheetRows.length === 0 ? (
           <section className="rounded-2xl border border-dashed border-border/60 bg-card p-10 text-center shadow-sm">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary/70 text-secondary-foreground">
               <CalendarClock size={24} />
             </div>
-            <h2 className="mt-4 text-xl font-semibold text-foreground">No timesheet entries yet</h2>
+            <h2 className="mt-4 text-xl font-semibold text-foreground">No timesheet entries</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Once your freelancers track time in the desktop app, their sessions will show up here.
+              {emptyStateMessage}
             </p>
           </section>
         ) : (
@@ -191,31 +343,37 @@ export default async function ClientTimesheetPage({
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
                     <th className="px-4 py-3 font-medium">Date</th>
-                    <th className="px-4 py-3 font-medium">Freelancer</th>
+                    {isClient && <th className="px-4 py-3 font-medium">Freelancer</th>}
                     <th className="px-4 py-3 font-medium">Project</th>
                     <th className="px-4 py-3 font-medium">Active</th>
                     <th className="px-4 py-3 font-medium">Break</th>
                     <th className="px-4 py-3 font-medium">Idle</th>
                     <th className="px-4 py-3 font-medium">Total</th>
-                    <th className="px-4 py-3 font-medium">Start</th>
-                    <th className="px-4 py-3 font-medium">End</th>
+                    <th className="px-4 py-3 font-medium">Clock In</th>
+                    <th className="px-4 py-3 font-medium">Clock Out</th>
                   </tr>
                 </thead>
                 <tbody>
                   {timesheetRows.map((row) => (
                     <tr key={row.id} className="border-b border-border/60 transition-colors hover:bg-secondary/60">
                       <td className="px-4 py-3 text-foreground">{format(new Date(row.sessionDate), 'PPP')}</td>
-                      <td className="px-4 py-3 text-foreground">
-                        <div className="font-semibold">{row.freelancerName || row.freelancerEmail}</div>
-                        <div className="text-xs text-muted-foreground">{row.freelancerEmail}</div>
-                      </td>
+                      {isClient && (
+                        <td className="px-4 py-3 text-foreground">
+                          <div className="font-semibold">{row.freelancerName || row.freelancerEmail}</div>
+                          <div className="text-xs text-muted-foreground">{row.freelancerEmail}</div>
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-foreground">{row.projectName ?? '—'}</td>
                       <td className="px-4 py-3 text-foreground">{formatSecondsToHoursMinutes(row.activeSeconds)}</td>
                       <td className="px-4 py-3 text-foreground">{formatSecondsToHoursMinutes(row.breakSeconds)}</td>
                       <td className="px-4 py-3 text-foreground">{formatSecondsToHoursMinutes(row.idleSeconds)}</td>
                       <td className="px-4 py-3 text-foreground">{formatSecondsToHoursMinutes(row.totalSeconds)}</td>
-                      <td className="px-4 py-3 text-foreground">{row.startTime ? format(new Date(row.startTime), 'p') : '—'}</td>
-                      <td className="px-4 py-3 text-foreground">{row.endTime ? format(new Date(row.endTime), 'p') : '—'}</td>
+                      <td className="px-4 py-3 text-foreground">
+                        {row.startTime ? format(new Date(row.startTime), 'p') : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-foreground">
+                        {row.endTime ? format(new Date(row.endTime), 'p') : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

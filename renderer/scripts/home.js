@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
   welcomeText.textContent = `Hello, ${displayName}!`;
 
   // Check user category
+  const userEmail = StorageService.getItem('userEmail');
   const userCategory = StorageService.getItem('userCategory');
   const isClient = userCategory === 'Client';
 
@@ -79,95 +80,115 @@ document.addEventListener('DOMContentLoaded', () => {
       });
   });
 
-  logoutBtn.addEventListener('click', async () => {
-    if (confirm('Are you sure you want to logout?')) {
-      try {
-        // Check if there's an active session and save it
-        const isActive = StorageService.getItem('isActive') === 'true';
-        const sessionStartTime = StorageService.getItem('sessionStartTime');
-        
-        if (isActive && sessionStartTime) {
-          console.log('Saving active session before logout from home page...');
-          
-          // We need to calculate the session data
-          const now = new Date();
-          const sessionDuration = Math.floor((now - new Date(sessionStartTime)) / 1000);
-          
-          // Get stored durations
-          const totalActiveDuration = parseInt(StorageService.getItem('activeDuration') || '0');
-          const totalBreakDuration = parseInt(StorageService.getItem('breakDuration') || '0');
-          const isOnBreak = StorageService.getItem('isOnBreak') === 'true';
-          const workStartTime = StorageService.getItem('workStartTime');
-          const breakStartTime = StorageService.getItem('breakStartTime');
+  async function performLogout(options = {}) {
+    const { skipConfirm = false, remote = false } = options;
+
+    if (!skipConfirm) {
+      const confirmed = confirm('Are you sure you want to logout?');
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    try {
+      const isActive = StorageService.getItem('isActive') === 'true';
+      const sessionStartTime = StorageService.getItem('sessionStartTime');
+
+      if (isActive && sessionStartTime) {
+        console.log('Saving active session before logout from home page...');
+
+        const now = new Date();
+        const sessionDuration = Math.floor((now - new Date(sessionStartTime)) / 1000);
+
+        const totalActiveDuration = parseInt(StorageService.getItem('activeDuration') || '0');
+        const totalBreakDuration = parseInt(StorageService.getItem('breakDuration') || '0');
+        const isOnBreak = StorageService.getItem('isOnBreak') === 'true';
+        const workStartTime = StorageService.getItem('workStartTime');
+        const breakStartTime = StorageService.getItem('breakStartTime');
         const isIdle = StorageService.getItem('isIdle') === 'true';
-          
-          let finalActiveDuration = totalActiveDuration;
-          let finalBreakDuration = totalBreakDuration;
-          
-          // Add current work time if not on break
-          if (isActive && !isOnBreak && !isIdle && workStartTime) {
-            const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
-            finalActiveDuration += workElapsed;
-          }
-          
-          // Add current break time if on break
-          if (isOnBreak && breakStartTime) {
-            const breakElapsed = Math.floor((now - new Date(breakStartTime)) / 1000);
-            finalBreakDuration += breakElapsed;
-          }
-          
-          // Save session to database
-          const email = StorageService.getItem('userEmail');
-          const currentSessionId = StorageService.getItem('currentSessionId');
-          const today = new Date().toISOString().split('T')[0];
-          
-          if (window.supabase && email) {
-            await window.supabase.from('time_sessions').upsert([{
-              id: currentSessionId,
-              user_email: email,
-              start_time: sessionStartTime,
-              end_time: now.toISOString(),
-              total_duration: sessionDuration,
-              break_duration: finalBreakDuration,
-              active_duration: finalActiveDuration,
-              session_date: today
-            }]);
-            
-            console.log('Session saved successfully before logout from home');
-          }
-        }
-        
-        // Clear all user data
-        StorageService.removeItem('userEmail');
-        StorageService.removeItem('displayName');
-        StorageService.removeItem('userCategory');
-        StorageService.removeItem('sessionStartTime');
-        StorageService.removeItem('currentSessionId');
-        StorageService.removeItem('workStartTime');
-        StorageService.removeItem('isActive');
-        StorageService.removeItem('isOnBreak');
-        StorageService.removeItem('breakStartTime');
-        StorageService.removeItem('breakDuration');
-        StorageService.removeItem('activeDuration');
-        StorageService.removeItem('breakCount');
-        StorageService.removeItem('totalIdleTime');
-        StorageService.removeItem('isIdle');
-        StorageService.removeItem('idleStartTime');
-        StorageService.removeItem('screenshotCaptureActive');
 
-        if (window.electronAPI?.setUserLoggedIn) {
-          window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state during logout:', err));
+        let finalActiveDuration = totalActiveDuration;
+        let finalBreakDuration = totalBreakDuration;
+
+        if (isActive && !isOnBreak && !isIdle && workStartTime) {
+          const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
+          finalActiveDuration += workElapsed;
         }
 
-        // Redirect to login
-        window.location.href = 'login.html';
-        
-      } catch (error) {
-        console.error('Error during logout from home:', error);
+        if (isOnBreak && breakStartTime) {
+          const breakElapsed = Math.floor((now - new Date(breakStartTime)) / 1000);
+          finalBreakDuration += breakElapsed;
+        }
+
+        const email = StorageService.getItem('userEmail');
+        const currentSessionId = StorageService.getItem('currentSessionId');
+        const today = new Date().toISOString().split('T')[0];
+
+        if (window.supabase && email) {
+          await window.supabase.from('time_sessions').upsert([{
+            id: currentSessionId,
+            user_email: email,
+            start_time: sessionStartTime,
+            end_time: now.toISOString(),
+            total_duration: sessionDuration,
+            break_duration: finalBreakDuration,
+            active_duration: finalActiveDuration,
+            session_date: today
+          }]);
+
+          console.log('Session saved successfully before logout from home');
+        }
+      }
+
+      // Clear all user data
+      StorageService.removeItem('userEmail');
+      StorageService.removeItem('displayName');
+      StorageService.removeItem('userCategory');
+      StorageService.removeItem('sessionStartTime');
+      StorageService.removeItem('currentSessionId');
+      StorageService.removeItem('workStartTime');
+      StorageService.removeItem('isActive');
+      StorageService.removeItem('isOnBreak');
+      StorageService.removeItem('breakStartTime');
+      StorageService.removeItem('breakDuration');
+      StorageService.removeItem('activeDuration');
+      StorageService.removeItem('breakCount');
+      StorageService.removeItem('totalIdleTime');
+      StorageService.removeItem('isIdle');
+      StorageService.removeItem('idleStartTime');
+      StorageService.removeItem('screenshotCaptureActive');
+
+      if (window.SessionSync && userEmail) {
+        await window.SessionSync.updateAppState(false);
+        window.SessionSync.clear();
+      }
+
+      if (window.electronAPI?.setUserLoggedIn) {
+        window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state during logout:', err));
+      }
+
+      window.location.href = 'login.html';
+    } catch (error) {
+      console.error('Error during logout from home:', error);
+      if (!remote) {
         alert('Error saving session before logout. Please try again.');
       }
     }
+  }
+
+  logoutBtn.addEventListener('click', () => {
+    performLogout({ skipConfirm: false, remote: false });
   });
+
+  window.addEventListener('session:remote-logout', () => {
+    NotificationService.showWarning('You were signed out from the reports site. Please log in again from the desktop app.');
+    performLogout({ skipConfirm: true, remote: true });
+  });
+
+  if (window.SessionSync && userEmail) {
+    window.SessionSync.setEmail(userEmail);
+    window.SessionSync.updateAppState(true);
+  }
 
   function checkActiveTimer() {
     const isActive = StorageService.getItem('isActive') === 'true';
