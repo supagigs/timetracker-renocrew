@@ -17,21 +17,76 @@
   <script src="../scripts/utils.js"></script>
   <script src="../scripts/home.js" defer></script>
 </head>
-<body>
-  <div class="container">
-    <h1>Welcome back!</h1>
-    <p id="welcomeText">Hello there!</p>
-    
-    <div class="button-group">
-      <button id="clockInBtn" class="btn-primary">Clock In</button>
-      <button id="projectsBtn" class="btn-secondary" style="display: none;">Projects</button>
-      <button id="reportBtn" class="btn-secondary">View Reports</button>
-      <button id="logoutBtn" class="btn-danger">Logout</button>
-    </div>
-    
-    <div class="info-text">
-      <p id="infoText">Click "Clock In" to start tracking your work time</p>
-    </div>
+<body class="home-body">
+  <div class="home-background">
+    <div class="home-glow home-glow-primary"></div>
+    <div class="home-glow home-glow-accent"></div>
+  </div>
+
+  <div class="home-wrapper">
+    <header class="home-topbar">
+      <div class="home-brand">
+        <div class="home-brand__icon">⏱</div>
+        <div class="home-brand__text">
+          <p class="home-brand__title">Time Tracker</p>
+          <p class="home-brand__subtitle">Stay focused, ship on time</p>
+        </div>
+      </div>
+      <div class="home-status">
+        <span class="home-status__dot"></span>
+        <span class="home-status__label">Your productivity streak is live</span>
+      </div>
+    </header>
+
+    <main class="home-main">
+      <section class="home-card">
+        <div class="home-card__left">
+          <span class="home-card__badge">Great to see you</span>
+          <h1>Welcome back!</h1>
+          <p id="welcomeText" class="home-card__greeting">Hello there!</p>
+          <p id="infoText" class="home-card__info">
+            Click "Clock In" to start tracking your work time
+          </p>
+
+          <div class="home-actions button-group">
+            <button id="clockInBtn" class="btn-primary">Clock In</button>
+            <button id="projectsBtn" class="btn-secondary" style="display: none;">Projects</button>
+            <button id="reportBtn" class="btn-secondary btn-github">View Reports</button>
+            <button id="logoutBtn" class="btn-danger">Logout</button>
+          </div>
+
+          <div class="home-card__footnote">
+            Track your hours, organize projects, and keep your team aligned in one glance.
+          </div>
+        </div>
+
+        <div class="home-card__right">
+          <ul class="home-highlights">
+            <li>
+              <span class="home-highlights__icon">⏰</span>
+              <div>
+                <h3>Smarter clock-in</h3>
+                <p>Record sessions instantly and resume where you left off.</p>
+              </div>
+            </li>
+            <li>
+              <span class="home-highlights__icon">📊</span>
+              <div>
+                <h3>Beautiful reports</h3>
+                <p>Spot trends with clean summaries across teams and projects.</p>
+              </div>
+            </li>
+            <li>
+              <span class="home-highlights__icon">🤝</span>
+              <div>
+                <h3>Collaborative projects</h3>
+                <p>Assign work and keep everyone in sync with real-time updates.</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </main>
   </div>
 </body>
 </html>
