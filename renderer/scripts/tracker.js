@@ -168,6 +168,7 @@ document.addEventListener('DOMContentLoaded', () => {
     idleTracker = new IdleTracker({
       idleThreshold: 30, // 30 seconds of inactivity
       checkInterval: 1000, // Check every second
+      useSystemIdle: false,
       onIdleStart: () => {
         console.log('🔴 User became idle - red dot will appear on next screenshot');
         if (isActive && !isOnBreak && !isIdle) {
@@ -1383,27 +1384,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }).then(res => {
           if (!res?.ok) {
             console.error('queueScreenshotUpload failed:', res?.error);
+          } else {
+            showScreenshotNotification({
+              timestamp,
+              previewDataUrl: screenshotData,
+              storageUrl: res.url || null,
+              sessionId: currentSessionId || 'temp-session'
+            });
           }
         }).catch(err => console.error('queueScreenshotUpload error:', err));
-      }
-
-      // Always save screenshot to local file (this should work even if DB fails)
-      try {
-        const filename = `screenshot_${email.replace('@', '_at_').replace('.', '_')}_${timestamp.replace(/[:.]/g, '-')}.png`;
-        
-        // Use Electron IPC to save file in main process
-        const filePath = await window.electronAPI.saveScreenshot(screenshotData, filename);
-        console.log('Screenshot saved to local file:', filePath);
-        
-        // Show notification for manual screenshot capture
-        showScreenshotNotification({
-          timestamp: timestamp,
-          filename: filename,
-          filePath: filePath,
-          dataUrl: screenshotData
-        });
-      } catch (fileError) {
-        console.error('Error saving screenshot to local file:', fileError);
       }
 
     } catch (error) {
@@ -1559,9 +1548,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const notification = document.createElement('div');
     notification.className = 'screenshot-notification';
 
-    const previewSource = data?.filePath
-      ? `file://${data.filePath}`
-      : data?.dataUrl || null;
+    const previewSource = data?.previewDataUrl
+      || data?.dataUrl
+      || (data?.filePath ? `file://${data.filePath}` : null)
+      || data?.storageUrl
+      || null;
     
     const now = new Date();
     const timeString = now.toLocaleTimeString('en-US', { 
@@ -1582,7 +1573,15 @@ document.addEventListener('DOMContentLoaded', () => {
     notification.addEventListener('click', () => {
       dismissNotification(notification);
       if (previewSource) {
-        openScreenshotPreview(previewSource);
+        if (previewSource.startsWith('http')) {
+          if (window.electronAPI && window.electronAPI.openExternalUrl) {
+            window.electronAPI.openExternalUrl(previewSource);
+          } else {
+            window.open(previewSource, '_blank', 'noopener');
+          }
+        } else {
+          openScreenshotPreview(previewSource);
+        }
       }
     });
     

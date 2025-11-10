@@ -1,426 +1,202 @@
-# SupaTimeTracker ⏱️
+# SupaTimeTracker
 
-A comprehensive time tracking desktop application built with Electron and Supabase, designed for managing work time between Clients and Freelancers. The app features automatic idle detection, break tracking, screenshot capture, and detailed reporting.
-
-## 📋 Table of Contents
-
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [User Roles](#user-roles)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Database Setup](#database-setup)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Project Structure](#project-structure)
-- [Reports Dashboard](#reports-dashboard)
-- [Troubleshooting](#troubleshooting)
-
-## 🎯 Overview
-
-SupaTimeTracker is a desktop application that helps Clients manage projects and track the time spent by Freelancers on their work. The app automatically tracks active work time, idle time, breaks, and captures periodic screenshots for transparency and accountability.
-
-### Main Components
-
-1. **Electron Desktop App**: The main time tracking application
-2. **Reports Dashboard**: A Next.js web application for viewing detailed reports and analytics
-
-## ✨ Key Features
-
-### For Freelancers
-
-- ⏱️ **Automatic Time Tracking**: Start/stop timer with project selection
-- 🎯 **Project-Based Tracking**: Track time spent on specific projects
-- 🔍 **Idle Detection**: Automatically detects when you're idle and pauses tracking
-- ☕ **Break Management**: Take breaks that are tracked separately
-- 📸 **Automatic Screenshots**: Periodic screenshots captured during work sessions
-- 📊 **Real-time Statistics**: View today's work statistics, active time, idle time, and break duration
-- 📈 **Project Distribution Charts**: Visual pie charts showing time distribution across projects
-- 🏠 **Session Management**: Clock in/out with session persistence
-
-### For Clients
-
-- 📁 **Project Management**: Create and manage multiple projects
-- 👥 **Freelancer Assignment**: Assign projects to freelancers
-- 📊 **Reports Dashboard**: View detailed reports of all freelancers' work
-- 🔍 **Freelancer Selection**: Select any freelancer from a dropdown to view their monthly reports
-- 📸 **Screenshot Review**: View screenshots captured during work sessions
-- ⏱️ **Time Analytics**: See total work time, idle percentage, and project-wise breakdowns
-
-### General Features
-
-- 🔐 **User Authentication**: Secure login with email and user category (Client/Freelancer)
-- 💾 **Cloud Storage**: All data stored in Supabase (PostgreSQL)
-- 📱 **Cross-Platform**: Works on Windows, macOS, and Linux
-- 🎨 **Modern UI**: Beautiful dark theme with smooth animations
-- 🔔 **Notifications**: Real-time notifications for important actions
-- 📈 **Monthly Reports**: 30-day activity summaries with charts and statistics
-
-## 👥 User Roles
-
-### Client
-
-Clients can:
-- Create and manage projects
-- Assign projects to freelancers
-- View reports for all assigned freelancers
-- See time distribution and project breakdowns
-- Review screenshots from work sessions
-
-### Freelancer
-
-Freelancers can:
-- Clock in/out for work sessions
-- Select projects to work on
-- Track active work time automatically
-- Take breaks (tracked separately)
-- View their own statistics and reports
-- See time distribution across projects
-
-## 📦 Prerequisites
-
-- **Node.js** (version 16 or higher)
-- **npm** or **yarn**
-- **Supabase Account**: Create a free account at [supabase.com](https://supabase.com)
-- **Git** (for cloning the repository)
-
-## 🚀 Installation
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/supagigs/Supatimetracker.git
-cd Supatimetracker
-```
-
-### 2. Install Dependencies
-
-```bash
-# Install Electron app dependencies
-npm install
-
-# Install Reports dashboard dependencies
-cd time-tracker-reports
-npm install
-cd ..
-```
-
-### 3. Set Up Supabase
-
-1. Create a new project in [Supabase Dashboard](https://app.supabase.com)
-2. Note down your project URL and anon key
-3. Create a `.env` file in the root directory:
-
-```env
-SUPABASE_URL=your_supabase_project_url
-SUPABASE_ANON_KEY=your_supabase_anon_key
-REPORTS_URL=http://localhost:3000/reports
-```
-
-### 4. Set Up Database
-
-Run the SQL migrations in your Supabase SQL Editor in this order:
-
-1. **Base Schema**: `database-schema.sql`
-2. **User Categories**: `database-migration-category.sql`
-3. **Projects**: `database-migration-projects.sql`
-4. **Idle Time**: `database-migration-idle-time.sql`
-5. **Break Count**: `database-migration-break-count.sql`
-6. **Project Assignments**: `database-migration-project-assignments.sql`
-7. **Client-Freelancer Assignments**: `database-migration-client-freelancer-assignments.sql`
-8. **Screenshot Indexes**: `database-migration-screenshot-indexes.sql`
-
-> **Note**: See [Database Setup](#database-setup) section for detailed instructions.
-
-## 🗄️ Database Setup
-
-### Quick Setup
-
-Run all migration files in your Supabase SQL Editor in the order listed above. Each migration file includes comments explaining what it does.
-
-### Manual Setup
-
-If you prefer to set up manually, refer to `database-schema.sql` for the base schema and run each migration file individually.
-
-### Key Tables
-
-- **users**: User accounts with email, display name, and category
-- **projects**: Projects created by clients
-- **project_assignments**: Links projects to freelancers
-- **client_freelancer_assignments**: Tracks which freelancers work for which clients
-- **time_sessions**: Work sessions with active, idle, and break durations
-- **screenshots**: Periodic screenshots captured during work
-
-## ⚙️ Configuration
-
-### Environment Variables
-
-Create a `.env` file in the root directory:
-
-```env
-# Supabase Configuration
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your-anon-key-here
-
-# Reports Dashboard URL (for opening reports in browser)
-REPORTS_URL=http://localhost:3000/reports
-```
-
-### Reports Dashboard Configuration
-
-For production, update the `REPORTS_URL` to point to your deployed Next.js app:
-
-```env
-REPORTS_URL=https://your-reports-domain.com/reports
-```
-
-## 💻 Usage
-
-### Running the Desktop App
-
-#### Development Mode
-
-```bash
-npm run dev
-```
-
-This will start the Electron app with DevTools open for debugging.
-
-#### Production Mode
-
-```bash
-npm start
-```
-
-### Running the Reports Dashboard
-
-```bash
-cd time-tracker-reports
-npm run dev
-```
-
-The dashboard will be available at `http://localhost:3000`
-
-### Building for Production
-
-#### Desktop App
-
-```bash
-npm run build
-```
-
-This creates distributable packages in the `dist` folder.
-
-#### Reports Dashboard
-
-```bash
-cd time-tracker-reports
-npm run build
-npm start
-```
-
-### How to Use
-
-#### For Freelancers
-
-1. **Login**: Enter your email and select "Freelancer" category
-2. **Set Display Name**: Enter your name (first time only)
-3. **Clock In**: 
-   - Click "Clock In" from the home screen
-   - Select a project from the dropdown
-   - Click "Start Work Session"
-4. **Work**: The timer automatically tracks your active time
-5. **Take Breaks**: Click "Take Break" when needed
-6. **Clock Out**: Click "Clock Out" to end your session
-7. **View Reports**: Click "View Reports" to see your monthly statistics
-
-#### For Clients
-
-1. **Login**: Enter your email and select "Client" category
-2. **Set Display Name**: Enter your name (first time only)
-3. **Manage Projects**:
-   - Click "Projects" from the home screen
-   - Click "Add Project" to create new projects
-   - Click "Assign to Freelancer" to assign projects
-4. **View Reports**:
-   - Click "View Reports" from the home screen
-   - Select a freelancer from the dropdown
-   - View their monthly reports, time distribution, and screenshots
-
-## 📁 Project Structure
-
-```
-Supatimetracker/
-├── main.js                          # Electron main process
-├── preload.js                       # Preload script for secure IPC
-├── package.json                     # App dependencies and scripts
-├── SupagigsLogo.png                 # App icon
-│
-├── renderer/                        # Renderer process (UI)
-│   ├── screens/                     # HTML screens
-│   │   ├── login.html              # Login screen
-│   │   ├── displayName.html        # Display name setup
-│   │   ├── home.html               # Home screen
-│   │   ├── clockIn.html            # Clock in screen
-│   │   ├── tracker.html            # Active timer screen
-│   │   ├── projects.html           # Projects management (Clients)
-│   │   └── report.html             # Reports screen (Electron)
-│   │
-│   ├── scripts/                     # JavaScript logic
-│   │   ├── supabaseClient.js       # Supabase initialization
-│   │   ├── utils.js                 # Utility functions
-│   │   ├── login.js                 # Login logic
-│   │   ├── home.js                  # Home screen logic
-│   │   ├── clockIn.js               # Clock in logic
-│   │   ├── tracker.js               # Timer tracking logic
-│   │   ├── projects.js              # Projects management
-│   │   ├── report.js                # Reports logic
-│   │   └── idleTracker.js           # Idle detection
-│   │
-│   └── styles/                      # CSS styles
-│       └── common.css               # Common styles
-│
-├── time-tracker-reports/            # Next.js Reports Dashboard
-│   ├── src/
-│   │   ├── app/
-│   │   │   └── reports/
-│   │   │       └── [userEmail]/    # Dynamic reports page
-│   │   ├── components/              # React components
-│   │   │   ├── SummaryCard.tsx
-│   │   │   ├── WeeklyActivityChart.tsx
-│   │   │   ├── ScreenshotSelector.tsx
-│   │   │   └── FreelancerSelector.tsx
-│   │   └── lib/
-│   │       └── supabaseServer.ts    # Supabase server client
-│   └── package.json
-│
-├── database-schema.sql              # Base database schema
-├── database-migration-*.sql         # Database migration files
-└── README.md                        # This file
-```
-
-## 📊 Reports Dashboard
-
-The Reports Dashboard is a Next.js web application that provides detailed analytics and visualizations.
-
-### Features
-
-- **Monthly Reports**: View last 30 days of activity
-- **Time Breakdown**: Total work time, average daily work, idle percentage
-- **Project Analytics**: Time distribution across projects
-- **Daily Activity Charts**: Bar charts showing daily active and idle hours
-- **Project Charts**: Visual breakdown of time spent per project
-- **Screenshot Gallery**: View screenshots from work sessions
-- **Freelancer Selection**: Clients can select any freelancer to view their reports
-
-### Accessing Reports
-
-1. **From Desktop App**: Click "View Reports" button
-2. **Direct URL**: Navigate to `http://localhost:3000/reports/[userEmail]`
-3. **For Clients**: Use the dropdown to select a freelancer
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-#### App Won't Start
-
-- Ensure Node.js (v16+) is installed: `node --version`
-- Install dependencies: `npm install`
-- Check for error messages in the terminal
-
-#### Can't Connect to Supabase
-
-- Verify `.env` file exists with correct credentials
-- Check internet connection
-- Verify Supabase project is active
-- Ensure all database tables are created
-
-#### Timer Not Working
-
-- Check browser console for errors (Ctrl+Shift+I or Cmd+Option+I)
-- Verify you've selected a project (for freelancers)
-- Ensure you're logged in with correct user category
-
-#### Reports Not Loading
-
-- Ensure Reports Dashboard is running: `cd time-tracker-reports && npm run dev`
-- Check `REPORTS_URL` in `.env` matches the dashboard URL
-- Verify user email is correctly encoded in the URL
-
-#### Database Errors
-
-- Run all migration files in order
-- Check Supabase SQL Editor for error messages
-- Verify Row Level Security (RLS) policies are set correctly
-- Ensure `client_freelancer_assignments` table exists for client-freelancer relationships
-
-#### Screenshots Not Capturing
-
-- Check system permissions for screen capture
-- Verify `screenshots` table exists in database
-- Check console for permission errors
-
-### Development Tips
-
-- **Enable DevTools**: Use `npm run dev` for automatic DevTools
-- **Check Console**: Most errors are logged to the console
-- **Database Logs**: Check Supabase dashboard for query errors
-- **Network Tab**: Use browser DevTools Network tab to debug API calls
-
-## 🔐 Security Notes
-
-- The app uses Supabase's Row Level Security (RLS) policies
-- All API keys are stored in `.env` (never commit this file)
-- Screenshots are stored as base64 in the database
-- User authentication is handled through Supabase
-
-## 📝 Migration Guide
-
-If you're upgrading from an older version:
-
-1. Backup your database
-2. Run new migration files in order
-3. Update your `.env` file if needed
-4. Restart the application
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes
-4. Test thoroughly
-5. Commit your changes: `git commit -m 'Add feature'`
-6. Push to the branch: `git push origin feature-name`
-7. Submit a pull request
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🆘 Support
-
-If you encounter issues:
-
-1. Check the [Troubleshooting](#troubleshooting) section
-2. Review the database migration files for setup issues
-3. Check Supabase dashboard for database errors
-4. Open an issue on GitHub with:
-   - Error messages
-   - Steps to reproduce
-   - Your environment (OS, Node version)
-
-## 🎯 Roadmap
-
-Future enhancements may include:
-
-- [ ] Team management features
-- [ ] Invoice generation
-- [ ] Export reports to PDF/CSV
-- [ ] Mobile app companion
-- [ ] Advanced analytics and insights
-- [ ] Integration with project management tools
+Modern time tracking for client/freelancer teams. The desktop app (Electron) records sessions, idle time, breaks, and screenshots while the companion web portal (Next.js) provides deep reports. Both surfaces stay in sync through Supabase.
 
 ---
 
-Built with ❤️ for Supagigs
+## Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Quick Start](#quick-start)
+- [Environment Variables](#environment-variables)
+- [Database Migrations](#database-migrations)
+- [Running Locally](#running-locally)
+- [Building for Release](#building-for-release)
+- [Cross-App Session Sync](#cross-app-session-sync)
+- [Project Structure](#project-structure)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Overview
+
+SupaTimeTracker streamlines how distributed teams track billable work. Freelancers clock in from the desktop app, which automatically monitors activity and uploads screenshots to Supabase Storage. Clients jump into the reports portal to review progress, filter by project, or inspect timecards. Logout is synchronized between the desktop and web experiences so accounts cannot remain active in one surface while logged out of the other.
+
+---
+
+## Features
+
+### Freelancers
+- One-click clock in/out with automatic project association.
+- Idle detection and break tracking ensure only focused time is captured.
+- Background screenshots (configurable interval) stored in Supabase Storage.
+- Local UI showing today’s stats, session history, and active project list.
+- View tailored overview, timesheet, reports, and screenshots inside the web portal.
+
+### Clients
+- Manage projects, assign freelancers, and review team status from the desktop app.
+- Unified reports navigation (Overview, Projects, Freelancers, Reports, Timesheet, Screenshots) in the web portal.
+- Team dashboards summarizing active/offline freelancers and total hours.
+- Per-session screenshots, filtered timesheets, and project performance metrics.
+
+### Shared
+- Supabase authentication (email magic link).
+- Local session persistence with secure preload IPC bridges.
+- Cross-app logout: ending a session in the web portal forces the desktop app to log out and vice versa.
+- Configurable reports URL—desktop app opens the portal after verifying credentials.
+
+---
+
+## Tech Stack
+
+| Layer            | Technology                        |
+| ---------------- | --------------------------------- |
+| Desktop UI       | Electron 38, vanilla HTML/CSS/JS  |
+| Web portal       | Next.js 16, React 19, Tailwind CSS|
+| Data backend     | Supabase (PostgreSQL + Storage)   |
+| Charts           | Chart.js via `react-chartjs-2`    |
+| IPC/Utilities    | Secure preload exposing minimal APIs|
+
+---
+
+## Quick Start
+
+```bash
+# clone + install dependencies
+git clone https://github.com/supagigs/Supatimetracker.git
+cd Supatimetracker
+npm install
+
+# install reports portal dependencies
+cd time-tracker-reports
+npm install
+cd ..
+
+# configure environment variables
+copy .env.example .env          # create your file; see ENV_SETUP.md for values
+code .env                       # edit with your Supabase credentials
+
+# run both apps in development
+npm run dev                     # starts Electron in dev mode
+cd time-tracker-reports
+npm run dev                     # starts Next.js on http://localhost:3000
+```
+
+> **Important:** ensure all database migrations have been executed in Supabase before testing (see below).
+
+---
+
+## Environment Variables
+
+See `ENV_SETUP.md` for full details. At minimum the desktop app requires:
+
+```
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=   # recommended for screenshot uploads
+SUPABASE_STORAGE_BUCKET=screenshots
+REPORTS_URL=http://localhost:3000/reports
+```
+
+The web portal expects matching values in `time-tracker-reports/.env.local` with `NEXT_PUBLIC_` prefixes. The service role key should stay server-side only.
+
+---
+
+## Database Migrations
+
+Run the SQL files inside Supabase in this order:
+
+1. `database-schema.sql`
+2. `database-migration-category.sql`
+3. `database-migration-projects.sql`
+4. `database-migration-project-assignments.sql`
+5. `database-migration-break-count.sql`
+6. `database-migration-idle-time.sql`
+7. `database-migration-client-freelancer-assignments.sql`
+8. `database-migration-screenshot-indexes.sql`
+9. `database-migration-user-sessions.sql`
+
+Optional clean-up or patch migrations (e.g. `database-migration-projects-fix-rls.sql`, `database-migration-projects-simple-fix.sql`) can be run as needed. The schema expects a Supabase Storage bucket named `screenshots`.
+
+---
+
+## Running Locally
+
+### Desktop App
+- `npm run dev` – launches Electron with DevTools and hot reload.
+- `npm start` – runs the production build in-place (useful after `npm run build`).
+
+### Reports Portal
+```bash
+cd time-tracker-reports
+npm run dev
+```
+Navigate to `http://localhost:3000`. The Electron app’s “View Reports” button should open the same URL if your `.env` uses the default `REPORTS_URL`.
+
+---
+
+## Building for Release
+
+See `BUILD_INSTRUCTIONS.md` for step-by-step guidance. In summary:
+
+1. Ensure `.env` contains production Supabase keys.
+2. Update branding assets (`SupagigsLogo.png/.ico`) or point `package.json` to your custom files.
+3. Delete `dist/` if it exists.
+4. Run `npm run build`.
+5. Distribute `dist/Time Tracker Setup <version>.exe`.
+
+The reports portal can be deployed independently using standard Next.js hosting workflows (Vercel, Netlify, Azure, etc.).
+
+---
+
+## Cross-App Session Sync
+
+A `user_sessions` table tracks whether each user is logged into the desktop app and web portal. When a logout occurs anywhere:
+
+- The initiating surface updates `user_sessions` (`app_logged_in`, `web_logged_in`).
+- Supabase realtime notifies the other surface.
+- Electron listens through `SessionSync` and forces a local logout without prompting the user.
+
+For this to work, both apps must share the same Supabase project and environment variables, and the `database-migration-user-sessions.sql` migration must be applied.
+
+---
+
+## Project Structure
+
+```
+Supatimetracker/
+├── main.js, preload.js                # Electron main process + secure bridge
+├── renderer/                          # HTML/CSS/JS for desktop screens
+│   ├── screens/                       # login, home, tracker, projects, etc.
+│   ├── scripts/                       # front-end logic (idle tracking, Supabase)
+│   └── styles/                        # global CSS
+├── time-tracker-reports/              # Next.js reports portal (App Router)
+│   └── src/app/reports/[userEmail]/   # Role-aware dashboards
+├── database-migration-*.sql           # Supabase migrations
+├── scripts/                           # Helper scripts (symlink fix, clean dist)
+├── docs (this README + supporting guides)
+└── package.json                       # Electron build config
+```
+
+---
+
+## Troubleshooting
+
+| Issue | Fix |
+| ----- | --- |
+| Red banner: “Missing Supabase environment variables” | Ensure `.env` exists with required keys, rebuild packaged apps. |
+| `Cannot create symbolic link` during build | Enable Windows Developer Mode or run an elevated PowerShell session. See `SYMLINK_FIX.md`. |
+| Screenshots not appearing | Confirm `SUPABASE_SERVICE_ROLE_KEY` is set, bucket exists, and migrations include user session + screenshot indexes. Check the Electron console (Ctrl+Shift+I) for upload errors. |
+| Reports navigation missing items | Make sure `client_freelancer_assignments` and `user_sessions` migrations ran and the user has assignments in Supabase. |
+| Desktop/web logout mismatch | Verify both apps point to the same Supabase project and realtime subscription succeeds (CSP allows `wss://*.supabase.co`). |
+
+For additional reference see:
+- `ENV_SETUP.md`
+- `BUILD_INSTRUCTIONS.md`
+- `CLIENT_FREELANCER_ASSIGNMENTS_README.md`
+- `RUN_AS_ADMIN.md`
+- `SYMLINK_FIX.md`
+
+Happy tracking! ⏱️

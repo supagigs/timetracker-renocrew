@@ -1,153 +1,68 @@
-# Time Tracker - Simplified Productivity App
+# SupaTimeTracker – Quick Overview
 
-A clean, modern time tracking application built with Electron and Supabase. Track your work time, breaks, and productivity with automatic screenshot capture.
+Use this document as a rapid briefing for stakeholders who need the elevator pitch, feature checklist, and setup snapshot without reading the full README.
 
-## Features ✨
+---
 
-- **Simple Login**: Email-based authentication
-- **Time Tracking**: Start/stop work sessions with break management
-- **Activity Monitoring**: Automatic screenshot capture during active work
-- **Visual Reports**: Pie charts and bar graphs showing your productivity
-- **Daily Statistics**: Track total time, breaks taken, and session duration
-- **Weekly Reports**: View your productivity trends over the last 7 days
+## What It Does
+- Time tracking desktop app (Electron) + analytics portal (Next.js).
+- Designed for teams where **clients** assign work to **freelancers**.
+- Tracks active work, breaks, idle time, and captures periodic screenshots.
+- Stores all data in Supabase (PostgreSQL + Storage) with Row Level Security.
+- Syncs logout state between desktop and web so a user is never accidentally left signed in.
 
-## Application Flow 🔄
+---
 
-1. **Login Page**: Enter your email to sign in or create a new account
-2. **Display Name** (New Users Only): Set your display name for personalization
-3. **Home Page**: Welcome screen with Clock In and Reports buttons
-4. **Time Tracker**: Active session management with timer controls
-5. **Reports Page**: View weekly productivity charts and statistics
+## Feature Highlights
 
-## Database Schema 📊
+| Area | Capabilities |
+| ---- | ------------ |
+| **Freelancers** | Clock in/out, select projects, automatic idle detection, break tracking, background screenshots, personal dashboards in the web portal. |
+| **Clients** | Manage projects, assign freelancers, see team status, review timesheets, reports, and screenshot gallery. |
+| **Shared** | Email-based auth, Supabase-powered storage, configurable reports URL, polished UI with responsive layouts. |
 
-The application uses three main tables:
+---
 
-- **users**: Store user email and display name
-- **time_sessions**: Track work sessions with start/end times and durations
-- **screenshots**: Store base64-encoded screenshots captured during active work
+## Architecture Snapshot
+- **Electron 38** front-end for timers and project administration.
+- **Next.js 16 (App Router)** web portal for analytics and self-service reporting.
+- **Supabase** for authentication, Postgres tables, realtime notifications, and screenshot storage.
+- **Chart.js** for visualisations; **canvas/sharp** pipeline to compress screenshots before upload.
 
-## Setup Instructions 🚀
+---
 
-### 1. Database Setup
+## Essential Setup
+1. Run database migrations (see `README.md` for order).
+2. Create `.env` in the root with Supabase credentials:
+   ```env
+   SUPABASE_URL=https://<project>.supabase.co
+   SUPABASE_ANON_KEY=<anon>
+   SUPABASE_SERVICE_ROLE_KEY=<service-role>
+   SUPABASE_STORAGE_BUCKET=screenshots
+   REPORTS_URL=http://localhost:3000/reports
+   ```
+3. Provide the same values to the web portal via `time-tracker-reports/.env.local` (with `NEXT_PUBLIC_` prefixes).
+4. Install dependencies and run:
+   ```bash
+   npm install
+   npm run dev            # desktop app
+   cd time-tracker-reports
+   npm run dev            # reports portal
+   ```
 
-Run the SQL commands in `database-schema.sql` in your Supabase SQL editor:
+---
 
-```sql
--- This will create the necessary tables and RLS policies
--- See database-schema.sql for complete setup
-```
+## Build & Distribution
+- `npm run build` generates `dist/Time Tracker Setup <version>.exe`.
+- Icons are defined in `package.json` (`SupagigsLogo.png`/`.ico` by default). Swap files or update the paths as needed.
+- `.env` is bundled automatically so make sure production keys are present before building.
 
-### 2. Environment Variables
+---
 
-Create a `.env` file in the root directory:
+## Troubleshooting at a Glance
+- **Missing Supabase variables** → check `.env`, rebuild if packaged.
+- **Symlink error** → enable Windows Developer Mode or run PowerShell as admin (`SYMLINK_FIX.md`).
+- **Screenshots not uploading** → confirm service role key and storage bucket. The Electron console logs upload errors.
+- **Logout not syncing** → ensure the `user_sessions` migration ran and CSP allows `wss://*.supabase.co` in all HTML screens.
 
-```env
-SUPABASE_URL=your_supabase_url
-SUPABASE_ANON_KEY=your_supabase_anon_key
-```
-
-### 3. Install Dependencies
-
-```bash
-npm install
-```
-
-### 4. Run the Application
-
-```bash
-npm start
-```
-
-## Usage Guide 📱
-
-### Starting a Work Session
-
-1. Login with your email
-2. Click "Clock In" on the home page
-3. Click "Start" to begin tracking time
-4. Use "Take Break" to pause tracking
-5. Click "Clock Out" to end your session
-
-### Viewing Reports
-
-1. Click "View Reports" from any page
-2. See your last 7 days of productivity
-3. View total hours, average daily hours, and most productive day
-
-### Screenshot Capture
-
-- Screenshots are automatically captured every 30 seconds during active work
-- Screenshots are paused during breaks
-- All screenshots are stored securely in the database
-
-## Technical Details 🔧
-
-### Frontend
-- **Electron**: Desktop application framework
-- **HTML/CSS/JavaScript**: Modern, responsive UI
-- **Chart.js**: For data visualization
-
-### Backend
-- **Supabase**: Database and authentication
-- **PostgreSQL**: Data storage with RLS policies
-
-### Security
-- Row Level Security (RLS) enabled on all tables
-- User data isolation
-- Secure screenshot storage
-
-## File Structure 📁
-
-```
-time-tracker-new/
-├── main.js                 # Electron main process
-├── preload.js             # Secure API bridge
-├── database-schema.sql    # Database setup
-├── renderer/
-│   ├── screens/           # HTML pages
-│   │   ├── login.html
-│   │   ├── displayName.html
-│   │   ├── home.html
-│   │   ├── tracker.html
-│   │   └── report.html
-│   ├── scripts/           # JavaScript files
-│   │   ├── login.js
-│   │   ├── displayName.js
-│   │   ├── home.js
-│   │   ├── tracker.js
-│   │   ├── report.js
-│   │   ├── supabaseClient.js
-│   │   └── utils.js
-│   └── styles/
-│       └── common.css     # Styling
-└── package.json
-```
-
-## Troubleshooting 🔍
-
-### Common Issues
-
-1. **Database Connection Error**: Check your Supabase URL and API key
-2. **Screenshot Capture Not Working**: Ensure proper permissions are granted
-3. **Charts Not Displaying**: Check if Chart.js is loading correctly
-
-### Debug Mode
-
-Open Developer Tools (F12) to view console logs and debug information.
-
-## Contributing 🤝
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## License 📄
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support 💬
-
-For support or questions, please open an issue on GitHub.
+For complete documentation see `README.md`, `BUILD_INSTRUCTIONS.md`, and `ENV_SETUP.md`.

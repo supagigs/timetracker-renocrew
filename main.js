@@ -1,6 +1,24 @@
 const { app, BrowserWindow, session, ipcMain, desktopCapturer, Notification, nativeImage, shell, dialog } = require('electron');
 const path = require('path');
-require('dotenv').config(); // ✅ Load .env here
+const fs = require('fs');
+const fsp = fs.promises;
+
+const envPath = app?.isPackaged
+  ? path.join(process.resourcesPath, '.env')
+  : path.join(__dirname, '.env');
+require('dotenv').config({ path: envPath });
+
+const resolveScreenshotsDir = (ensure = true) => {
+  const baseDir = app.isPackaged
+    ? path.join(app.getPath('userData'), 'screenshots')
+    : path.join(__dirname, 'screenshots');
+
+  if (ensure && !fs.existsSync(baseDir)) {
+    fs.mkdirSync(baseDir, { recursive: true });
+  }
+
+  return baseDir;
+};
 
 // Silence DevTools Autofill protocol noise
 try {
@@ -58,10 +76,7 @@ function createWindow() {
 // Get local screenshots handler
 ipcMain.handle('get-local-screenshots', async (event, email, startTime, endTime) => {
   try {
-    const fs = require('fs');
-    const path = require('path');
-    
-    const screenshotsDir = path.join(__dirname, 'screenshots');
+    const screenshotsDir = resolveScreenshotsDir(false);
     if (!fs.existsSync(screenshotsDir)) {
       return [];
     }
@@ -278,33 +293,6 @@ ipcMain.handle('open-picture-in-picture', async (event, imageSrc) => {
   }
 });
 
-// Screenshot save handler
-ipcMain.handle('save-screenshot', async (event, screenshotData, filename) => {
-  try {
-    const fs = require('fs');
-    const fsp = require('fs').promises;
-    const path = require('path');
-    
-    // Ensure screenshots directory exists
-    const screenshotsDir = path.join(__dirname, 'screenshots');
-    if (!fs.existsSync(screenshotsDir)) {
-      fs.mkdirSync(screenshotsDir, { recursive: true });
-    }
-    
-    // Convert base64 data URL to buffer
-    const base64Data = screenshotData.split(',')[1];
-    const filePath = path.join(screenshotsDir, filename);
-    
-    await fsp.writeFile(filePath, base64Data, 'base64');
-    
-    console.log('Screenshot saved to:', filePath);
-    return filePath;
-  } catch (error) {
-    console.error('Error saving screenshot file:', error);
-    throw error;
-  }
-});
-
 // Screenshot capture handler (for immediate screenshots)
 ipcMain.handle('capture-screen', async () => {
   try {
@@ -334,8 +322,6 @@ let isBackgroundTickRunning = false; // prevent overlapping ticks
 let supabaseClientInstance = null; // reuse client to avoid re-initialization overhead
 let currentUserEmail = null;
 let currentSessionId = null;
-let uploadQueue = [];
-const MAX_BATCH_SIZE = 15;
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'screenshots';
 
 function getSupabaseClient() {
@@ -407,63 +393,46 @@ async function compressToJpegBufferFromDataUrl(dataUrl) {
     .toBuffer();
 }
 
-async function flushUploadQueue(force = false) {
-  try {
-    if (uploadQueue.length === 0) return;
-    if (!force && uploadQueue.length < MAX_BATCH_SIZE) return;
-
-    const supabase = getSupabaseClient();
-    if (!supabase) {
-      console.warn('Supabase client unavailable; skipping upload batch');
-      return;
-    }
-
-    const batch = uploadQueue.splice(0, uploadQueue.length);
-    console.log(`Uploading batch of ${batch.length} screenshots to storage...`);
-
-    // Upload all files to storage
-    const uploadResults = await Promise.all(batch.map(async (item) => {
-      const path = `${item.userEmail}/${item.sessionId}/${item.filename}`;
-      const { error } = await supabase.storage
-        .from(STORAGE_BUCKET)
-        .upload(path, item.buffer, { contentType: 'image/jpeg', upsert: true });
-      if (error) {
-        console.error('Storage upload error:', error);
-        return { ok: false };
-      }
-      const { data: pub } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
-      return { ok: true, url: pub.publicUrl, captured_at: item.timestamp, session_id: item.sessionId, user_email: item.userEmail };
-    }));
-
-    const rows = uploadResults.filter(r => r.ok).map(r => ({
-      user_email: r.user_email,
-      session_id: r.session_id,
-      screenshot_data: r.url,
-      captured_at: r.captured_at
-    }));
-
-    if (rows.length > 0) {
-      const { error: dbErr } = await supabase.from('screenshots').insert(rows);
-      if (dbErr) {
-        console.error('Error inserting screenshot URLs:', dbErr);
-      } else {
-        console.log(`Inserted ${rows.length} screenshot URLs into database`);
-      }
-    }
-  } catch (e) {
-    console.error('Error flushing upload queue:', e);
-  }
-}
-
 // Allow renderer to queue ad-hoc screenshots for upload (e.g., manual capture)
 ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp }) => {
   try {
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
     const jpegFilename = `${userEmail.replace('@', '_at_').replace('.', '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}.jpg`;
-    uploadQueue.push({ userEmail, sessionId, filename: jpegFilename, timestamp, buffer: jpegBuffer });
-    // Try flushing opportunistically
-    flushUploadQueue(false);
-    return { ok: true };
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      throw new Error('Supabase client unavailable');
+    }
+
+    const storagePath = `${userEmail}/${sessionId}/${jpegFilename}`;
+    const { error: storageError } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(storagePath, jpegBuffer, { contentType: 'image/jpeg', upsert: true });
+
+    if (storageError) {
+      throw storageError;
+    }
+
+    const publicUrlRes = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
+    const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
+
+    if (!publicUrl) {
+      throw new Error('Unable to get storage public URL');
+    }
+
+    const { error: dbErr } = await supabase.from('screenshots').insert({
+      user_email: userEmail,
+      session_id: sessionId,
+      screenshot_data: publicUrl,
+      captured_at: timestamp,
+      uploaded_at: new Date().toISOString(),
+      source: 'manual',
+    });
+
+    if (dbErr) {
+      throw dbErr;
+    }
+
+    return { ok: true, storagePath, url: publicUrl };
   } catch (e) {
     console.error('queue-screenshot-upload error:', e);
     return { ok: false, error: e?.message || 'queue error' };
@@ -515,80 +484,56 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           console.log('No idle indicator (user is active)');
         }
         
-        // Save screenshot locally and queue compressed upload to storage
         const timestamp = new Date().toISOString();
-        const filenamePng = `screenshot_${currentUserEmail.replace('@', '_at_').replace('.', '_')}_${currentSessionId}_${timestamp.replace(/[:.]/g, '-')}.png`;
-        
-        const fs = require('fs');
-        const fsp = require('fs').promises;
-        const path = require('path');
-        const screenshotsDir = path.join(__dirname, 'screenshots');
-        if (!fs.existsSync(screenshotsDir)) {
-          fs.mkdirSync(screenshotsDir, { recursive: true });
-        }
-        
-        const base64Data = screenshotData.split(',')[1];
-        const filePath = path.join(screenshotsDir, filenamePng);
-        await fsp.writeFile(filePath, base64Data, 'base64');
-        
-        console.log('Background screenshot saved:', filePath);
 
-        // Queue compressed upload (as JPEG) to Supabase Storage
-        try {
-          const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
-          const jpegFilename = `${currentUserEmail.replace('@', '_at_').replace('.', '_')}_${currentSessionId}_${timestamp.replace(/[:.]/g, '-')}.jpg`;
-          uploadQueue.push({
-            userEmail: currentUserEmail,
-            sessionId: currentSessionId,
-            filename: jpegFilename,
-            timestamp,
-            buffer: jpegBuffer
-          });
-          // attempt flush if threshold met
-          flushUploadQueue(false);
-        } catch (qe) {
-          console.error('Queue compress/upload error:', qe);
+        const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
+        const jpegFilename = `${currentUserEmail.replace('@', '_at_').replace('.', '_')}_${currentSessionId}_${timestamp.replace(/[:.]/g, '-')}.jpg`;
+        const storagePath = `${currentUserEmail}/${currentSessionId}/${jpegFilename}`;
+
+        const supabase = getSupabaseClient();
+        if (!supabase) {
+          throw new Error('Supabase client unavailable');
         }
-        
-        // Try to save to Supabase (optional, don't fail if it doesn't work)
-        try {
-          const supabase = getSupabaseClient();
-          if (supabase) {
-          
-            // Do not insert raw base64 anymore to reduce DB size. We'll insert URL after storage upload in flushUploadQueue()
-          
-            console.log('Background screenshot saved to database');
-          }
-        } catch (dbError) {
-          console.log('Background screenshot saved locally only:', dbError.message);
+
+        const { error: storageError } = await supabase.storage
+          .from(STORAGE_BUCKET)
+          .upload(storagePath, jpegBuffer, { contentType: 'image/jpeg', upsert: true });
+
+        if (storageError) {
+          throw storageError;
         }
-        
-        // Send notification to renderer
+
+        const publicUrlRes = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
+        const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
+
+        if (!publicUrl) {
+          throw new Error('Unable to get storage public URL');
+        }
+
+        const { error: dbErr } = await supabase.from('screenshots').insert({
+          user_email: currentUserEmail,
+          session_id: currentSessionId,
+          screenshot_data: publicUrl,
+          captured_at: timestamp,
+          uploaded_at: new Date().toISOString(),
+          source: 'auto',
+        });
+
+        if (dbErr) {
+          throw dbErr;
+        }
+
         const { BrowserWindow } = require('electron');
-        const allWindows = BrowserWindow.getAllWindows();
-        allWindows.forEach(window => {
+        BrowserWindow.getAllWindows().forEach((window) => {
           window.webContents.send('screenshot-captured', {
-            timestamp: timestamp,
-            filename: filenamePng,
-            filePath: filePath
+            timestamp,
+            previewDataUrl: screenshotData,
+            storageUrl: publicUrl,
+            sessionId: currentSessionId,
           });
         });
-        
-        // Show native system notification (appears even when app is minimized/background)
-        const timeString = new Date(timestamp).toLocaleTimeString('en-US', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit'
-        });
-        
-        if (Notification.isSupported()) {
-          new Notification({
-            title: 'Time Tracker - Screenshot Captured',
-            body: `Screenshot saved at ${timeString}`,
-            // Avoid embedding large image data as icon to reduce overhead
-            silent: true
-          }).show();
-        }
+
+        console.log('Background screenshot uploaded and recorded:', storagePath);
       }
     } catch (error) {
       console.error('Error in background screenshot capture:', error);
@@ -613,8 +558,6 @@ ipcMain.handle('stop-background-screenshots', () => {
     backgroundScreenshotInterval = null;
     console.log('Screenshot interval cleared');
   }
-  // Flush any remaining uploads when stopping capture
-  flushUploadQueue(true);
   
   return true;
 });
@@ -766,3 +709,4 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+

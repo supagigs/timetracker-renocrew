@@ -7,12 +7,10 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "prebuild": "node scripts/convert-icon-to-ico.js && node scripts/clean-dist.js",
     "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
     "dist": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --publish=never",
     "pack": "electron-builder --dir",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "convert-icon": "node scripts/convert-icon-to-ico.js"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
     "time-tracker",
@@ -41,7 +39,7 @@
     "cross-env": "^10.1.0",
     "electron": "^38.3.0",
     "electron-builder": "^24.6.4",
-    "to-ico": "^1.1.5"
+    "to-ico": "^1.0.1"
   },
   "build": {
     "appId": "com.yourcompany.time-tracker",
@@ -66,6 +64,9 @@
         ]
       }
     ],
+    "extraResources": [
+      ".env"
+    ],
     "asar": true,
     "compression": "maximum",
     "mac": {
@@ -81,7 +82,7 @@
           ]
         }
       ],
-      "icon": "SupagigsLogo.ico",
+      "icon": "SupagigsLogo.png",
       "sign": null,
       "signingHashAlgorithms": null,
       "certificateFile": null,

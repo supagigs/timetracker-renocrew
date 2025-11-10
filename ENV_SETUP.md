@@ -1,106 +1,107 @@
-# Environment Variables Setup Guide
+# Environment Configuration Guide
 
-## Problem
+Both the Electron desktop app and the Next.js reports portal rely on Supabase. This guide explains which environment variables you need, where to place them, and how to troubleshoot common issues.
 
-If you're seeing these errors:
-- `Supabase environment variables not found`
-- `SUPABASE_URL: Missing`
-- `SUPABASE_ANON_KEY: Missing`
-- `supabase.from is not a function`
+---
 
-This means your `.env` file is missing or not configured correctly.
+## 1. Required Variables (Electron App)
 
-## Solution
-
-### Step 1: Create a `.env` file
-
-Create a file named `.env` in the root directory of your project (same folder as `package.json`).
-
-### Step 2: Add your Supabase credentials
-
-Open the `.env` file and add the following:
+Create a `.env` file in the project root (same folder as `package.json`). The build process bundles this file into the packaged app.
 
 ```env
-SUPABASE_URL=https://your-project-id.supabase.co
-SUPABASE_ANON_KEY=your-anon-key-here
-```
+# Supabase project credentials
+SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_ANON_KEY=<public-anon-key>
 
-### Step 3: Get your Supabase credentials
+# Optional but recommended – used by the main process for server-side inserts
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 
-1. Go to [Supabase Dashboard](https://app.supabase.com)
-2. Select your project (or create a new one)
-3. Go to **Settings** → **API**
-4. Copy the following:
-   - **Project URL** → This is your `SUPABASE_URL`
-   - **anon/public key** → This is your `SUPABASE_ANON_KEY`
+# Storage bucket for screenshots (defaults to "screenshots" if omitted)
+SUPABASE_STORAGE_BUCKET=screenshots
 
-### Step 4: Example `.env` file
-
-```env
-# Supabase Configuration
-SUPABASE_URL=https://abcdefghijklmnop.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFiY2RlZmdoaWprbG1ub3AiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTYxNjIzOTAyMiwiZXhwIjoxOTMxODE1MDIyfQ.example
-
-# Optional: Reports URL (if you have a reports dashboard)
+# Reports portal URL (used when the desktop app opens "View Reports")
 REPORTS_URL=http://localhost:3000/reports
 ```
 
-### Step 5: Restart the application
+### Notes
+- The **service role key** lets the app upload screenshots directly to Supabase Storage and insert metadata even when Row Level Security is strict. If you omit it, the app falls back to the anon key; uploads may fail unless policies allow anon access.
+- Keep the `.env` file out of version control. It is already listed in `.gitignore`.
+- After editing `.env`, restart the Electron app. When packaged, rebuild with `npm run build` so the updated file is included.
 
-After creating/updating the `.env` file:
+---
 
-1. **Close the Electron app completely** (if it's running)
-2. **Restart the app**:
-   ```bash
-   npm start
-   ```
-   or
-   ```bash
-   npm run dev
-   ```
+## 2. Required Variables (Reports Portal)
 
-## Important Notes
+Inside `time-tracker-reports`, create `.env.local` (Next.js automatically loads this file). Prefix values with `NEXT_PUBLIC_` so they are available on the client.
 
-- ⚠️ **Never commit the `.env` file to Git** - it contains sensitive credentials
-- ✅ The `.env` file should be in the root directory (same folder as `package.json`)
-- ✅ Make sure there are no spaces around the `=` sign
-- ✅ Don't use quotes around the values (unless the value itself contains spaces)
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<public-anon-key>
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>   # used by server components only
+SESSION_STORAGE_BUCKET=screenshots             # keep in sync with the desktop app
+```
 
-## Troubleshooting
+If your reports portal runs on a different domain than the desktop app expects, update the `REPORTS_URL` in the desktop `.env` to match the deployed URL (for example `https://reports.yourdomain.com/reports`).
 
-### Still seeing "Missing" errors?
+---
 
-1. **Check file location**: Make sure `.env` is in the root directory
-2. **Check file name**: It should be exactly `.env` (not `.env.txt` or `env`)
-3. **Restart the app**: Close and reopen the Electron app
-4. **Check for typos**: Make sure variable names are exactly `SUPABASE_URL` and `SUPABASE_ANON_KEY`
+## 3. Obtaining Supabase Credentials
 
-### "supabase.from is not a function" error?
+1. Open your project at [https://app.supabase.com](https://app.supabase.com).
+2. Navigate to **Project Settings → API**.
+3. Copy the **Project URL** → `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL`.
+4. Copy the **anon/public key** → `SUPABASE_ANON_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+5. Copy the **service role key** → `SUPABASE_SERVICE_ROLE_KEY` (keep this secret).
 
-This error occurs when:
-- The `.env` file is missing (most common)
-- The Supabase client failed to initialize
-- The browser is using cached JavaScript files
+> Never expose the service role key in client-side code or public repositories. `.env` and `.env.local` should remain private.
 
-**Solution**:
-1. Create/update the `.env` file (see above)
-2. **Hard refresh the browser** (Ctrl+Shift+R or Cmd+Shift+R)
-3. **Clear browser cache** if needed
-4. Restart the Electron app
+---
 
-### Still not working?
+## 4. Verifying Your Setup
 
-1. Verify your Supabase project is active
-2. Check that your credentials are correct
-3. Make sure you're using the **anon/public key**, not the service role key
-4. Check the console for more detailed error messages
+- Launch the Electron app. If Supabase variables are missing you will see a red banner labelled “Configuration Error”.
+- Run the reports portal (`cd time-tracker-reports && npm run dev`). If the dashboard cannot connect, the browser console will log Supabase initialization errors.
+- Check that `SUPABASE_STORAGE_BUCKET` exists in Supabase Storage. Create it manually the first time (recommended bucket name: `screenshots`).
 
-## Need Help?
+---
 
-If you're still having issues:
-1. Check the main README.md for database setup instructions
-2. Verify your Supabase project is set up correctly
-3. Make sure all database migrations have been run
+## 5. Troubleshooting
+
+### Banner Still Shows “Missing Supabase environment variables”
+- Ensure `.env` is in the project root (alongside `package.json`).
+- File names must be exact: `.env`, not `env.txt`.
+- Rebuild packaged apps. Development mode (`npm run dev`) picks up changes immediately, but installed builds need to be rebuilt.
+
+### Screenshot Uploads Fail
+- Supply `SUPABASE_SERVICE_ROLE_KEY`.
+- Confirm the bucket name in Supabase matches `SUPABASE_STORAGE_BUCKET`.
+- Check Supabase Storage RLS policies—service role bypasses RLS, but anon keys require explicit permissions.
+
+### Reports Portal Cannot Fetch Data
+- Verify `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set.
+- Ensure the Supabase policies allow the authenticated role to select rows.
+- If you changed `REPORTS_URL`, restart the Electron app so it launches the correct address.
+
+### “supabase.from is not a function”
+- Typically indicates the Supabase client failed to initialize because environment variables were missing or mistyped. Double-check the `.env` files and restart.
+
+---
+
+## 6. Helpful Commands
+
+```bash
+# Restart the Electron app in dev mode
+npm run dev
+
+# Rebuild the packaged installer after changing .env
+npm run build
+
+# Start the reports portal locally
+cd time-tracker-reports
+npm run dev
+```
+
+Keep the environment files up to date whenever you rotate keys or deploy to a new Supabase project. Consistent configuration ensures logout sync, session tracking, and screenshot uploads all function as expected. ✅
 
 
 

@@ -1,80 +1,71 @@
-# How to Run PowerShell as Administrator
+# Running PowerShell as Administrator
 
-## Quick Method (Easiest)
+Some Windows build issues (symbolic-link creation, locked files) require elevated privileges. Use the steps below whenever `npm run build` fails with permission errors or whenever `scripts/fix-symlink-issue.ps1` tells you elevation is required.
 
-1. **Press Windows key** or click **Start**
-2. **Type**: `powershell`
-3. **Right-click** on "Windows PowerShell" or "PowerShell"
-4. **Select**: "Run as Administrator"
-5. **Click**: "Yes" when prompted by User Account Control (UAC)
+---
 
-## Alternative Methods
+## Quick Method
+1. Press the **Windows** key.
+2. Type `powershell`.
+3. Right-click **Windows PowerShell** (or **PowerShell**).
+4. Choose **Run as administrator**.
+5. Approve the UAC prompt.
 
-### Method 2: Using Run Dialog
-1. Press **Windows + R**
-2. Type: `powershell`
-3. Press **Ctrl + Shift + Enter** (this automatically runs as admin)
-4. Click "Yes" in the UAC prompt
+The title bar should read `Administrator: Windows PowerShell`.
 
-### Method 3: Using Task Manager
-1. Press **Ctrl + Shift + Esc** to open Task Manager
-2. Click **File** → **Run new task**
-3. Type: `powershell`
-4. **Check the box**: "Create this task with administrative privileges"
-5. Click **OK**
+---
 
-### Method 4: From File Explorer
-1. Open **File Explorer**
-2. Navigate to: `C:\Windows\System32\WindowsPowerShell\v1.0\`
-3. **Right-click** on `powershell.exe`
-4. Select **"Run as Administrator"**
-5. Click "Yes" in the UAC prompt
+## Alternative Launch Methods
 
-## How to Verify You're Running as Administrator
+### Run Dialog
+- Press **Windows + R**.
+- Enter `powershell`.
+- Press **Ctrl + Shift + Enter** for an elevated session.
 
-After opening PowerShell, check the title bar. It should say:
-```
-Administrator: Windows PowerShell
-```
+### Task Manager
+1. Press **Ctrl + Shift + Esc**.
+2. Click **File → Run new task**.
+3. Type `powershell` and tick **Create this task with administrative privileges**.
 
-Or run this command to verify:
+### File Explorer
+1. Open `C:\Windows\System32\WindowsPowerShell\v1.0`.
+2. Right-click `powershell.exe` → **Run as administrator**.
+
+---
+
+## After Opening an Elevated Shell
+
 ```powershell
-([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+cd "D:\Megha\Electron App\Supatimetracker"
+# Example tasks that sometimes need elevation
+npm run build
+# or
+.\scripts\fix-symlink-issue.ps1
 ```
 
-If it returns `True`, you're running as Administrator.
+Use `Get-Location` to confirm you’re in the project folder before running commands.
 
-## After Opening PowerShell as Administrator
+---
 
-1. **Navigate to your project**:
-   ```powershell
-   cd "D:\Megha\Electron App\Supatimetracker"
-   ```
+## Verify Elevation
 
-2. **Run the build**:
-   ```powershell
-   npm run build
-   ```
+Run the following command. It returns `True` when the current PowerShell session has admin rights:
+
+```powershell
+([Security.Principal.WindowsPrincipal]
+  [Security.Principal.WindowsIdentity]::GetCurrent()
+).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+```
+
+---
 
 ## Troubleshooting
 
-### "Run as Administrator" Option Not Available
-- Make sure you're right-clicking on "Windows PowerShell" or "PowerShell", not "PowerShell ISE" or "Windows Terminal"
-- Try Method 2 (Run Dialog with Ctrl+Shift+Enter)
+- **“Run as administrator” missing:** try the Run Dialog shortcut (Ctrl + Shift + Enter) or search for “Windows PowerShell” specifically.
+- **UAC prompt never appears:** ensure you’re using an account with admin privileges. Domain-managed machines may require IT assistance.
+- **Still seeing `A required privilege is not held by the client`:** enable Windows Developer Mode as outlined in `SYMLINK_FIX.md` and rerun the build.
 
-### UAC Prompt Doesn't Appear
-- Your account might not have administrator privileges
-- Contact your system administrator or use an account with admin rights
-
-### Can't Find PowerShell in Start Menu
-- Type `powershell` in the search box
-- Look for "Windows PowerShell" (not "PowerShell ISE" or "Windows Terminal")
-
-## Note
-
-Running as Administrator gives PowerShell elevated privileges, which are needed to create symbolic links on Windows. This is required to fix the electron-builder symlink error.
-
-For a permanent solution that doesn't require running as admin each time, enable **Windows Developer Mode** (see `SYMLINK_FIX.md`).
+Elevated shells are only needed for setup tasks that modify system-protected resources. Close the window once you are done to avoid running subsequent commands with unnecessary privileges. 🔐
 
 
 

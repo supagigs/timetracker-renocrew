@@ -39,11 +39,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return ipcRenderer.invoke('capture-screen');
   },
   
-  // Screenshot save functionality
-  saveScreenshot: (screenshotData, filename) => {
-    return ipcRenderer.invoke('save-screenshot', screenshotData, filename);
-  },
-  
   // Queue a screenshot (dataURL) for storage upload and DB URL insert
   queueScreenshotUpload: (payload) => {
     return ipcRenderer.invoke('queue-screenshot-upload', payload);
