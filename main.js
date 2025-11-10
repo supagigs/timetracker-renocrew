@@ -39,6 +39,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
     },
   });
 
@@ -440,6 +441,14 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
       });
     });
 
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'Screenshot captured',
+        body: `Session ${sessionId ?? ''}`.trim(),
+        silent: true,
+      }).show();
+    }
+
     return { ok: true, storagePath, url: publicUrl };
   } catch (e) {
     console.error('queue-screenshot-upload error:', e);
@@ -539,7 +548,13 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           });
         });
 
-        console.log('Background screenshot uploaded and recorded:', storagePath);
+        if (Notification.isSupported()) {
+          new Notification({
+            title: 'Screenshot captured',
+            body: currentSessionId ? `Session ${currentSessionId}` : 'Background capture complete',
+            silent: true,
+          }).show();
+        }
       }
     } catch (error) {
       console.error('Error in background screenshot capture:', error);

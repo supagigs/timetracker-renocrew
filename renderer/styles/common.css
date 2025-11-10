@@ -1318,6 +1318,70 @@ select:disabled {
   display: none !important;
 }
 
+.screenshot-notification {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1050;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: var(--card, #ffffff);
+  border: 1px solid var(--border, #e2e8f0);
+  box-shadow: 0 15px 45px -15px rgba(15, 23, 42, 0.25);
+  color: var(--foreground, #0f172a);
+  pointer-events: auto;
+  animation: screenshot-toast-in 150ms ease-out;
+}
+
+.screenshot-notification.fade-out {
+  animation: screenshot-toast-out 200ms ease-in forwards;
+}
+
+.screenshot-notification-icon {
+  font-size: 1.25rem;
+}
+
+.screenshot-notification-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.screenshot-notification-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.screenshot-notification-time {
+  font-size: 0.75rem;
+  color: var(--muted-foreground, #64748b);
+}
+
+@keyframes screenshot-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(15px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes screenshot-toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.95);
+  }
+}
+
 .screenshot-modal {
   position: fixed;
   inset: 0;
