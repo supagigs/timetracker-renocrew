@@ -2,6 +2,7 @@ const { app, BrowserWindow, session, ipcMain, desktopCapturer, Notification, nat
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
+const { powerMonitor } = require('electron');
 
 const envPath = app?.isPackaged
   ? path.join(process.resourcesPath, '.env')
@@ -25,6 +26,8 @@ try {
   app.commandLine.appendSwitch('disable-features', 'Autofill,AutofillServerCommunication');
 } catch (_) {}
 
+const IDLE_THRESHOLD_SECONDS = 30;
+
 let mainWindow = null;
 let isTimerActive = false;
 let isUserLoggedIn = false;
@@ -34,7 +37,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
-    icon: path.join(__dirname, 'SupagigsLogo.png'),
+    icon: path.join(__dirname, 'assets', 'SupagigsLogo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -42,6 +45,38 @@ function createWindow() {
       backgroundThrottling: false,
     },
   });
+
+  const broadcastIdleState = (isIdle) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      window.webContents.send('system-idle-state', { idle: isIdle, timestamp: Date.now() });
+    });
+  };
+
+  if (powerMonitor.listenerCount('user-did-become-idle') === 0) {
+    try {
+      powerMonitor.on('user-did-become-idle', () => broadcastIdleState(true));
+      powerMonitor.on('user-did-become-active', () => broadcastIdleState(false));
+      powerMonitor.on('resume', () => broadcastIdleState(false));
+    } catch (e) {
+      console.warn('Unable to register powerMonitor idle listeners:', e);
+    }
+  }
+
+  if (!global.__idlePollInterval) {
+    let lastBroadcast = null;
+    global.__idlePollInterval = setInterval(() => {
+      try {
+        const idleSeconds = powerMonitor.getSystemIdleTime();
+        const isIdle = idleSeconds >= IDLE_THRESHOLD_SECONDS;
+        if (lastBroadcast === null || lastBroadcast !== isIdle) {
+          lastBroadcast = isIdle;
+          broadcastIdleState(isIdle);
+        }
+      } catch (err) {
+        console.warn('Idle polling failed:', err);
+      }
+    }, 2000);
+  }
 
   // Intercept window close event
   mainWindow.on('close', (event) => {
@@ -444,7 +479,7 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
     if (Notification.isSupported()) {
       new Notification({
         title: 'Screenshot captured',
-        body: `Session ${sessionId ?? ''}`.trim(),
+        body: 'New screenshot saved',
         silent: true,
       }).show();
     }
@@ -551,7 +586,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
         if (Notification.isSupported()) {
           new Notification({
             title: 'Screenshot captured',
-            body: currentSessionId ? `Session ${currentSessionId}` : 'Background capture complete',
+            body: 'New screenshot saved',
             silent: true,
           }).show();
         }
@@ -628,7 +663,6 @@ ipcMain.on('update-idle-state', (event, idleState) => {
 // System-wide idle time/state for robust idle detection
 ipcMain.handle('get-system-idle-time', () => {
   try {
-    const { powerMonitor } = require('electron');
     return powerMonitor.getSystemIdleTime();
   } catch (e) {
     return -1;
@@ -637,7 +671,6 @@ ipcMain.handle('get-system-idle-time', () => {
 
 ipcMain.handle('get-system-idle-state', (event, thresholdSeconds) => {
   try {
-    const { powerMonitor } = require('electron');
     return powerMonitor.getSystemIdleState(Math.max(1, parseInt(thresholdSeconds || 30, 10)));
   } catch (e) {
     return 'unknown';
@@ -659,6 +692,12 @@ app.whenReady().then(() => {
   // Set app name for Windows notifications
   if (process.platform === 'win32') {
     app.setAppUserModelId('Time Tracker');
+  }
+
+  try {
+    powerMonitor.setIdleDetectionInterval(10);
+  } catch (e) {
+    console.warn('Failed to set idle detection interval:', e);
   }
   
   // Request notification permission
@@ -700,6 +739,11 @@ app.on('before-quit', async () => {
     backgroundScreenshotInterval = null;
   }
   isBackgroundCaptureActive = false;
+
+  if (global.__idlePollInterval) {
+    clearInterval(global.__idlePollInterval);
+    global.__idlePollInterval = null;
+  }
   
   // Try to save any active session data
   try {

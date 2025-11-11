@@ -68,6 +68,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternalUrl: (url) => {
     return ipcRenderer.invoke('open-external-url', url);
   },
+
+  onSystemIdleState: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('system-idle-state', handler);
+    return () => ipcRenderer.removeListener('system-idle-state', handler);
+  },
+
+  removeSystemIdleStateListener: () => {
+    ipcRenderer.removeAllListeners('system-idle-state');
+  },
   
   // Time tracking methods
   startTimeTracking: (userEmail) => {

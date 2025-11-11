@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let isIdle = false; // Track idle state
   let idleStartTime = null;
   let userEmail = null;
+  let removeSystemIdleListener = null;
 
   // DOM elements
   const activeTimeDisplay = document.getElementById('activeTimeDisplay');
@@ -155,6 +156,14 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Setup screenshot capture notification listener
     setupScreenshotNotificationListener();
+
+    if (window.electronAPI && typeof window.electronAPI.onSystemIdleState === 'function') {
+      removeSystemIdleListener = window.electronAPI.onSystemIdleState(({ idle }) => {
+        if (idleTracker) {
+          idleTracker.handleExternalIdleState(Boolean(idle));
+        }
+      });
+    }
   }
 
   function initializeIdleTracker() {
@@ -1494,6 +1503,13 @@ document.addEventListener('DOMContentLoaded', () => {
         idleTracker = null;
       }
 
+      if (typeof removeSystemIdleListener === 'function') {
+        removeSystemIdleListener();
+        removeSystemIdleListener = null;
+      } else if (window.electronAPI && typeof window.electronAPI.removeSystemIdleStateListener === 'function') {
+        window.electronAPI.removeSystemIdleStateListener();
+      }
+
       const email = userEmail || StorageService.getItem('userEmail');
       if (window.SessionSync && email) {
         await window.SessionSync.updateAppState(false);
@@ -1547,11 +1563,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const notification = document.createElement('div');
     notification.className = 'screenshot-notification';
 
-    const previewSource = data?.previewDataUrl
-      || data?.dataUrl
-      || (data?.filePath ? `file://${data.filePath}` : null)
-      || data?.storageUrl
-      || null;
+    const previewSource =
+      data?.previewDataUrl ||
+      data?.dataUrl ||
+      (data?.filePath ? `file://${data.filePath}` : null) ||
+      data?.storageUrl ||
+      null;
     
     const now = new Date();
     const timeString = now.toLocaleTimeString('en-US', { 
@@ -1561,12 +1578,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     notification.innerHTML = `
-      <div class="screenshot-notification-icon">📸</div>
-      <div class="screenshot-notification-content">
-        <div class="screenshot-notification-title">Screenshot Captured</div>
-        <div class="screenshot-notification-time">${timeString}</div>
-      </div>
-    `;
+       <div class="screenshot-notification-content">
+         <div class="screenshot-notification-title">Screenshot Captured</div>
+         <div class="screenshot-notification-time">${timeString}</div>
+       </div>
+     `;
     
     // Add click handler to dismiss
     notification.addEventListener('click', () => {
@@ -1625,6 +1641,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (idleTracker) {
       idleTracker.destroy();
       idleTracker = null;
+    }
+
+    if (typeof removeSystemIdleListener === 'function') {
+      removeSystemIdleListener();
+      removeSystemIdleListener = null;
+    } else if (window.electronAPI && typeof window.electronAPI.removeSystemIdleStateListener === 'function') {
+      window.electronAPI.removeSystemIdleStateListener();
     }
     
     // Clear timer interval

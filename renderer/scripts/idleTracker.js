@@ -111,6 +111,31 @@ class IdleTracker {
     }
   }
 
+  handleExternalIdleState(isIdle) {
+    if (!this.isTracking) {
+      return;
+    }
+
+    if (isIdle) {
+      if (this.idleConfirmTimeoutId) {
+        clearTimeout(this.idleConfirmTimeoutId);
+        this.idleConfirmTimeoutId = null;
+      }
+      if (!this.isIdle) {
+        this.startIdlePeriod();
+      }
+    } else {
+      this.lastActivityTime = Date.now();
+      if (this.idleConfirmTimeoutId) {
+        clearTimeout(this.idleConfirmTimeoutId);
+        this.idleConfirmTimeoutId = null;
+      }
+      if (this.isIdle) {
+        this.endIdlePeriod();
+      }
+    }
+  }
+
   shouldIgnoreEvent(event) {
     // Ignore programmatic events or events that don't represent user activity
     if (event.isTrusted === false) {
