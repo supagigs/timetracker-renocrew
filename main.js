@@ -377,39 +377,23 @@ function getSupabaseClient() {
 async function addIdleIndicatorToScreenshot(sourceThumbnail) {
   try {
     const { createCanvas, loadImage } = require('canvas');
-    
-    // Get the thumbnail image data
     const imageData = sourceThumbnail.toDataURL('image/png');
-    
-    // Load the image into a canvas
     const img = await loadImage(imageData);
     const canvas = createCanvas(img.width, img.height);
     const ctx = canvas.getContext('2d');
-    
-    // Draw the original image
     ctx.drawImage(img, 0, 0);
-    
-    // Draw a larger red circle (scaled by image size) with white outline for visibility
-    const margin = Math.round(Math.min(canvas.width, canvas.height) * 0.02); // 2% margin
-    const radius = Math.max(12, Math.round(Math.min(canvas.width, canvas.height) * 0.03)); // ~3% of smallest dimension
-
-    // White outline
-    ctx.beginPath();
-    ctx.arc(canvas.width - margin - radius, margin + radius, radius + 3, 0, Math.PI * 2);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fill();
-
-    // Red fill
-    ctx.beginPath();
-    ctx.arc(canvas.width - margin - radius, margin + radius, radius, 0, Math.PI * 2);
-    ctx.fillStyle = '#FF2D2D';
-    ctx.fill();
-    
-    // Convert canvas to data URL
+    const borderThickness = Math.max(8, Math.round(Math.min(canvas.width, canvas.height) * 0.02));
+    ctx.lineWidth = borderThickness;
+    ctx.strokeStyle = 'rgba(220, 38, 38, 0.85)';
+    ctx.strokeRect(
+      borderThickness / 2,
+      borderThickness / 2,
+      canvas.width - borderThickness,
+      canvas.height - borderThickness
+    );
     return canvas.toDataURL('image/png');
   } catch (error) {
     console.error('Error in addIdleIndicatorToScreenshot:', error);
-    // Return original if we can't add indicator
     return sourceThumbnail.toDataURL('image/png');
   }
 }
@@ -472,7 +456,7 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
         timestamp,
         previewDataUrl: screenshotData,
         storageUrl: publicUrl,
-        sessionId
+        sessionId,
       });
     });
 
@@ -566,7 +550,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           user_email: currentUserEmail,
           session_id: currentSessionId,
           screenshot_data: publicUrl,
-          captured_at: timestamp
+          captured_at: timestamp,
         });
 
         if (dbErr) {
@@ -579,7 +563,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
             timestamp,
             previewDataUrl: screenshotData,
             storageUrl: publicUrl,
-            sessionId: currentSessionId
+            sessionId: currentSessionId,
           });
         });
 

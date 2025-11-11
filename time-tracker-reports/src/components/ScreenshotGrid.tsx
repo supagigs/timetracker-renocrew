@@ -99,11 +99,7 @@ export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
                   draggable={false}
                 />
               </div>
-              <div className="mt-2 text-xs text-muted-foreground">
-                Session: {shot.session_id}
-                <br />
-                {formattedDate}
-              </div>
+              <div className="mt-2 text-xs text-muted-foreground">{formattedDate}</div>
             </div>
           );
         })}

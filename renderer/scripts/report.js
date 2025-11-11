@@ -232,7 +232,7 @@ document.addEventListener('DOMContentLoaded', () => {
       
       const { data: screenshots, error } = await window.supabase
         .from('screenshots')
-        .select('*')
+        .select('id, session_id, screenshot_data, captured_at')
         .eq('session_id', parseInt(sessionId))
         .eq('user_email', email)
         .order('captured_at', { ascending: true })
@@ -314,7 +314,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const end = currentOffset + limit; // inclusive end to get limit+1
       const { data: screenshots, error } = await window.supabase
         .from('screenshots')
-        .select('*')
+        .select('id, session_id, screenshot_data, captured_at')
         .eq('session_id', parseInt(sessionId))
         .eq('user_email', email)
         .order('captured_at', { ascending: true })
@@ -363,7 +363,7 @@ document.addEventListener('DOMContentLoaded', () => {
       
       const { data: screenshots, error } = await window.supabase
         .from('screenshots')
-        .select('*')
+        .select('id, session_id, screenshot_data, captured_at')
         .eq('session_id', parseInt(sessionId))
         .eq('user_email', email)
         .order('captured_at', { ascending: true })
@@ -435,10 +435,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (screenshotFiles && screenshotFiles.length > 0) {
         // Convert file paths to display format
         const screenshots = screenshotFiles.map(filePath => ({
-          filePath: filePath,
+          filePath,
           captured_at: extractTimestampFromFilename(filePath),
           session_id: sessionId,
-          isLocal: true
+          isLocal: true,
         }));
         
         displayScreenshots(screenshots);
@@ -572,7 +572,6 @@ document.addEventListener('DOMContentLoaded', () => {
       
       info.innerHTML = `
         <div class="screenshot-time">${formattedTime}</div>
-        <div class="screenshot-session">Session ID: ${screenshot.session_id}</div>
         <div class="screenshot-source">${screenshot.isLocal ? 'Local File' : 'Database'}</div>
       `;
       
@@ -624,8 +623,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       openFloatingScreenshot(imageSrc, {
-        title: screenshot?.session_id ? `Session ${screenshot.session_id}` : 'Screenshot Preview',
-        timestamp: screenshot?.captured_at || null
+        title: 'Screenshot Preview',
+        timestamp: screenshot?.captured_at || null,
       });
     } catch (error) {
       console.error('Error handling screenshot click:', error);
@@ -633,8 +632,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (fallbackSrc) {
         console.log('Falling back to alternate source:', fallbackSrc);
         openFloatingScreenshot(fallbackSrc, {
-          title: screenshot?.session_id ? `Session ${screenshot.session_id}` : 'Screenshot Preview',
-          timestamp: screenshot?.captured_at || null
+          title: 'Screenshot Preview',
+          timestamp: screenshot?.captured_at || null,
         });
       }
     }
@@ -658,8 +657,8 @@ document.addEventListener('DOMContentLoaded', () => {
     return screenshot.screenshot_data || null;
   }
 
-  function openFloatingScreenshot(imageSrc, { title = 'Screenshot Preview', timestamp = null } = {}) {
-    console.log('openFloatingScreenshot called with:', { imageSrc, title, timestamp });
+function openFloatingScreenshot(imageSrc, { title = 'Screenshot Preview', timestamp = null } = {}) {
+  console.log('openFloatingScreenshot called with:', { imageSrc, title, timestamp });
     try {
       const existing = document.getElementById('pip-screenshot-viewer');
       if (existing) {

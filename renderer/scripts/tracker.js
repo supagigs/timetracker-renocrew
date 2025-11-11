@@ -959,7 +959,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
           if (session.projects && session.project_id) {
             const projectId = session.project_id;
-            const projectName = session.projects.project_name || `Project ${projectId}`;
+            const projectName = session.projects.project_name || 'Untitled project';
             const activeDuration = Number(session.active_duration) || 0;
 
             if (projectTimeData.has(projectId)) {
@@ -1089,12 +1089,7 @@ document.addEventListener('DOMContentLoaded', () => {
       projectName.className = 'project-time-card__title';
       projectName.textContent = project.name;
 
-      const projectId = document.createElement('p');
-      projectId.className = 'project-time-card__subtitle';
-      projectId.textContent = `Project ID: ${project.id}`;
-
       projectNameDiv.appendChild(projectName);
-      projectNameDiv.appendChild(projectId);
 
       const timeDisplay = document.createElement('div');
       timeDisplay.className = 'project-time-card__time';
@@ -1149,9 +1144,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const projectTimeMap = new Map();
       
       sessionList.forEach(session => {
-        if (session.projects && session.project_id) {
-          const projectId = session.project_id;
-          const projectName = session.projects.project_name || `Project ${projectId}`;
+          if (session.projects && session.project_id) {
+            const projectId = session.project_id;
+            const projectName = session.projects.project_name || 'Untitled project';
           const activeDuration = Number(session.active_duration) || 0;
 
           if (projectTimeMap.has(projectId)) {
@@ -1388,7 +1383,7 @@ document.addEventListener('DOMContentLoaded', () => {
           userEmail: email,
           sessionId: currentSessionId || 'temp-session',
           screenshotData,
-          timestamp
+          timestamp,
         }).then(res => {
           if (!res?.ok) {
             console.error('queueScreenshotUpload failed:', res?.error);

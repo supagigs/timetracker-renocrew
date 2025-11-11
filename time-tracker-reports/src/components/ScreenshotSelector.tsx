@@ -161,9 +161,9 @@ export default function ScreenshotSelector({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-foreground">Session Screenshots</h2>
-          {selectedSessionId && (
+          {screenshots.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              Session ID {selectedSessionId} • {screenshots.length} image{screenshots.length !== 1 ? 's' : ''}
+              {screenshots.length} image{screenshots.length !== 1 ? 's' : ''}
             </p>
           )}
         </div>
@@ -204,7 +204,7 @@ export default function ScreenshotSelector({
           No screenshots available for this session.
         </div>
       ) : (
-        <ScreenshotGrid screenshots={screenshots} />
+          <ScreenshotGrid screenshots={screenshots} />
       )}
     </section>
   );

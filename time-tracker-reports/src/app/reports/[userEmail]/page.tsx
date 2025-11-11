@@ -327,7 +327,7 @@ function buildProjectSummary(sessions: TimeSession[]) {
   sessions.forEach((session) => {
     if (session.project_id && session.projects) {
       const projectId = session.project_id;
-      const projectName = session.projects.project_name || `Project ${projectId}`;
+      const projectName = session.projects.project_name || 'Untitled project';
       const activeDuration = session.active_duration ?? 0;
 
       if (projectMap.has(projectId)) {
