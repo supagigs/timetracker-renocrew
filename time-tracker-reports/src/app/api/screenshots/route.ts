@@ -6,6 +6,8 @@ type Screenshot = {
   session_id: number;
   screenshot_data: string;
   captured_at: string;
+  app_name: string | null;
+  captured_idle: boolean | null;
 };
 
 export async function GET(request: NextRequest) {
@@ -37,15 +39,43 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = createServerSupabaseClient();
-    const { data, error } = await supabase
-      .from('screenshots')
-      .select('id, session_id, screenshot_data, captured_at')
-      .eq('user_email', email)
-      .eq('session_id', sessionId)
-      .order('captured_at', { ascending: true })
-      .limit(500);
+
+    const buildQuery = (includeMeta: boolean) =>
+      supabase
+        .from('screenshots')
+        .select(
+          includeMeta
+            ? 'id, session_id, screenshot_data, captured_at, app_name, captured_idle'
+            : 'id, session_id, screenshot_data, captured_at'
+        )
+        .eq('user_email', email)
+        .eq('session_id', sessionId)
+        .order('captured_at', { ascending: true })
+        .limit(500);
+
+    const { data, error } = await buildQuery(true);
 
     if (error) {
+      if (error.code === '42703' || /(app_name|captured_idle)/.test(error.message ?? '')) {
+        const { data: fallbackData, error: fallbackError } = await buildQuery(false);
+        if (fallbackError) {
+          console.error('Error fetching screenshots (fallback):', fallbackError);
+          return NextResponse.json(
+            { error: 'Failed to fetch screenshots' },
+            { status: 500 }
+          );
+        }
+        const normalized = (fallbackData ?? []).map((row) => ({
+          ...row,
+          app_name: null,
+          captured_idle: null,
+        }));
+        console.log(
+          `API: Fallback query returned ${normalized.length} screenshots for session ${sessionId}, user ${email}`
+        );
+        return NextResponse.json(normalized as Screenshot[]);
+      }
+
       console.error('Error fetching screenshots:', error);
       return NextResponse.json(
         { error: 'Failed to fetch screenshots' },

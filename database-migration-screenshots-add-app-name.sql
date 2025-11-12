@@ -1,0 +1,5 @@
+ALTER TABLE screenshots
+ADD COLUMN IF NOT EXISTS app_name TEXT;
+ALTER TABLE screenshots
+  ADD COLUMN IF NOT EXISTS app_name TEXT;
+

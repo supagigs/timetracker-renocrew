@@ -36,7 +36,8 @@ CREATE TABLE screenshots (
   user_id INTEGER NOT NULL REFERENCES users(id),
   session_id INTEGER REFERENCES time_sessions(id),
   screenshot_data TEXT NOT NULL, -- base64 encoded image
-  captured_at TIMESTAMP DEFAULT NOW()
+  captured_at TIMESTAMP DEFAULT NOW(),
+  app_name TEXT
 );
 
 CREATE TABLE projects (

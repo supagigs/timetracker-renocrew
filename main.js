@@ -3,7 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
 const { powerMonitor } = require('electron');
-
 const envPath = app?.isPackaged
   ? path.join(process.resourcesPath, '.env')
   : path.join(__dirname, '.env');
@@ -27,6 +26,25 @@ try {
 } catch (_) {}
 
 const IDLE_THRESHOLD_SECONDS = 30;
+let activeWindowModule = null;
+
+async function getActiveAppName() {
+  try {
+    if (!activeWindowModule) {
+      activeWindowModule = await import('active-win');
+    }
+    const result = await activeWindowModule.default();
+    if (!result) {
+      return null;
+    }
+    const windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
+    const ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
+    return windowTitle || ownerName || null;
+  } catch (error) {
+    console.warn('[screenshots] Unable to resolve active window:', error?.message ?? error);
+    return null;
+  }
+}
 
 let mainWindow = null;
 let isTimerActive = false;
@@ -374,30 +392,6 @@ function getSupabaseClient() {
   }
 }
 
-async function addIdleIndicatorToScreenshot(sourceThumbnail) {
-  try {
-    const { createCanvas, loadImage } = require('canvas');
-    const imageData = sourceThumbnail.toDataURL('image/png');
-    const img = await loadImage(imageData);
-    const canvas = createCanvas(img.width, img.height);
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const borderThickness = Math.max(8, Math.round(Math.min(canvas.width, canvas.height) * 0.02));
-    ctx.lineWidth = borderThickness;
-    ctx.strokeStyle = 'rgba(220, 38, 38, 0.85)';
-    ctx.strokeRect(
-      borderThickness / 2,
-      borderThickness / 2,
-      canvas.width - borderThickness,
-      canvas.height - borderThickness
-    );
-    return canvas.toDataURL('image/png');
-  } catch (error) {
-    console.error('Error in addIdleIndicatorToScreenshot:', error);
-    return sourceThumbnail.toDataURL('image/png');
-  }
-}
-
 async function compressToJpegBufferFromDataUrl(dataUrl) {
   const sharp = require('sharp');
   const base64 = dataUrl.split(',')[1];
@@ -414,7 +408,7 @@ async function compressToJpegBufferFromDataUrl(dataUrl) {
 }
 
 // Allow renderer to queue ad-hoc screenshots for upload (e.g., manual capture)
-ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp }) => {
+ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle }) => {
   try {
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
     const jpegFilename = `${userEmail.replace('@', '_at_').replace('.', '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}.jpg`;
@@ -439,11 +433,15 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
       throw new Error('Unable to get storage public URL');
     }
 
+    const appName = (await getActiveAppName()) || 'Unknown app';
+
     const { error: dbErr } = await supabase.from('screenshots').insert({
       user_email: userEmail,
       session_id: sessionId,
       screenshot_data: publicUrl,
       captured_at: timestamp,
+      app_name: appName,
+      captured_idle: Boolean(isIdle),
     });
 
     if (dbErr) {
@@ -457,6 +455,8 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
         previewDataUrl: screenshotData,
         storageUrl: publicUrl,
         sessionId,
+        appName,
+        isIdle: Boolean(isIdle),
       });
     });
 
@@ -468,7 +468,7 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
       }).show();
     }
 
-    return { ok: true, storagePath, url: publicUrl };
+    return { ok: true, storagePath, url: publicUrl, appName, capturedIdle: Boolean(isIdle) };
   } catch (e) {
     console.error('queue-screenshot-upload error:', e);
     return { ok: false, error: e?.message || 'queue error' };
@@ -504,27 +504,15 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
       if (sources.length > 0) {
         const source = sources[0];
         
-        // Add red circle indicator if user is idle
-        let screenshotData;
-        console.log('User idle state:', isUserIdle);
-        if (isUserIdle) {
-          try {
-            screenshotData = await addIdleIndicatorToScreenshot(source.thumbnail);
-            console.log('✓ Added idle indicator to screenshot (red dot in top-right corner)');
-          } catch (indicatorError) {
-            console.error('Error adding idle indicator:', indicatorError);
-            screenshotData = source.thumbnail.toDataURL('image/png');
-          }
-        } else {
-          screenshotData = source.thumbnail.toDataURL('image/png');
-          console.log('No idle indicator (user is active)');
-        }
+        const screenshotData = source.thumbnail.toDataURL('image/png');
+        console.log('User idle state:', isUserIdle ? 'idle' : 'active');
         
         const timestamp = new Date().toISOString();
 
         const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
         const jpegFilename = `${currentUserEmail.replace('@', '_at_').replace('.', '_')}_${currentSessionId}_${timestamp.replace(/[:.]/g, '-')}.jpg`;
         const storagePath = `${currentUserEmail}/${currentSessionId}/${jpegFilename}`;
+        const appName = (await getActiveAppName()) || 'Unknown app';
 
         const supabase = getSupabaseClient();
         if (!supabase) {
@@ -551,6 +539,8 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           session_id: currentSessionId,
           screenshot_data: publicUrl,
           captured_at: timestamp,
+          app_name: appName,
+          captured_idle: Boolean(isUserIdle),
         });
 
         if (dbErr) {
@@ -564,6 +554,8 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
             previewDataUrl: screenshotData,
             storageUrl: publicUrl,
             sessionId: currentSessionId,
+            appName,
+            isIdle: Boolean(isUserIdle),
           });
         });
 

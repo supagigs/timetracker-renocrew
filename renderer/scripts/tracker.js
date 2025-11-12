@@ -1384,6 +1384,7 @@ document.addEventListener('DOMContentLoaded', () => {
           sessionId: currentSessionId || 'temp-session',
           screenshotData,
           timestamp,
+          isIdle,
         }).then(res => {
           if (!res?.ok) {
             console.error('queueScreenshotUpload failed:', res?.error);
@@ -1392,7 +1393,9 @@ document.addEventListener('DOMContentLoaded', () => {
               timestamp,
               previewDataUrl: screenshotData,
               storageUrl: res.url || null,
-              sessionId: currentSessionId || 'temp-session'
+              sessionId: currentSessionId || 'temp-session',
+              appName: res.appName || undefined,
+              isIdle: res.capturedIdle || false,
             });
           }
         }).catch(err => console.error('queueScreenshotUpload error:', err));
@@ -1571,10 +1574,14 @@ document.addEventListener('DOMContentLoaded', () => {
       minute: '2-digit',
       second: '2-digit'
     });
+    const appName = data?.appName || 'Unknown app';
+    const idleNote = data?.isIdle ? '<div class="screenshot-notification-flag">Idle capture</div>' : '';
     
     notification.innerHTML = `
        <div class="screenshot-notification-content">
          <div class="screenshot-notification-title">Screenshot Captured</div>
+         <div class="screenshot-notification-subtitle">App: ${appName}</div>
+         ${idleNote}
          <div class="screenshot-notification-time">${timeString}</div>
        </div>
      `;

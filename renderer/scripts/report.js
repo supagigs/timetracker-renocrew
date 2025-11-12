@@ -230,13 +230,26 @@ document.addEventListener('DOMContentLoaded', () => {
       // Skip date filtering to avoid timeout issues - just query without date filter
       console.log(`Query params: session_id=${sessionId} (parsed: ${parseInt(sessionId)}), user_email=${email}`);
       
-      const { data: screenshots, error } = await window.supabase
+      const baseQuery = window.supabase
         .from('screenshots')
-        .select('id, session_id, screenshot_data, captured_at')
         .eq('session_id', parseInt(sessionId))
         .eq('user_email', email)
-        .order('captured_at', { ascending: true })
+        .order('captured_at', { ascending: true });
+
+      let { data: screenshots, error } = await baseQuery
+        .select('id, session_id, screenshot_data, captured_at, app_name, captured_idle')
         .limit(fetchLimit);
+
+      let usedFallback = false;
+
+      if (error && (error.code === '42703' || /(app_name|captured_idle)/.test(error.message || ''))) {
+        const fallbackResult = await baseQuery
+          .select('id, session_id, screenshot_data, captured_at')
+          .limit(fetchLimit);
+        screenshots = fallbackResult.data;
+        error = fallbackResult.error;
+        usedFallback = true;
+      }
       
       console.log(`Found ${screenshots?.length || 0} screenshots`);
       
@@ -270,6 +283,8 @@ document.addEventListener('DOMContentLoaded', () => {
           screenshot_data: screenshot.screenshot_data,
           captured_at: screenshot.captured_at,
           session_id: screenshot.session_id,
+          app_name: usedFallback ? null : (screenshot.app_name ?? null),
+          captured_idle: usedFallback ? false : Boolean(screenshot.captured_idle),
           isLocal: false
         }));
         // Determine if there are more results than we display
@@ -312,17 +327,31 @@ document.addEventListener('DOMContentLoaded', () => {
       
       // Fetch one extra to detect if there are more
       const end = currentOffset + limit; // inclusive end to get limit+1
-      const { data: screenshots, error } = await window.supabase
+      const baseQuery = window.supabase
         .from('screenshots')
-        .select('id, session_id, screenshot_data, captured_at')
         .eq('session_id', parseInt(sessionId))
         .eq('user_email', email)
         .order('captured_at', { ascending: true })
         .range(currentOffset, end);
+
+      let { data: screenshots, error } = await baseQuery.select(
+        'id, session_id, screenshot_data, captured_at, app_name, captured_idle'
+      );
+
+      let usedFallback = false;
       
       if (error) {
-        console.error('Error loading more screenshots:', error);
-        return false;
+        if (error.code === '42703' || /(app_name|captured_idle)/.test(error.message || '')) {
+          const fallbackResult = await baseQuery.select('id, session_id, screenshot_data, captured_at');
+          screenshots = fallbackResult.data;
+          error = fallbackResult.error;
+          usedFallback = true;
+        }
+
+        if (error) {
+          console.error('Error loading more screenshots:', error);
+          return false;
+        }
       }
       
       if (screenshots && screenshots.length > 0) {
@@ -330,6 +359,8 @@ document.addEventListener('DOMContentLoaded', () => {
           screenshot_data: screenshot.screenshot_data,
           captured_at: screenshot.captured_at,
           session_id: screenshot.session_id,
+          app_name: usedFallback ? null : (screenshot.app_name ?? null),
+          captured_idle: usedFallback ? false : Boolean(screenshot.captured_idle),
           isLocal: false
         }));
         // If we fetched more than limit, there are more items
@@ -361,13 +392,25 @@ document.addEventListener('DOMContentLoaded', () => {
       const limit = limits[Math.min(retryCount, limits.length - 1)];
       const fetchLimit = limit + 1;
       
-      const { data: screenshots, error } = await window.supabase
+      const baseQuery = window.supabase
         .from('screenshots')
-        .select('id, session_id, screenshot_data, captured_at')
         .eq('session_id', parseInt(sessionId))
         .eq('user_email', email)
         .order('captured_at', { ascending: true })
         .limit(fetchLimit);
+
+      let { data: screenshots, error } = await baseQuery.select(
+        'id, session_id, screenshot_data, captured_at, app_name, captured_idle'
+      );
+
+      let usedFallback = false;
+
+      if (error && (error.code === '42703' || /(app_name|captured_idle)/.test(error.message || ''))) {
+        const fallbackResult = await baseQuery.select('id, session_id, screenshot_data, captured_at');
+        screenshots = fallbackResult.data;
+        error = fallbackResult.error;
+        usedFallback = true;
+      }
 
       if (error) {
         console.error('Error loading screenshots with basic query:', error);
@@ -392,6 +435,8 @@ document.addEventListener('DOMContentLoaded', () => {
           screenshot_data: screenshot.screenshot_data,
           captured_at: screenshot.captured_at,
           session_id: screenshot.session_id,
+          app_name: usedFallback ? null : (screenshot.app_name ?? null),
+          captured_idle: usedFallback ? false : Boolean(screenshot.captured_idle),
           isLocal: false
         }));
         const hasMoreScreenshots = formattedAll.length > limit;
@@ -439,6 +484,8 @@ document.addEventListener('DOMContentLoaded', () => {
           captured_at: extractTimestampFromFilename(filePath),
           session_id: sessionId,
           isLocal: true,
+          app_name: 'Unknown app',
+          captured_idle: false,
         }));
         
         displayScreenshots(screenshots);
@@ -520,6 +567,10 @@ document.addEventListener('DOMContentLoaded', () => {
       console.log('Processing screenshot:', screenshot);
       const screenshotItem = document.createElement('div');
       screenshotItem.className = 'screenshot-item';
+      if (screenshot.captured_idle) {
+        screenshotItem.classList.add('screenshot-item--idle');
+      }
+      const appName = screenshot.app_name || screenshot.appName || 'Unknown app';
       
       // Ensure UTC parsing - add 'Z' if not present to force UTC interpretation
       const ensureUTCForScreenshot = (dateStr) => {
@@ -570,8 +621,12 @@ document.addEventListener('DOMContentLoaded', () => {
       
       const formattedTime = formatScreenshotTime(capturedTime);
       
+      const idleFlag = screenshot.captured_idle ? '<div class="screenshot-flag">Idle capture</div>' : '';
+
       info.innerHTML = `
         <div class="screenshot-time">${formattedTime}</div>
+        ${idleFlag}
+        <div class="screenshot-app">App: ${appName}</div>
         <div class="screenshot-source">${screenshot.isLocal ? 'Local File' : 'Database'}</div>
       `;
       
@@ -614,6 +669,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function handleScreenshotClick(screenshot) {
+    const appName = screenshot.app_name || screenshot.appName || 'Screenshot Preview';
+
     try {
       const imageSrc = resolveScreenshotSource(screenshot);
       if (!imageSrc) {
@@ -623,8 +680,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       openFloatingScreenshot(imageSrc, {
-        title: 'Screenshot Preview',
+        title: appName,
         timestamp: screenshot?.captured_at || null,
+        isIdle: Boolean(screenshot.captured_idle),
       });
     } catch (error) {
       console.error('Error handling screenshot click:', error);
@@ -632,8 +690,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (fallbackSrc) {
         console.log('Falling back to alternate source:', fallbackSrc);
         openFloatingScreenshot(fallbackSrc, {
-          title: 'Screenshot Preview',
+          title: appName,
           timestamp: screenshot?.captured_at || null,
+          isIdle: Boolean(screenshot.captured_idle),
         });
       }
     }
@@ -657,8 +716,8 @@ document.addEventListener('DOMContentLoaded', () => {
     return screenshot.screenshot_data || null;
   }
 
-function openFloatingScreenshot(imageSrc, { title = 'Screenshot Preview', timestamp = null } = {}) {
-  console.log('openFloatingScreenshot called with:', { imageSrc, title, timestamp });
+function openFloatingScreenshot(imageSrc, { title = 'Screenshot Preview', timestamp = null, isIdle = false } = {}) {
+  console.log('openFloatingScreenshot called with:', { imageSrc, title, timestamp, isIdle });
     try {
       const existing = document.getElementById('pip-screenshot-viewer');
       if (existing) {
@@ -668,7 +727,7 @@ function openFloatingScreenshot(imageSrc, { title = 'Screenshot Preview', timest
 
       const container = document.createElement('div');
       container.id = 'pip-screenshot-viewer';
-      container.className = 'pip-viewer';
+      container.className = `pip-viewer${isIdle ? ' pip-viewer--idle' : ''}`;
 
       container.innerHTML = `
         <div class="pip-viewer-titlebar">
@@ -685,6 +744,12 @@ function openFloatingScreenshot(imageSrc, { title = 'Screenshot Preview', timest
           <img class="pip-image" src="${imageSrc}" alt="Screenshot Preview" draggable="false" />
         </div>
       `;
+      if (isIdle) {
+        container.querySelector('.pip-content').insertAdjacentHTML(
+          'afterbegin',
+          '<span class="pip-idle-flag">Idle capture</span>'
+        );
+      }
 
       document.body.appendChild(container);
       const titlebar = container.querySelector('.pip-viewer-titlebar');

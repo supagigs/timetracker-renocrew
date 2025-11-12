@@ -146,6 +146,3 @@ Icon?
 # Electron specific
 *.dSYM
 *.out
-
-#Screenshots directory
-screenshots/

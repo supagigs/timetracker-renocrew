@@ -20,6 +20,8 @@ type Screenshot = {
   session_id: number;
   screenshot_data: string;
   captured_at: string;
+  app_name?: string | null;
+  captured_idle?: boolean | null;
 };
 
 type ScreenshotSelectorProps = {

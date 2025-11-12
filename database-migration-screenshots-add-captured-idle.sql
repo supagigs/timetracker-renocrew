@@ -1,0 +1,3 @@
+ALTER TABLE screenshots
+ADD COLUMN IF NOT EXISTS captured_idle BOOLEAN;
+

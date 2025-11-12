@@ -1199,6 +1199,30 @@ select:disabled {
   padding: 16px;
 }
 
+.screenshot-item--idle {
+  border: 1px solid rgba(220, 38, 38, 0.65);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
+}
+
+.screenshot-app {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.screenshot-flag {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(220, 38, 38, 0.12);
+  color: rgba(185, 28, 28, 0.95);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .screenshot-image {
   width: 100%;
   height: 200px;
@@ -1355,6 +1379,24 @@ select:disabled {
   font-weight: 600;
 }
 
+.screenshot-notification-subtitle {
+  font-size: 0.8rem;
+  color: var(--muted-foreground, #64748b);
+}
+
+.screenshot-notification-flag {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(220, 38, 38, 0.12);
+  color: rgba(185, 28, 28, 0.95);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .screenshot-notification-time {
   font-size: 0.75rem;
   color: var(--muted-foreground, #64748b);
@@ -1458,6 +1500,7 @@ select:disabled {
 }
 
 .pip-content {
+  position: relative;
   padding: 10px;
   background: var(--surface);
 }
@@ -1470,6 +1513,25 @@ select:disabled {
   box-shadow: inset 0 0 0 1px var(--border);
   object-fit: contain;
   background: var(--surface-muted);
+}
+
+.pip-viewer--idle {
+  border: 2px solid rgba(220, 38, 38, 0.8);
+}
+
+.pip-idle-flag {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(220, 38, 38, 0.9);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: 0 8px 20px -8px rgba(220, 38, 38, 0.5);
 }
 
 .loading {
