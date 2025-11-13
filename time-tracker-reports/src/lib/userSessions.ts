@@ -30,8 +30,10 @@ export async function setUserSessionState(
 
   const payload = {
     email: normalizedEmail,
-    web_logged_in: updates.web_logged_in ?? existing?.web_logged_in ?? false,
-    app_logged_in: updates.app_logged_in ?? existing?.app_logged_in ?? false,
+    web_logged_in:
+      updates.web_logged_in ?? existing?.web_logged_in ?? null,
+    app_logged_in:
+      updates.app_logged_in ?? existing?.app_logged_in ?? null,
     updated_at: new Date().toISOString(),
   };
 
@@ -67,8 +69,10 @@ export function subscribeToSessionChanges(
     );
 
   channel.subscribe((status, err) => {
-    if (status === 'CHANNEL_ERROR') {
+    if (status === 'CHANNEL_ERROR' && err) {
       console.error('[userSessions] Realtime channel error:', err);
+    } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
+      console.warn('[userSessions] Realtime channel closed:', status);
     }
   });
 

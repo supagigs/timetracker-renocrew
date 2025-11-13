@@ -116,7 +116,6 @@ export default async function ScreenshotsPage({
   }
 
   const isClient = profile.category === 'Client';
-  const isFreelancer = profile.category === 'Freelancer';
 
   const requestedFreelancer = (() => {
     const value = resolvedSearchParams?.freelancer;

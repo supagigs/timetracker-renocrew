@@ -400,8 +400,6 @@ export default async function ReportsPage({
   let assignedProjects: ProjectRecord[] = [];
 
   try {
-    const supabase = createServerSupabaseClient();
-
     // Fetch viewer details (the person whose email is in the URL)
     viewerName = await fetchUserName(decodedEmail);
 

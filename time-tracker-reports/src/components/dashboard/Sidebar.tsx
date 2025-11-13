@@ -13,7 +13,6 @@ import {
   Settings,
   Users,
   BarChart3,
-  CalendarClock,
   Monitor,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -38,36 +37,33 @@ const DEFAULT_NAV_ITEMS = (
 
 const buildReportsNavItems = (
   pathname: string,
-  userRole?: string | null,
-  userEmail?: string | null,
+  normalizedRole: "client" | "freelancer" | null,
+  normalizedEmail?: string | null,
 ): Array<NavItemConfig & { active: boolean }> => {
-  if (!userEmail) {
+  if (!normalizedEmail) {
     return DEFAULT_NAV_ITEMS(pathname);
   }
 
-  const encodedEmail = encodeURIComponent(userEmail);
+  const encodedEmail = encodeURIComponent(normalizedEmail);
   const basePath = `/reports/${encodedEmail}`;
 
   const items: NavItemConfig[] = [
     { icon: <LayoutDashboard size={20} />, label: "Overview", href: basePath },
-    { icon: <FolderOpen size={20} />, label: "Projects", href: `${basePath}/projects` },
-    { icon: <BarChart3 size={20} />, label: "Reports", href: `${basePath}/reports` },
-    { icon: <CalendarClock size={20} />, label: "Timesheet", href: `${basePath}/timesheet` },
   ];
 
-  if (userRole === "Client") {
-    items.splice(2, 0, {
+  if (normalizedRole === "client") {
+    items.push({
       icon: <Users size={20} />,
       label: "Freelancers",
       href: `${basePath}/freelancers`,
     });
   }
 
-  items.splice(items.length - 1, 0, {
-    icon: <Monitor size={20} />,
-    label: "Screenshots",
-    href: `${basePath}/screenshots`,
-  });
+  items.push(
+    { icon: <FolderOpen size={20} />, label: "Projects", href: `${basePath}/projects` },
+    { icon: <BarChart3 size={20} />, label: "Reports", href: `${basePath}/reports` },
+    { icon: <Monitor size={20} />, label: "Screenshots", href: `${basePath}/screenshots` },
+  );
 
   return items.map((item) => ({
     ...item,
@@ -85,9 +81,15 @@ export function Sidebar({
   userEmail?: string | null;
 }) {
   const pathname = usePathname();
-  const hasReportsNavigation = userRole === "Client" || userRole === "Freelancer";
+  const normalizedRole = userRole ? userRole.trim().toLowerCase() : null;
+  const normalizedEmail = userEmail ? userEmail.trim().toLowerCase() : null;
+  const hasReportsNavigation = normalizedRole === "client" || normalizedRole === "freelancer";
   const navItems = hasReportsNavigation
-    ? buildReportsNavItems(pathname, userRole, userEmail ?? undefined)
+    ? buildReportsNavItems(
+        pathname,
+        normalizedRole as "client" | "freelancer",
+        normalizedEmail ?? undefined,
+      )
     : DEFAULT_NAV_ITEMS(pathname);
 
   return (

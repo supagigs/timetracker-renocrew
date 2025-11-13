@@ -28,12 +28,14 @@ export function SessionWatcher({ email }: SessionWatcherProps) {
         return;
       }
 
-      const appChanged =
-        typeof newState.app_logged_in === "boolean" &&
-        newState.app_logged_in === false &&
-        (oldState?.app_logged_in ?? true) !== newState.app_logged_in;
+      const oldAppLoggedIn =
+        typeof oldState?.app_logged_in === "boolean" ? oldState.app_logged_in : null;
+      const newAppLoggedIn =
+        typeof newState.app_logged_in === "boolean" ? newState.app_logged_in : null;
 
-      if (appChanged) {
+      const appLoggedOut = oldAppLoggedIn === true && newAppLoggedIn === false;
+
+      if (appLoggedOut) {
         try {
           localStorage.removeItem(WEB_USER_STORAGE_KEY);
         } catch (error) {

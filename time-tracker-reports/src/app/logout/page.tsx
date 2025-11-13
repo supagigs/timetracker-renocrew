@@ -59,7 +59,7 @@ export default function LogoutPage() {
   const helperText =
     origin === "app"
       ? "The desktop app ended your session. Please sign in from the desktop app and click “View reports” to return here."
-      : "Please sign in from the desktop app and click “View reports” to get back into the reports website.";
+      : "You have been logged out. Please sign in again and click “View reports” to get back into the reports website.";
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-10 text-foreground">

@@ -183,7 +183,7 @@ export default async function ClientFreelancersPage({
           <section className="rounded-2xl border border-border bg-card p-6 text-center shadow-sm">
             <h1 className="text-2xl font-semibold text-foreground">Account not found</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              We couldn't locate your account details. Please ensure you are logged in with the correct email.
+              We couldn&apos;t locate your account details. Please ensure you are logged in with the correct email.
             </p>
           </section>
         </div>
