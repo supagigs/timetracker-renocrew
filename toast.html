@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Screen Captured</title>
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      background: transparent;
+      overflow: hidden;
+    }
+    #toast-container {
+      width: 500px;
+      height: 330px;
+      background: #fff;
+      border-radius: 18px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.20), 0 2px 8px rgba(16, 69, 88, 0.35);
+      font-family: 'Segoe UI', Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .toast-header-row {
+      display: flex;
+      align-items: center;
+      padding: 14px 15px;
+      background: #fff;
+      flex-shrink: 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    #app-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      background: transparent;
+      object-fit: contain;
+      margin-right: 12px;
+      display: block;
+      flex-shrink: 0;
+    }
+    #toast-title {
+      font-size: 1.08rem;
+      font-weight: 600;
+      color: #232b3a;
+      margin-right: auto;
+    }
+    #close-x {
+      font-size: 1.3rem;
+      color: #888;
+      cursor: pointer;
+      border: none;
+      background: none;
+      padding: 0;
+      transition: color 0.14s;
+    }
+    #close-x:hover {
+      color: #e11d48;
+    }
+    .toast-content-row {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      flex: 1;
+      padding: 18px 24px 18px 18px;
+      background: #f8f9fa;
+      box-sizing: border-box;
+      gap: 18px;
+      overflow: hidden;
+    }
+    #preview-img {
+      width: 400px;
+      height: 200px;
+      border-radius: 12px;
+      object-fit: cover;
+      background: #e8e8e8;
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px #0001;
+      image-rendering: auto;
+      display: block;
+    }
+    .side-column {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      min-width: 62px;
+      flex: 1;
+    }
+    #vertical-loader {
+      width: 10px;
+      height: 120px;
+      background: #e8eaea;
+      border-radius: 10px;
+      display: flex;
+      align-items: flex-end;
+      overflow: hidden;
+      position: relative;
+    }
+    #loader-bar {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(180deg, #10b981 70%, #22c55e 100%);
+      border-radius: 10px;
+      position: absolute;
+      bottom: 0;
+      transition: height 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+      box-shadow: 0 2px 7px rgba(20, 211, 140, 0.16);
+    }
+    #delete-btn {
+      font-size: 1.4rem;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px 8px;
+      transition: color 0.15s, transform 0.15s;
+      color: #888;
+    }
+    #delete-btn:hover {
+      color: #e11d48;
+      transform: scale(1.10);
+    }
+    #delete-btn.deleting {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div id="toast-container">
+    <div class="toast-header-row">
+      <img id="app-logo" src="SupagigsLogo.png"/>
+      <div id="toast-title">Screen Captured</div>
+      <button id="close-x">&times;</button>
+    </div>
+    <div class="toast-content-row">
+      <img id="preview-img" alt="Screenshot" />
+      <div class="side-column">
+        <div id="vertical-loader">
+          <div id="loader-bar"></div>
+        </div>
+        <button id="delete-btn">🗑️</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    let currentFilePath = null;
+    let isDeleting = false;
+
+    // Initialize toast with file path and preview image
+    if (window.toastAPI?.onInit) {
+      window.toastAPI.onInit(({ filePath, base64Data }) => {
+        currentFilePath = filePath;
+        document.getElementById('preview-img').src = base64Data;
+        console.log('[TOAST] Initialized with filePath:', filePath);
+      });
+    }
+
+    // Close button handler
+    document.getElementById('close-x').onclick = () => {
+      console.log('[TOAST] Close button clicked');
+      window.close();
+    };
+
+    // Delete button handler
+    document.getElementById('delete-btn').onclick = async () => {
+      if (isDeleting || !currentFilePath) {
+        console.log('[TOAST] Delete blocked: isDeleting=', isDeleting, 'filePath=', currentFilePath);
+        return;
+      }
+      
+      isDeleting = true;
+      const btn = document.getElementById('delete-btn');
+      btn.classList.add('deleting');
+      btn.disabled = true;
+      
+      console.log('[TOAST] Delete button clicked, calling IPC with:', currentFilePath);
+
+      try {
+        const result = await window.toastAPI.deleteFile(currentFilePath);
+        console.log('[TOAST] Delete result:', result);
+        
+        if (result?.success) {
+          setTimeout(() => window.close(), 300);
+        } else {
+          throw new Error(result?.message || 'Delete failed');
+        }
+      } catch (error) {
+        console.error('[TOAST] Delete error:', error);
+        alert('Delete failed: ' + error.message);
+        isDeleting = false;
+        btn.classList.remove('deleting');
+        btn.disabled = false;
+      }
+    };
+
+    // Loader animation
+    const loaderBar = document.getElementById('loader-bar');
+    const startTime = Date.now();
+    
+    function animateLoader() {
+      const elapsed = Date.now() - startTime;
+      const percent = Math.max(0, 100 - (elapsed / 9000) * 100);
+      loaderBar.style.height = percent + '%';
+      
+      if (percent > 0) {
+        requestAnimationFrame(animateLoader);
+      } else if (!isDeleting) {
+        console.log('[TOAST] Timer expired, closing window');
+        window.close();
+      }
+    }
+    
+    animateLoader();
+  </script>
+</body>
+</html>
