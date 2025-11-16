@@ -4,6 +4,7 @@ import FreelancerSelector from '@/components/FreelancerSelector';
 import { DashboardShell } from '@/components/dashboard';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { fetchUserProfile } from '@/lib/userProfile';
+import { type DateRange, normalizeDateRange } from '@/lib/dateRange';
 
 type TimeSession = {
   id: number;
@@ -21,22 +22,15 @@ type Screenshot = {
   captured_idle: boolean | null;
 };
 
-async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]> {
+async function fetchSessionsInRange(userEmail: string, dateRange: DateRange): Promise<TimeSession[]> {
   const supabase = createServerSupabaseClient();
-
-  const endDate = new Date();
-  const startDate = new Date();
-  startDate.setDate(endDate.getDate() - 29);
-
-  const startDateStr = format(startDate, 'yyyy-MM-dd');
-  const endDateStr = format(endDate, 'yyyy-MM-dd');
 
   const { data, error } = await supabase
     .from('time_sessions')
     .select('id, session_date, start_time, end_time')
     .eq('user_email', userEmail)
-    .gte('session_date', startDateStr)
-    .lte('session_date', endDateStr)
+    .gte('session_date', dateRange.start)
+    .lte('session_date', dateRange.end)
     .order('session_date', { ascending: false })
     .order('start_time', { ascending: false });
 
@@ -126,8 +120,9 @@ export default async function ScreenshotsPage({
   })();
 
   const targetEmail = isClient ? requestedFreelancer ?? null : profile.email;
+  const dateRange = normalizeDateRange(resolvedSearchParams);
 
-  const sessions = targetEmail ? await fetchLastMonthSessions(targetEmail) : [];
+  const sessions = targetEmail ? await fetchSessionsInRange(targetEmail, dateRange) : [];
   const latestSessionId = sessions[0]?.id;
   const screenshots = targetEmail ? await fetchScreenshots(targetEmail, latestSessionId) : [];
 
@@ -147,6 +142,49 @@ export default async function ScreenshotsPage({
             Browse captured screenshots by session{isClient ? '. Choose a freelancer to get started.' : '.'}
           </p>
         </header>
+
+        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <form className="flex flex-col gap-4 sm:flex-row sm:items-end" method="get">
+            <div>
+              <label
+                htmlFor="from"
+                className="block text-xs font-medium uppercase tracking-wide text-muted-foreground"
+              >
+                From
+              </label>
+              <input
+                type="date"
+                id="from"
+                name="from"
+                className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                defaultValue={dateRange.start}
+                max={dateRange.end}
+              />
+            </div>
+            <div>
+              <label htmlFor="to" className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                To
+              </label>
+              <input
+                type="date"
+                id="to"
+                name="to"
+                className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                defaultValue={dateRange.end}
+                min={dateRange.start}
+              />
+            </div>
+            {isClient && requestedFreelancer ? (
+              <input type="hidden" name="freelancer" value={requestedFreelancer} />
+            ) : null}
+            <button
+              type="submit"
+              className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
+            >
+              Apply Filters
+            </button>
+          </form>
+        </section>
 
         {showPicker && (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">

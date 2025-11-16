@@ -3,6 +3,7 @@ import { CalendarClock } from 'lucide-react';
 import { DashboardShell } from '@/components/dashboard';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
+import { type DateRange, defaultDateRange, normalizeDateRange } from '@/lib/dateRange';
 
 type TimesheetRow = {
   id: number;
@@ -18,11 +19,6 @@ type TimesheetRow = {
   totalSeconds: number;
 };
 
-type DateRange = {
-  start: string;
-  end: string;
-};
-
 type RawSessionRow = {
   id: number;
   user_email: string;
@@ -36,39 +32,6 @@ type RawSessionRow = {
     project_name: string | null;
   } | null;
 };
-
-function defaultDateRange(): DateRange {
-  const end = new Date();
-  const start = new Date();
-  start.setDate(end.getDate() - 29);
-  return {
-    start: format(start, 'yyyy-MM-dd'),
-    end: format(end, 'yyyy-MM-dd'),
-  };
-}
-
-function normalizeDateRange(searchParams: Record<string, string | string[] | undefined>): DateRange {
-  const fallback = defaultDateRange();
-  const fromParam = searchParams.from;
-  const toParam = searchParams.to;
-
-  const coerce = (value: string | string[] | undefined): string | null => {
-    if (!value) return null;
-    if (Array.isArray(value)) {
-      return value[0]?.slice(0, 10) ?? null;
-    }
-    return value.slice(0, 10);
-  };
-
-  const start = coerce(fromParam) ?? fallback.start;
-  const end = coerce(toParam) ?? fallback.end;
-
-  if (start > end) {
-    return fallback;
-  }
-
-  return { start, end };
-}
 
 async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): Promise<RawSessionRow[]> {
   if (emails.length === 0) {

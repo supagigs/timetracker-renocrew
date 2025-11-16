@@ -6,6 +6,7 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { redirect } from 'next/navigation';
 import { format } from 'date-fns';
+import { type DateRange, normalizeDateRange } from '@/lib/dateRange';
 
 type TimeSession = {
   id: number;
@@ -59,7 +60,7 @@ function formatSecondsToHoursMinutes(totalSeconds: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-function buildMonthlySummary(sessions: TimeSession[]) {
+function buildMonthlySummary(sessions: TimeSession[], dateRange: DateRange) {
   const daily = new Map<string, { active: number; idle: number }>();
 
   sessions.forEach((session) => {
@@ -76,16 +77,22 @@ function buildMonthlySummary(sessions: TimeSession[]) {
   const activeHours: number[] = [];
   const idleHours: number[] = [];
 
-  const now = new Date();
-  for (let i = 29; i >= 0; i -= 1) {
-    const date = new Date(now);
-    date.setDate(now.getDate() - i);
-    const key = format(date, 'yyyy-MM-dd');
-    const label = format(date, 'MMM dd');
+  const startDate = new Date(dateRange.start);
+  const endDate = new Date(dateRange.end);
+
+  let daysCount = 0;
+  for (
+    let cursor = new Date(startDate);
+    cursor <= endDate;
+    cursor.setDate(cursor.getDate() + 1)
+  ) {
+    const key = format(cursor, 'yyyy-MM-dd');
+    const label = format(cursor, 'MMM dd');
     labels.push(label);
     const entry = daily.get(key);
     activeHours.push((entry?.active ?? 0) / 3600);
     idleHours.push((entry?.idle ?? 0) / 3600);
+    daysCount += 1;
   }
 
   const totalActiveSeconds = sessions.reduce((sum, session) => sum + (session.active_duration ?? 0), 0);
@@ -94,9 +101,8 @@ function buildMonthlySummary(sessions: TimeSession[]) {
   const avgIdlePercent = totalTimeSeconds > 0 ? (totalIdleSeconds / totalTimeSeconds) * 100 : 0;
 
   const daysWithWork = activeHours.filter((h) => h > 0).length;
-  const avgDailyHours = daysWithWork > 0
-    ? (totalActiveSeconds / 3600) / daysWithWork
-    : (totalActiveSeconds / 3600) / 30;
+  const denominator = daysWithWork > 0 ? daysWithWork : Math.max(daysCount, 1);
+  const avgDailyHours = (totalActiveSeconds / 3600) / denominator;
 
   return {
     labels,
@@ -143,15 +149,8 @@ function buildProjectSummary(sessions: TimeSession[]) {
     .sort((a, b) => b.totalHours - a.totalHours);
 }
 
-async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]> {
+async function fetchSessionsInRange(userEmail: string, dateRange: DateRange): Promise<TimeSession[]> {
   const supabase = createServerSupabaseClient();
-
-  const endDate = new Date();
-  const startDate = new Date();
-  startDate.setDate(endDate.getDate() - 29);
-
-  const startDateStr = format(startDate, 'yyyy-MM-dd');
-  const endDateStr = format(endDate, 'yyyy-MM-dd');
 
   const { data, error } = await supabase
     .from('time_sessions')
@@ -165,8 +164,8 @@ async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]>
       `,
     )
     .eq('user_email', userEmail)
-    .gte('session_date', startDateStr)
-    .lte('session_date', endDateStr)
+    .gte('session_date', dateRange.start)
+    .lte('session_date', dateRange.end)
     .order('start_time', { ascending: false });
 
   if (error) {
@@ -225,8 +224,10 @@ export default async function ReportsAnalyticsPage({
     redirect(`/reports/${encodeURIComponent(profile.email)}`);
   }
 
-  const sessions = await fetchLastMonthSessions(targetEmail);
-  const summary = buildMonthlySummary(sessions);
+  const dateRange = normalizeDateRange(resolvedSearchParams);
+
+  const sessions = await fetchSessionsInRange(targetEmail, dateRange);
+  const summary = buildMonthlySummary(sessions, dateRange);
   const projectSummary = buildProjectSummary(sessions);
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
@@ -242,13 +243,55 @@ export default async function ReportsAnalyticsPage({
     >
       <div className="space-y-6">
         <header className="space-y-2">
-          <h1 className="text-3xl font-bold text-foreground">
-            Reports
-          </h1>
+          <h1 className="text-3xl font-bold text-foreground">Reports</h1>
           <p className="text-sm text-muted-foreground">
-            Detailed analytics for the last 30 days{isClient && requestedFreelancer ? ` · ${requestedFreelancer}` : ''}.
+            Detailed analytics for the selected date range
+            {isClient && requestedFreelancer ? ` · ${requestedFreelancer}` : ''}.
           </p>
         </header>
+
+        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <form className="flex flex-col gap-4 sm:flex-row sm:items-end" method="get">
+            <div>
+              <label
+                htmlFor="from"
+                className="block text-xs font-medium uppercase tracking-wide text-muted-foreground"
+              >
+                From
+              </label>
+              <input
+                type="date"
+                id="from"
+                name="from"
+                className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                defaultValue={dateRange.start}
+                max={dateRange.end}
+              />
+            </div>
+            <div>
+              <label htmlFor="to" className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                To
+              </label>
+              <input
+                type="date"
+                id="to"
+                name="to"
+                className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                defaultValue={dateRange.end}
+                min={dateRange.start}
+              />
+            </div>
+            {isClient && requestedFreelancer ? (
+              <input type="hidden" name="freelancer" value={requestedFreelancer} />
+            ) : null}
+            <button
+              type="submit"
+              className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
+            >
+              Apply Filters
+            </button>
+          </form>
+        </section>
 
         {isClient && (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
@@ -267,7 +310,7 @@ export default async function ReportsAnalyticsPage({
         )}
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <SummaryCard title="Total Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
+          <SummaryCard title="Total Work" value={formatHoursMinutes(summary.totalHours)} />
           <SummaryCard title="Avg. Daily Work" value={formatHoursMinutes(summary.avgDailyHours)} />
           <SummaryCard title="Avg. Idle %" value={`${summary.avgIdlePercent.toFixed(1)}%`} />
           <SummaryCard title="Active Today" value={formatSecondsToHoursMinutes(todayActiveSeconds)} />
@@ -275,7 +318,7 @@ export default async function ReportsAnalyticsPage({
 
         {projectSummary.length > 0 && (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-            <h2 className="mb-4 text-xl font-semibold text-foreground">Time by Project (Last 30 Days)</h2>
+            <h2 className="mb-4 text-xl font-semibold text-foreground">Time by Project</h2>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -300,7 +343,7 @@ export default async function ReportsAnalyticsPage({
         )}
 
         <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <h2 className="mb-4 text-xl font-semibold text-foreground">Daily Activity (Last 30 Days)</h2>
+          <h2 className="mb-4 text-xl font-semibold text-foreground">Daily Activity</h2>
           <WeeklyActivityChart
             labels={summary.labels}
             activeHours={summary.activeHours}
