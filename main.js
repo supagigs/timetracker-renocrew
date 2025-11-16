@@ -33,7 +33,20 @@ async function getActiveAppName() {
     if (!activeWindowModule) {
       activeWindowModule = await import('active-win');
     }
-    const result = await activeWindowModule.default();
+
+    const activeWindowFn =
+      typeof activeWindowModule.activeWindow === 'function'
+        ? activeWindowModule.activeWindow
+        : typeof activeWindowModule.default === 'function'
+          ? activeWindowModule.default
+          : null;
+
+    if (!activeWindowFn) {
+      console.warn('[screenshots] active-win loaded, but no callable export was found:', activeWindowModule);
+      return null;
+    }
+
+    const result = await activeWindowFn();
     if (!result) {
       return null;
     }
