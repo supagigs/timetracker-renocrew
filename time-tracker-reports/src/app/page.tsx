@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard";
 import { createSupabaseBrowserClient } from "@/lib/supabaseBrowser";
-import { setUserSessionState, subscribeToSessionChanges } from "@/lib/userSessions";
+import { setUserSessionState } from "@/lib/userSessions";
 import { WEB_USER_STORAGE_KEY } from "@/lib/constants";
 
 type Category = "Client" | "Freelancer" | null;
@@ -43,41 +43,6 @@ export default function Home() {
     [supabase],
   );
 
-  const performLocalLogout = useCallback(
-    (origin: "app" | "web" | "session" = "web") => {
-      const targetEmail =
-        user?.email ||
-        (() => {
-          try {
-            const raw = localStorage.getItem(WEB_USER_STORAGE_KEY);
-            if (!raw) {
-              return null;
-            }
-            const saved = JSON.parse(raw) as AuthenticatedUser | null;
-            return saved?.email ?? null;
-          } catch (error) {
-            console.warn("[page] Failed to read stored user during logout:", error);
-            return null;
-          }
-        })();
-
-      if (targetEmail) {
-        void updateWebSession(targetEmail, false);
-      }
-
-      try {
-        localStorage.removeItem(WEB_USER_STORAGE_KEY);
-      } catch (error) {
-        console.warn("[page] Failed to clear stored user:", error);
-      }
-
-      setUser(null);
-      setLoginSuccess("");
-      router.push(`/logout?origin=${origin}`);
-    },
-    [user?.email, updateWebSession, router],
-  );
-
   useEffect(() => {
     const raw = typeof window !== "undefined" ? localStorage.getItem(WEB_USER_STORAGE_KEY) : null;
     if (!raw) {
@@ -98,61 +63,14 @@ export default function Home() {
     const normalized = normalizeUser(saved);
     const isClientUser = normalized.category === "Client";
 
-    const verifySession = async () => {
-      try {
-        const { data, error } = await supabase
-          .from("user_sessions")
-          .select("web_logged_in, app_logged_in")
-          .eq("email", normalized.email)
-          .maybeSingle();
-
-        if (error) {
-          throw error;
-        }
-
-        if (data?.web_logged_in === false) {
-          void updateWebSession(normalized.email, true);
-        }
-
-        if (!isClientUser && data?.app_logged_in === false) {
-          void updateWebSession(normalized.email, true);
-        }
-
-        setUser({ ...normalized, projects: normalized.projects ?? [] });
-        setLoginEmail(normalized.email);
-        void updateWebSession(normalized.email, true);
-      } catch (error) {
-        console.warn("[page] Unable to verify stored session state:", error);
-        setUser({ ...normalized, projects: normalized.projects ?? [] });
-        setLoginEmail(normalized.email);
-        void updateWebSession(normalized.email, true);
-      }
+    const restoreSession = () => {
+      setUser({ ...normalized, projects: normalized.projects ?? [] });
+      setLoginEmail(normalized.email);
+      void updateWebSession(normalized.email, true);
     };
 
-    verifySession();
-  }, [supabase, updateWebSession, performLocalLogout]);
-
-  useEffect(() => {
-    if (!user?.email || user.category === "Client") {
-      return;
-    }
-
-    const unsubscribe = subscribeToSessionChanges(supabase, user.email, (payload) => {
-      const oldApp = payload.old?.app_logged_in ?? null;
-      const newApp = payload.new?.app_logged_in ?? null;
-
-      if (oldApp !== newApp && newApp === false) {
-        performLocalLogout("app");
-        performLocalLogout("app");
-      }
-    });
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, [user?.email, user?.category, supabase, performLocalLogout]);
+    restoreSession();
+  }, [supabase, updateWebSession]);
 
   const loginButtonDisabled = useMemo(
     () => loginPending || !EMAIL_REGEX.test(loginEmail),

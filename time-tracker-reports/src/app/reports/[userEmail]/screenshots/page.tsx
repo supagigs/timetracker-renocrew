@@ -2,6 +2,7 @@ import { format } from 'date-fns';
 import ScreenshotSelector from '@/components/ScreenshotSelector';
 import FreelancerSelector from '@/components/FreelancerSelector';
 import { DashboardShell } from '@/components/dashboard';
+import { ReportsRealtimeWatcher } from '@/components/ReportsRealtimeWatcher';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { type DateRange, normalizeDateRange } from '@/lib/dateRange';
@@ -135,6 +136,7 @@ export default async function ScreenshotsPage({
       userEmail={profile.email}
       userRole={profile.category}
     >
+      <ReportsRealtimeWatcher userEmail={targetEmail ?? profile.email} />
       <div className="space-y-6">
         <header className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Screenshots</h1>

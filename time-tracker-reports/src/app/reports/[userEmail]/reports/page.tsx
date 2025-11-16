@@ -2,6 +2,7 @@ import SummaryCard from '@/components/SummaryCard';
 import WeeklyActivityChart from '@/components/WeeklyActivityChart';
 import FreelancerSelector from '@/components/FreelancerSelector';
 import { DashboardShell } from '@/components/dashboard';
+import { ReportsRealtimeWatcher } from '@/components/ReportsRealtimeWatcher';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { redirect } from 'next/navigation';
@@ -241,6 +242,7 @@ export default async function ReportsAnalyticsPage({
       userEmail={profile.email}
       userRole={profile.category}
     >
+      <ReportsRealtimeWatcher userEmail={targetEmail} />
       <div className="space-y-6">
         <header className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Reports</h1>
