@@ -260,7 +260,7 @@ export default async function ScreenshotsPage({
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <ScreenshotSelector
               userEmail={targetEmail ?? profile.email}
-              sessions={sessions as TimeSession[]}
+              sessions={sessions}
               initialScreenshots={screenshots}
               initialSessionId={latestSessionId}
             />

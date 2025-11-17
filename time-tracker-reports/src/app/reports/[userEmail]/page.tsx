@@ -25,16 +25,6 @@ type TimeSession = {
   } | null;
 };
 
-type MonthlySummary = {
-  labels: string[];
-  activeHours: number[];
-  idleHours: number[];
-  totalHours: number;
-  totalIdleSeconds: number;
-  avgIdlePercent: number;
-  avgDailyHours: number;
-};
-
 type TeamMemberSummary = {
   email: string;
   displayName: string | null;
@@ -245,7 +235,7 @@ async function fetchUserCategory(userEmail: string): Promise<string | null> {
   return data?.category || null;
 }
 
-function buildMonthlySummary(sessions: TimeSession[]): MonthlySummary {
+function buildMonthlySummary(sessions: TimeSession[]) {
   const daily = new Map<string, { active: number; idle: number }>();
 
   sessions.forEach((session) => {
@@ -385,7 +375,7 @@ export default async function ReportsPage({
     return value ?? null;
   })();
 
-  const defaultSummary : MonthlySummary = {
+  const defaultSummary = {
     labels: [],
     activeHours: [],
     idleHours: [],

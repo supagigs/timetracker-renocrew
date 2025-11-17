@@ -11,9 +11,6 @@ export type UserSessionRow = {
   updated_at: string | null;
 };
 
-// ----------------------------
-// Update session flags
-// ----------------------------
 export async function setUserSessionState(
   supabase: SupabaseClient,
   email: string,
@@ -31,7 +28,7 @@ export async function setUserSessionState(
     throw fetchError;
   }
 
-  const payload: UserSessionRow = {
+  const payload = {
     email: normalizedEmail,
     web_logged_in:
       updates.web_logged_in ?? existing?.web_logged_in ?? null,
@@ -51,49 +48,36 @@ export async function setUserSessionState(
   return payload;
 }
 
-// ----------------------------
-// Subscribe to realtime changes
-// ----------------------------
 export function subscribeToSessionChanges(
   supabase: SupabaseClient,
   email: string,
-  handler: (payload: {
-    old: Partial<UserSessionRow> | null;
-    new: Partial<UserSessionRow> | null;
-  }) => void,
+  handler: (payload: RealtimePostgresChangesPayload<UserSessionRow>) => void,
 ) {
   const normalizedEmail = email.trim().toLowerCase();
 
-  const channel = supabase
+  const channel: RealtimeChannel = supabase
     .channel(`user-session-${normalizedEmail}`)
-    .on(
-      "postgres_changes",
+    .on<UserSessionRow>(
+      'postgres_changes',
       {
-        event: "*",
-        schema: "public",
-        table: "user_sessions",
+        event: '*',
+        schema: 'public',
+        table: 'user_sessions',
         filter: `email=eq.${normalizedEmail}`,
       },
-      (payload: any) => {
-        handler({
-          old: (payload.old ?? null) as Partial<UserSessionRow> | null,
-          new: (payload.new ?? null) as Partial<UserSessionRow> | null,
-        });
-      }
+      (payload) => handler(payload),
     );
 
   channel.subscribe((status, err) => {
-    if (status === "CHANNEL_ERROR" && err) {
-      console.error("[userSessions] Realtime channel error:", err);
-    } else if (status === "TIMED_OUT" || status === "CLOSED") {
-      console.warn("[userSessions] Realtime channel closed:", status);
+    if (status === 'CHANNEL_ERROR' && err) {
+      console.error('[userSessions] Realtime channel error:', err);
+    } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
+      console.warn('[userSessions] Realtime channel closed:', status);
     }
   });
 
-  // FIXED CLEANUP — React-safe
   return () => {
-    supabase.removeChannel(channel); // no return
+    supabase.removeChannel(channel);
   };
 }
-
 

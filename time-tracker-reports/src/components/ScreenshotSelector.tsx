@@ -1,14 +1,5 @@
 'use client';
 
-// ============ TYPE DECLARATION FOR ELECTRON API ============
-declare global {
-  interface Window {
-    electronAPI?: {
-      onScreenshotDeleted?: (callback: (data: any) => void) => () => void;
-    };
-  }
-}
-
 import { useState, useEffect, startTransition } from 'react';
 import ScreenshotGrid from './ScreenshotGrid';
 import { format } from 'date-fns';
@@ -66,40 +57,8 @@ export default function ScreenshotSelector({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ============ NEW: LISTEN FOR SCREENSHOT DELETION EVENT ============
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    if (window.electronAPI?.onScreenshotDeleted) {
-      console.log('[ScreenshotSelector] Setting up deletion listener');
-      
-      const unsubscribe = window.electronAPI.onScreenshotDeleted((data: any) => {
-        console.log('[ScreenshotSelector] Screenshot deleted event received:', data);
-        
-        // Remove the deleted screenshot from the display
-        setScreenshots(prev => {
-          const updated = prev.filter(ss => {
-            // Check if screenshot URL contains the deleted filename
-            if (ss.screenshot_data.includes(data.filename)) {
-              console.log('[ScreenshotSelector] Removing screenshot:', data.filename);
-              return false;
-            }
-            return true;
-          });
-          
-          console.log(`[ScreenshotSelector] Filtered screenshots: ${prev.length} -> ${updated.length}`);
-          return updated;
-        });
-      });
-      
-      return unsubscribe; // cleanup on unmount
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!selectedSessionId) {
+  if (!selectedSessionId) {
       return;
     }
 
@@ -247,8 +206,9 @@ export default function ScreenshotSelector({
           No screenshots available for this session.
         </div>
       ) : (
-        <ScreenshotGrid screenshots={screenshots} />
+          <ScreenshotGrid screenshots={screenshots} />
       )}
     </section>
   );
 }
+
