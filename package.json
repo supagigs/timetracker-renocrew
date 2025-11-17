@@ -43,7 +43,7 @@
     "to-ico": "^1.0.1"
   },
   "build": {
-    "appId": "com.yourcompany.time-tracker",
+    "appId": "Supagigs Time Tracker",
     "productName": "Time Tracker",
     "directories": {
       "output": "dist",
@@ -52,6 +52,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "toast.html",
+      "icon.ico",
       "renderer/**/*",
       "node_modules/**/*",
       "package.json"
@@ -63,7 +65,7 @@
     "compression": "maximum",
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "SupagigsLogo.png"
+      "icon": "icon.ico"
     },
     "win": {
       "target": [
@@ -74,7 +76,7 @@
           ]
         }
       ],
-      "icon": "SupagigsLogo.png",
+      "icon": "icon.ico",
       "sign": null,
       "signingHashAlgorithms": null,
       "certificateFile": null,
@@ -89,7 +91,7 @@
     },
     "linux": {
       "target": "AppImage",
-      "icon": "SupagigsLogo.png"
+      "icon": "icon.ico"
     }
   }
 }

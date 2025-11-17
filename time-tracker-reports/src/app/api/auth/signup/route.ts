@@ -1,20 +1,24 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
-type SignupPayload = {
+
+export type SignupPayload = {
   email: string;
   displayName?: string;
   category?: 'Client' | 'Freelancer';
-  projects?: string[];
+  projects: string[];      
 };
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_CATEGORIES = new Set(['Client', 'Freelancer']);
 
+
+
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const payload = normalizePayload(body);
+
 
     if (!EMAIL_REGEX.test(payload.email)) {
       return NextResponse.json(
@@ -32,6 +36,7 @@ export async function POST(request: Request) {
 
     const supabase = createServerSupabaseClient();
 
+    
     const { data: existingUser, error: existingError } = await supabase
       .from('users')
       .select('id, email')
@@ -39,9 +44,9 @@ export async function POST(request: Request) {
       .maybeSingle();
 
     if (existingError) {
-      console.error('[auth/signup] Failed to check for existing user:', existingError);
+      console.error('[auth/signup] Failed to check existing user:', existingError);
       return NextResponse.json(
-        { error: 'Unable to verify existing users at the moment. Please try again later.' },
+        { error: 'Unable to check existing users at the moment.' },
         { status: 500 },
       );
     }
@@ -53,6 +58,7 @@ export async function POST(request: Request) {
       );
     }
 
+    
     const { data: insertedUser, error: insertError } = await supabase
       .from('users')
       .insert({
@@ -71,16 +77,25 @@ export async function POST(request: Request) {
       );
     }
 
+    
     let savedProjects: string[] = [];
+
     if (payload.category === 'Client' && payload.projects.length > 0) {
-      const projectsResult = await upsertProjects(supabase, insertedUser.id, insertedUser.email, payload.projects);
+      const projectsResult = await upsertProjects(
+        supabase,
+        insertedUser.id,
+        insertedUser.email,
+        payload.projects,
+      );
+
       savedProjects = projectsResult.projects;
 
       if (projectsResult.error) {
-        console.warn('[auth/signup] Unable to store some projects:', projectsResult.error);
+        console.warn('[auth/signup] Some projects could not be saved:', projectsResult.error);
       }
     }
 
+    
     return NextResponse.json({
       user: {
         email: insertedUser.email,
@@ -90,6 +105,7 @@ export async function POST(request: Request) {
         projects: savedProjects,
       },
     });
+
   } catch (error) {
     console.error('[auth/signup] Unexpected error:', error);
     return NextResponse.json(
@@ -99,23 +115,37 @@ export async function POST(request: Request) {
   }
 }
 
-function normalizePayload(raw: Partial<SignupPayload>): SignupPayload {
-  const email = typeof raw.email === 'string' ? raw.email.trim().toLowerCase() : '';
-  const displayName = typeof raw.displayName === 'string' && raw.displayName.trim().length > 0
-    ? raw.displayName.trim()
-    : undefined;
-  const category = typeof raw.category === 'string' ? (raw.category.trim() as SignupPayload['category']) : undefined;
-  const projectsInput = Array.isArray(raw.projects) ? raw.projects : [];
 
-  const projects = Array.from(new Set(
-    projectsInput
-      .filter((value): value is string => typeof value === 'string')
-      .map((project) => project.trim())
-      .filter((project) => project.length > 0),
-  ));
+
+function normalizePayload(raw: Partial<SignupPayload>): SignupPayload {
+  const email =
+    typeof raw.email === 'string'
+      ? raw.email.trim().toLowerCase()
+      : '';
+
+  const displayName =
+    typeof raw.displayName === 'string' && raw.displayName.trim().length > 0
+      ? raw.displayName.trim()
+      : undefined;
+
+  const category =
+    typeof raw.category === 'string'
+      ? (raw.category.trim() as SignupPayload['category'])
+      : undefined;
+
+  const projects = Array.from(
+    new Set(
+      (Array.isArray(raw.projects) ? raw.projects : [])
+        .filter((p): p is string => typeof p === 'string')
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0)
+    )
+  );
 
   return { email, displayName, category, projects };
 }
+
+
 
 async function upsertProjects(
   supabase: ReturnType<typeof createServerSupabaseClient>,
@@ -123,10 +153,16 @@ async function upsertProjects(
   email: string,
   projects: string[],
 ) {
-  const response = { projects, error: null as unknown } as { projects: string[]; error: Error | null };
+  const response: { projects: string[]; error: Error | null } = {
+    projects,
+    error: null,
+  };
 
-  // Attempt using user_id if the schema has already migrated
-  const userIdPayload = projects.map((project_name) => ({ user_id: userId, project_name }));
+
+  const userIdPayload = projects.map((project_name) => ({
+    user_id: userId,
+    project_name,
+  }));
 
   const byUserId = await supabase
     .from('projects')
@@ -136,18 +172,21 @@ async function upsertProjects(
   if (!byUserId.error && Array.isArray(byUserId.data)) {
     response.projects = byUserId.data
       .map((item) => item.project_name)
-      .filter((name): name is string => Boolean(name && name.trim()))
+      .filter((name): name is string => !!name?.trim())
       .map((name) => name.trim());
     return response;
   }
 
+  
   if (byUserId.error && !isMissingColumnError(byUserId.error, 'user_id')) {
     response.error = byUserId.error as unknown as Error;
     return response;
   }
 
-  // Fall back to legacy schema that used user_email
-  const emailPayload = projects.map((project_name) => ({ user_email: email, project_name }));
+  const emailPayload = projects.map((project_name) => ({
+    user_email: email,
+    project_name,
+  }));
 
   const byEmail = await supabase
     .from('projects')
@@ -161,25 +200,18 @@ async function upsertProjects(
 
   response.projects = (byEmail.data ?? [])
     .map((item) => item.project_name)
-    .filter((name): name is string => Boolean(name && name.trim()))
+    .filter((name): name is string => !!name?.trim())
     .map((name) => name.trim());
 
   return response;
 }
 
+
 function isMissingColumnError(error: { message?: string | null }, column: string) {
-  if (!error?.message) {
-    return false;
-  }
-  return error.message.includes(`column \"${column}\"`) || error.message.includes(`column ${column}`);
+  if (!error?.message) return false;
+
+  return (
+    error.message.includes(`column \"${column}\"`) ||
+    error.message.includes(`column ${column}`)
+  );
 }
-
-
-
-
-
-
-
-
-
-

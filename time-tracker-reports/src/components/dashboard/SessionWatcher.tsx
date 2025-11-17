@@ -11,27 +11,28 @@ type SessionWatcherProps = {
   email?: string | null;
 };
 
+function hasAppLoggedIn(row: any): row is UserSessionRow {
+  return row && typeof row.app_logged_in === "boolean";
+}
+
 export function SessionWatcher({ email }: SessionWatcherProps) {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   useEffect(() => {
-    if (!email) {
-      return;
-    }
+    if (!email) return;
 
     const unsubscribe = subscribeToSessionChanges(supabase, email, (payload) => {
-      const oldState: UserSessionRow | null = payload.old ?? null;
-      const newState: UserSessionRow | null = payload.new ?? null;
+      const oldState = payload.old ?? null;
+      const newState = payload.new ?? null;
 
-      if (!newState) {
-        return;
-      }
+      if (!hasAppLoggedIn(newState)) return;
 
-      const oldAppLoggedIn =
-        typeof oldState?.app_logged_in === "boolean" ? oldState.app_logged_in : null;
-      const newAppLoggedIn =
-        typeof newState.app_logged_in === "boolean" ? newState.app_logged_in : null;
+      const oldAppLoggedIn = hasAppLoggedIn(oldState)
+        ? oldState.app_logged_in
+        : null;
+
+      const newAppLoggedIn = newState.app_logged_in;
 
       const appLoggedOut = oldAppLoggedIn === true && newAppLoggedIn === false;
 
@@ -46,14 +47,8 @@ export function SessionWatcher({ email }: SessionWatcherProps) {
       }
     });
 
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
+    return () => unsubscribe?.();
   }, [email, supabase, router]);
 
   return null;
 }
-
-
