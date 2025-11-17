@@ -1372,17 +1372,32 @@ document.addEventListener('DOMContentLoaded', () => {
   async function captureScreenshot() {
     try {
       console.log('Attempting to capture screenshot...');
-      const canvas = await window.electronAPI.captureScreen();
-      const screenshotData = canvas.toDataURL('image/png');
+      
+      // Get screenshot data from Electron API
+      if (!window.electronAPI || !window.electronAPI.captureScreen) {
+        console.error('Electron API not available');
+        return;
+      }
+  
+      // captureScreen() returns base64 PNG data directly
+      const screenshotData = await window.electronAPI.captureScreen();
+      
+      if (!screenshotData) {
+        console.error('Screenshot capture returned null');
+        return;
+      }
+  
+      console.log('✅ Screenshot captured successfully');
       
       const email = StorageService.getItem('userEmail');
       const timestamp = new Date().toISOString();
-      // Queue this screenshot for storage upload via main process (no base64 in DB)
+      
+      // Queue this screenshot for storage upload via main process
       if (window.electronAPI && window.electronAPI.queueScreenshotUpload) {
         window.electronAPI.queueScreenshotUpload({
           userEmail: email,
           sessionId: currentSessionId || 'temp-session',
-          screenshotData,
+          screenshotData,  // ✅ Use the base64 data directly
           timestamp,
           isIdle,
         }).then(res => {
@@ -1400,11 +1415,12 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }).catch(err => console.error('queueScreenshotUpload error:', err));
       }
-
+  
     } catch (error) {
       console.error('Error capturing screenshot:', error);
     }
   }
+  
 
   function handleHomeNavigation() {
     if (isActive) {
