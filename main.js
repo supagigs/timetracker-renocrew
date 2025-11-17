@@ -1,9 +1,9 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 if (process.platform === 'win32') {
-  app.setAppUserModelId('SupaGigs.TimeTracker');
+  app.setAppUserModelId("Supagigs Time Tracker");
 }
 
 const envPath = app?.isPackaged
@@ -25,7 +25,6 @@ function log(level, context, message, ...args) {
   const lvl = level.toUpperCase();
   console.log(`[${ts}] [${lvl}] [${context}] ${message}`, ...args);
 }
-
 function logInfo(context, message, ...args) { log('info', context, message, ...args); }
 function logWarn(context, message, ...args) { log('warn', context, message, ...args); }
 function logError(context, message, ...args) { log('error', context, message, ...args); }
@@ -54,7 +53,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
-    icon: path.join(__dirname, 'SupagigsLogo.png'),
+    icon: path.join(__dirname, 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -134,8 +133,24 @@ function createWindow() {
 // ============ HELPER FUNCTIONS ============
 async function getActiveAppName() {
   try {
+    // load module if not loaded
     if (!activeWindowModule) activeWindowModule = await import('active-win');
-    const result = await activeWindowModule.default();
+
+    // handle different exports across versions:
+    //  - newer: activeWindow()
+    //  - older: default()
+    //  - some bundles export the function itself
+    const fn =
+      (activeWindowModule && activeWindowModule.activeWindow) ||
+      (activeWindowModule && activeWindowModule.default) ||
+      activeWindowModule;
+
+    if (typeof fn !== 'function') {
+      logWarn('ActiveWindow', 'active-win export not a function', typeof fn);
+      return null;
+    }
+
+    const result = await fn();
     if (!result) return null;
     const windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
     const ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
@@ -189,7 +204,8 @@ function showToastNotification(filePath, base64Data) {
     skipTaskbar: true,
     transparent: true,
     resizable: false,
-    hasShadow: true,
+    hasShadow: false,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -241,29 +257,20 @@ async function handleScreenshotUpload(uploadData) {
   const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel } = uploadData;
   
   try {
-    // Step 1: Compress image
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
-    
-    // Step 2: Generate filename
     const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}.jpg`;
-    
-    // Step 3: Get Supabase client
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error('Supabase client unavailable');
 
-    // Step 4: Save to local storage
     const screenshotsDir = resolveScreenshotsDir(true);
     const filePath = path.join(screenshotsDir, jpegFilename);
     fs.writeFileSync(filePath, jpegBuffer);
 
-    // Step 5: Add to pending queue
     pendingScreenshots.set(filePath, false);
     logInfo(contextLabel, `Screenshot saved, added to pending: ${filePath}`);
 
-    // Step 6: Show toast notification
     showToastNotification(filePath, screenshotData);
 
-    // Step 7: CHECK IF CANCELLED - before storage upload
     if (isCancelled(filePath)) {
       logInfo(contextLabel, 'Upload cancelled before storage');
       pendingScreenshots.delete(filePath);
@@ -271,13 +278,11 @@ async function handleScreenshotUpload(uploadData) {
       return { ok: false, error: 'Upload cancelled by user' };
     }
 
-    // Step 8: Upload to Supabase Storage
     const storagePath = `${userEmail}/${sessionId}/${jpegFilename}`;
     const { error: storageError } = await supabase.storage
       .from(STORAGE_BUCKET)
       .upload(storagePath, jpegBuffer, { contentType: 'image/jpeg', upsert: true });
 
-    // Step 9: CHECK IF CANCELLED - during storage upload
     if (isCancelled(filePath)) {
       logInfo(contextLabel, 'Upload cancelled during storage upload');
       pendingScreenshots.delete(filePath);
@@ -295,16 +300,13 @@ async function handleScreenshotUpload(uploadData) {
 
     if (storageError) throw storageError;
 
-    // Step 10: Get public URL
     const publicUrlRes = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
     const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
     if (!publicUrl) throw new Error('Unable to get storage public URL');
 
-    // Step 11: Insert into database
     const appName = await getActiveAppName() || app.getName() || 'Time Tracker';
     await insertScreenshotToDatabase(supabase, userEmail, sessionId, publicUrl, timestamp, appName, isIdle);
 
-    // Step 12: Broadcast to all windows
     broadcastScreenshotCaptured({
       timestamp,
       previewDataUrl: screenshotData,
@@ -315,7 +317,6 @@ async function handleScreenshotUpload(uploadData) {
       isIdle: Boolean(isIdle)
     });
 
-    // Step 13: Cleanup
     pendingScreenshots.delete(filePath);
     logInfo(contextLabel, 'Upload completed successfully');
     
@@ -328,43 +329,140 @@ async function handleScreenshotUpload(uploadData) {
 
 // ============ IPC HANDLERS ============
 
+// existing handler
 ipcMain.handle('set-user-logged-in', async (event, flag) => {
   isUserLoggedIn = Boolean(flag);
   logInfo('IPC', `User logged in: ${isUserLoggedIn}`);
   return true;
 });
 
+
+// ============ COMPLETE CORRECTED main.js DELETE HANDLER ============
+// Replace ONLY the ipcMain.handle('toast-delete-file', ...) handler in your main.js
+
 ipcMain.handle('toast-delete-file', async (event, filePath) => {
   logInfo('DELETE', `Handler called with filePath: ${filePath}`);
   
   try {
-    // Mark as cancelled first
+    // Step 1: Mark as cancelled in pending map
     if (pendingScreenshots.has(filePath)) {
       pendingScreenshots.set(filePath, true);
       logInfo('DELETE', 'Marked as cancelled in pending map');
     }
 
-    // Delete from disk
+    // Step 2: Delete from local disk
     if (filePath && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
       logInfo('DELETE', `File deleted successfully from disk: ${filePath}`);
       pendingScreenshots.delete(filePath);
-      
-      if (toastWin) {
-        toastWin.close();
-        toastWin = null;
-      }
-      
-      return { success: true, message: 'File deleted' };
     } else {
-      logWarn('DELETE', `File does not exist: ${filePath}`);
-      return { success: false, message: 'File not found' };
+      logWarn('DELETE', `File does not exist on disk: ${filePath}`);
     }
+
+    // Step 3: Extract filename from path
+    const filename = path.basename(filePath);
+    logInfo('DELETE', `Extracted filename: ${filename}`);
+
+    // Step 4: Get Supabase client
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      throw new Error('Supabase client unavailable');
+    }
+
+    // Step 5: Query database - FASTER METHOD (no ilike timeout)
+    // Get recent screenshots and filter in-memory
+    logInfo('DELETE', `Querying database for screenshot with filename: ${filename}`);
+    
+    const { data: screenshots, error: queryError } = await supabase
+      .from('screenshots')
+      .select('id, screenshot_data, user_email, session_id')
+      .order('captured_at', { ascending: false })
+      .limit(100);  // Get recent records
+
+    if (queryError) {
+      logError('DELETE', `Error querying database: ${queryError.message}`, queryError);
+      throw queryError;
+    }
+
+    // Find matching screenshot in-memory (much faster than database ILIKE)
+    const screenshot = screenshots?.find(s => 
+      s.screenshot_data && s.screenshot_data.includes(filename)
+    );
+
+    if (!screenshot) {
+      logWarn('DELETE', `No database record found for: ${filename}`);
+      // Continue anyway - file is already deleted from disk
+    } else {
+      logInfo('DELETE', `Found database record ID: ${screenshot.id}`);
+
+      // Step 6: Delete from S3 storage
+      if (screenshot.screenshot_data) {
+        try {
+          const urlParts = screenshot.screenshot_data.split('/');
+          const bucketIndex = urlParts.indexOf(STORAGE_BUCKET);
+          
+          if (bucketIndex !== -1 && bucketIndex < urlParts.length - 1) {
+            const storagePath = urlParts.slice(bucketIndex + 1).join('/');
+            logInfo('DELETE', `Attempting to delete from S3: ${storagePath}`);
+            
+            const { error: storageError } = await supabase.storage
+              .from(STORAGE_BUCKET)
+              .remove([storagePath]);
+
+            if (storageError) {
+              logWarn('DELETE', `Error deleting from storage: ${storageError.message}`);
+            } else {
+              logInfo('DELETE', `Deleted from S3 storage: ${storagePath}`);
+            }
+          }
+        } catch (e) {
+          logError('DELETE', `Error parsing storage path: ${e.message}`, e);
+        }
+      }
+
+      // Step 7: DELETE DATABASE RECORD
+      const { error: deleteError } = await supabase
+        .from('screenshots')
+        .delete()
+        .eq('id', screenshot.id);
+
+      if (deleteError) {
+        logError('DELETE', `Error deleting from database: ${deleteError.message}`, deleteError);
+        throw deleteError;
+      }
+
+      logInfo('DELETE', `Deleted database record ID: ${screenshot.id}`);
+    }
+
+    // Step 8: Broadcast deletion event to main window so UI refreshes
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (window !== toastWin) {
+        window.webContents.send('screenshot-deleted', { filePath, filename });
+      }
+    });
+    logInfo('DELETE', 'Broadcasted screenshot-deleted event to main window');
+
+    // Step 9: Close toast window
+    if (toastWin) {
+      toastWin.close();
+      toastWin = null;
+    }
+
+    return { 
+      success: true, 
+      message: 'Screenshot deleted from disk, storage, and database',
+      filename
+    };
+    
   } catch (error) {
     logError('DELETE', `Error: ${error.message}`, error);
-    return { success: false, message: error.message };
+    return { 
+      success: false, 
+      message: error.message || 'Delete failed'
+    };
   }
 });
+
 
 ipcMain.handle('get-system-idle-time', () => {
   try {
@@ -395,6 +493,7 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
   });
 });
 
+// start/stop-background already present in your earlier file
 ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionId) => {
   if (backgroundScreenshotInterval) {
     clearInterval(backgroundScreenshotInterval);
@@ -449,14 +548,119 @@ ipcMain.handle('stop-background-screenshots', () => {
   return true;
 });
 
+// ============ NEW: missing handlers your renderer expects ============
+
+// set-timer-active / get-timer-active
+ipcMain.handle('set-timer-active', (event, active) => {
+  isTimerActive = Boolean(active);
+  logInfo('IPC', `Timer active set to: ${isTimerActive}`);
+  return true;
+});
+ipcMain.handle('get-timer-active', () => {
+  return !!isTimerActive;
+});
+
+// capture-screen (returns base64 screenshot of primary screen)
+ipcMain.handle('capture-screen', async () => {
+  try {
+    const { width, height } = screen.getPrimaryDisplay().size;
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width, height },
+    });
+    if (!sources || sources.length === 0) return null;
+    return sources[0].thumbnail.toDataURL('image/png');
+  } catch (e) {
+    logError('IPC', 'capture-screen failed', e);
+    return null;
+  }
+});
+
+// save-active-session (stub - update as needed to persist session)
+ipcMain.handle('save-active-session', async (event, sessionData) => {
+  try {
+    // TODO: persist to local DB or supabase if you want
+    logInfo('IPC', 'save-active-session called', !!sessionData);
+    return { ok: true };
+  } catch (e) {
+    logError('IPC', 'save-active-session failed', e);
+    return { ok: false, error: e.message };
+  }
+});
+
+// is-background-screenshots-active
+ipcMain.handle('is-background-screenshots-active', () => {
+  return !!isBackgroundCaptureActive;
+});
+
+// get-local-screenshots
+ipcMain.handle('get-local-screenshots', async (event, email, startTime, endTime) => {
+  try {
+    const dir = resolveScreenshotsDir(false);
+    if (!fs.existsSync(dir)) return [];
+    const files = fs.readdirSync(dir);
+    // simple filter - you can improve by parsing timestamps in filename if you have them
+    const matched = files
+      .filter(f => typeof email === 'string' ? f.includes(email.replace(/@/g,'_at_')) : true)
+      .map(f => path.join(dir, f));
+    return matched;
+  } catch (e) {
+    logError('IPC', 'get-local-screenshots failed', e);
+    return [];
+  }
+});
+
+// open-local-screenshot
+ipcMain.handle('open-local-screenshot', async (event, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return { ok: false, message: 'File not found' };
+    await shell.openPath(filePath);
+    return { ok: true };
+  } catch (e) {
+    logError('IPC', 'open-local-screenshot failed', e);
+    return { ok: false, error: e.message };
+  }
+});
+
+// open-picture-in-picture
+ipcMain.handle('open-picture-in-picture', async (event, imageSrc) => {
+  try {
+    const pip = new BrowserWindow({
+      width: 500,
+      height: 300,
+      alwaysOnTop: true,
+      frame: false,
+      resizable: false,
+      webPreferences: { nodeIntegration: false, contextIsolation: true },
+    });
+    // create a minimal html to show image
+    const html = `
+      <html><body style="margin:0;background:transparent;display:flex;align-items:center;justify-content:center">
+        <img src="${imageSrc}" style="max-width:100%;max-height:100%"/>
+      </body></html>`;
+    pip.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    return { ok: true };
+  } catch (e) {
+    logError('IPC', 'open-picture-in-picture failed', e);
+    return { ok: false, error: e.message };
+  }
+});
+
+// open external URL
+ipcMain.handle('open-external-url', async (event, url) => {
+  try {
+    if (!url) return { ok: false };
+    await shell.openExternal(String(url));
+    return { ok: true };
+  } catch (e) {
+    logError('IPC', 'open-external-url failed', e);
+    return { ok: false, error: e.message };
+  }
+});
+
 // ============ APP LIFECYCLE ============
 app.whenReady().then(() => {
   createWindow();
-  try {
-    powerMonitor.setIdleDetectionInterval(10);
-  } catch (e) {
-    logWarn('PowerMonitor', 'Could not set idle detection interval', e);
-  }
 });
 
 app.on('window-all-closed', () => {

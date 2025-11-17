@@ -13,16 +13,21 @@
       overflow: hidden;
     }
     #toast-container {
-      width: 500px;
-      height: 330px;
-      background: #fff;
-      border-radius: 18px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.20), 0 2px 8px rgba(16, 69, 88, 0.35);
+      width: 100%;
+      height: 100%;
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05); 
+      border: none;
       font-family: 'Segoe UI', Arial, sans-serif;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
     }
+
     .toast-header-row {
       display: flex;
       align-items: center;
@@ -127,13 +132,35 @@
       opacity: 0.5;
       cursor: not-allowed;
     }
+    .status-message {
+      font-size: 0.9rem;
+      color: #10b981;
+      text-align: center;
+      padding: 8px;
+      display: none;
+      background: rgba(16, 185, 129, 0.1);
+      border-radius: 6px;
+      margin: 8px;
+      min-height: 20px;
+    }
+    .status-message.show {
+      display: block;
+    }
+    .status-message.success {
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.1);
+    }
+    .status-message.error {
+      color: #e11d48;
+      background: rgba(225, 29, 72, 0.1);
+    }
   </style>
 </head>
 <body>
   <div id="toast-container">
     <div class="toast-header-row">
-      <img id="app-logo" src="SupagigsLogo.png"/>
-      <div id="toast-title">Screen Captured</div>
+      <img id="app-logo" src="icon.ico"/>
+      <div id="toast-title">Time Tracker</div>
       <button id="close-x">&times;</button>
     </div>
     <div class="toast-content-row">
@@ -143,29 +170,45 @@
           <div id="loader-bar"></div>
         </div>
         <button id="delete-btn">🗑️</button>
+        <div class="status-message" id="status-message"></div>
       </div>
     </div>
   </div>
+
   <script>
     let currentFilePath = null;
     let isDeleting = false;
+    let timerExpired = false;
 
-    // Initialize toast with file path and preview image
-    if (window.toastAPI?.onInit) {
-      window.toastAPI.onInit(({ filePath, base64Data }) => {
-        currentFilePath = filePath;
-        document.getElementById('preview-img').src = base64Data;
-        console.log('[TOAST] Initialized with filePath:', filePath);
-      });
+    // ============ INITIALIZATION ============
+    // Wait for DOM to be ready before setting up preload listener
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initializeToast);
+    } else {
+      initializeToast();
     }
 
-    // Close button handler
+    function initializeToast() {
+      console.log('[TOAST] Initializing with toastAPI');
+      
+      if (window.toastAPI && typeof window.toastAPI.onInit === 'function') {
+        window.toastAPI.onInit(({ filePath, base64Data }) => {
+          currentFilePath = filePath;
+          document.getElementById('preview-img').src = base64Data;
+          console.log('[TOAST] Initialized with filePath:', filePath);
+        });
+      } else {
+        console.error('[TOAST] window.toastAPI not available or onInit is not a function');
+      }
+    }
+
+    // ============ CLOSE BUTTON HANDLER ============
     document.getElementById('close-x').onclick = () => {
       console.log('[TOAST] Close button clicked');
       window.close();
     };
 
-    // Delete button handler
+    // ============ DELETE BUTTON HANDLER ============
     document.getElementById('delete-btn').onclick = async () => {
       if (isDeleting || !currentFilePath) {
         console.log('[TOAST] Delete blocked: isDeleting=', isDeleting, 'filePath=', currentFilePath);
@@ -174,30 +217,50 @@
       
       isDeleting = true;
       const btn = document.getElementById('delete-btn');
+      const statusMsg = document.getElementById('status-message');
+      
       btn.classList.add('deleting');
       btn.disabled = true;
       
       console.log('[TOAST] Delete button clicked, calling IPC with:', currentFilePath);
 
       try {
+        // Call the delete handler in main.js
         const result = await window.toastAPI.deleteFile(currentFilePath);
         console.log('[TOAST] Delete result:', result);
         
         if (result?.success) {
-          setTimeout(() => window.close(), 300);
+          // Show success message
+          statusMsg.textContent = '✓ Screenshot deleted';
+          statusMsg.classList.add('show', 'success');
+          statusMsg.classList.remove('error');
+          
+          console.log('[TOAST] Deletion successful, closing window in 500ms');
+          
+          // Close the window after showing success message
+          setTimeout(() => {
+            console.log('[TOAST] Closing toast window now');
+            window.close();
+          }, 500);
         } else {
           throw new Error(result?.message || 'Delete failed');
         }
       } catch (error) {
         console.error('[TOAST] Delete error:', error);
-        alert('Delete failed: ' + error.message);
+        
+        // Show error message
+        statusMsg.textContent = '✗ Delete failed: ' + error.message;
+        statusMsg.classList.add('show', 'error');
+        statusMsg.classList.remove('success');
+        
+        // Re-enable delete button on error
         isDeleting = false;
         btn.classList.remove('deleting');
         btn.disabled = false;
       }
     };
 
-    // Loader animation
+    // ============ LOADER ANIMATION & AUTO-CLOSE ============
     const loaderBar = document.getElementById('loader-bar');
     const startTime = Date.now();
     
@@ -208,9 +271,17 @@
       
       if (percent > 0) {
         requestAnimationFrame(animateLoader);
-      } else if (!isDeleting) {
-        console.log('[TOAST] Timer expired, closing window');
-        window.close();
+      } else {
+        timerExpired = true;
+        console.log('[TOAST] Timer expired after 9 seconds');
+        
+        // Only close if user hasn't clicked delete
+        if (!isDeleting) {
+          console.log('[TOAST] Auto-closing window after timer expiration');
+          window.close();
+        } else {
+          console.log('[TOAST] Deletion in progress, waiting to close');
+        }
       }
     }
     

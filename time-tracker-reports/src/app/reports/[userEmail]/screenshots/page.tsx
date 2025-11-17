@@ -10,6 +10,10 @@ type TimeSession = {
   session_date: string;
   start_time: string;
   end_time: string | null;
+  active_duration: number;
+  break_duration: number;
+  idle_duration: number | null;
+  break_count: number | null;
 };
 
 type Screenshot = {
@@ -79,14 +83,14 @@ async function fetchScreenshots(userEmail: string, sessionId?: number): Promise<
         console.error('[screenshots-page] Failed to load screenshots (fallback)', fallbackError);
         return [];
       }
-      return (fallbackData ?? []).map((row) => ({ ...row, app_name: null, captured_idle: null })) as Screenshot[];
+      return (fallbackData ?? []).map((row: any) => ({ ...row, app_name: null, captured_idle: null })) as Screenshot[];
     }
 
     console.error('[screenshots-page] Failed to load screenshots', error);
     return [];
   }
 
-  return (data ?? []) as Screenshot[];
+  return (data ?? []) as unknown as Screenshot[];
 }
 
 export default async function ScreenshotsPage({
@@ -184,7 +188,7 @@ export default async function ScreenshotsPage({
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <ScreenshotSelector
               userEmail={targetEmail ?? profile.email}
-              sessions={sessions}
+              sessions={sessions as TimeSession[]}
               initialScreenshots={screenshots}
               initialSessionId={latestSessionId}
             />

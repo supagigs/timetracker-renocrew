@@ -9,6 +9,14 @@ export type ProjectRecord = {
   clientName?: string | null;
 };
 
+// Raw row types from Supabase
+type ProjectRow = {
+  id: number;
+  project_name: string | null;
+  created_at: string | null;
+  user_email?: string | null;
+};
+
 export async function fetchClientProjects({
   email,
   userId,
@@ -20,12 +28,16 @@ export async function fetchClientProjects({
 
   const selectColumns = 'id, project_name, created_at';
 
+  // ------------- QUERY BY USER ID ------------- //
   if (userId !== null) {
     const { data, error } = await supabase
       .from('projects')
       .select(selectColumns)
       .eq('user_id', userId)
-      .order('project_name', { ascending: true });
+      .order('project_name', { ascending: true }) as {
+        data: ProjectRow[] | null;
+        error: any;
+      };
 
     if (!error && Array.isArray(data) && data.length > 0) {
       return data.map((project) => ({
@@ -39,14 +51,18 @@ export async function fetchClientProjects({
     }
   }
 
+  // ------------- FALLBACK QUERY ------------- //
   const { data: fallbackData, error: fallbackError } = await supabase
     .from('projects')
     .select(`${selectColumns}, user_email`)
     .eq('user_email', email)
-    .order('project_name', { ascending: true });
+    .order('project_name', { ascending: true }) as {
+      data: ProjectRow[] | null;
+      error: any;
+    };
 
   if (fallbackError) {
-    console.warn('[client-projects] Fallback query returned an error, defaulting to empty list.', fallbackError);
+    console.warn('[client-projects] Fallback query failed.', fallbackError);
     return [];
   }
 
@@ -66,35 +82,32 @@ export async function fetchClientProjects({
 
 export async function fetchFreelancerProjects(email: string): Promise<ProjectRecord[]> {
   const normalizedEmail = email.trim().toLowerCase();
-
-  if (!normalizedEmail) {
-    return [];
-  }
+  if (!normalizedEmail) return [];
 
   const supabase = createServerSupabaseClient();
 
+  // Load assignments
   const { data: assignments, error: assignmentsError } = await supabase
     .from('project_assignments')
     .select('project_id')
     .eq('freelancer_email', normalizedEmail);
 
   if (assignmentsError) {
-    console.warn('[freelancer-projects] Failed to load assignments, returning empty list.', assignmentsError);
+    console.warn('[freelancer-projects] Failed to load assignments.', assignmentsError);
     return [];
   }
 
   const projectIds = Array.from(
     new Set(
       (assignments ?? [])
-        .map((assignment) => assignment.project_id)
-        .filter((projectId): projectId is number => typeof projectId === 'number'),
+        .map((a) => a.project_id)
+        .filter((id): id is number => typeof id === 'number'),
     ),
   );
 
-  if (projectIds.length === 0) {
-    return [];
-  }
+  if (projectIds.length === 0) return [];
 
+  // Load project metadata
   const { data: projectsData, error: projectsError } = await supabase
     .from('project_assignments')
     .select(`
@@ -109,16 +122,21 @@ export async function fetchFreelancerProjects(email: string): Promise<ProjectRec
     `)
     .eq('freelancer_email', normalizedEmail)
     .in('project_id', projectIds)
-    .order('assigned_at', { ascending: false });
+    .order('assigned_at', { ascending: false }) as {
+      data: {
+        project_id: number;
+        assigned_by: string | null;
+        projects: ProjectRow | null;
+      }[] | null;
+      error: any;
+    };
 
   if (projectsError) {
-    console.warn('[freelancer-projects] Project lookup failed, returning empty list.', projectsError);
+    console.warn('[freelancer-projects] Failed to fetch projects.', projectsError);
     return [];
   }
 
-  if (!projectsData) {
-    return [];
-  }
+  if (!projectsData) return [];
 
   const clientEmails = Array.from(
     new Set(
@@ -130,42 +148,36 @@ export async function fetchFreelancerProjects(email: string): Promise<ProjectRec
 
   const clientNameMap = new Map<string, string | null>();
 
+  // Load client names
   if (clientEmails.length > 0) {
     const { data: clientRows, error: clientError } = await supabase
       .from('users')
       .select('email, display_name')
       .in('email', clientEmails);
 
-    if (clientError) {
-      console.warn('[freelancer-projects] Failed to fetch client names:', clientError);
-    } else {
-      (clientRows ?? []).forEach((client) => {
-        clientNameMap.set(client.email, client.display_name ?? null);
+    if (!clientError) {
+      (clientRows ?? []).forEach((c) => {
+        clientNameMap.set(c.email, c.display_name ?? null);
       });
     }
   }
 
   return projectsData
     .map((row) => {
-      const projectId = row.projects?.id ?? row.project_id;
-      const projectName = row.projects?.project_name ?? 'Untitled project';
-      if (!projectId || !projectName) {
-        return null;
-      }
+      const project = row.projects;
 
-      const clientEmail = row.assigned_by ?? row.projects?.user_email ?? null;
-      const clientName = clientEmail ? clientNameMap.get(clientEmail) ?? null : null;
+      if (!project?.id) return null;
+
+      const clientEmail = row.assigned_by ?? project.user_email ?? null;
 
       return {
-        id: projectId,
-        name: projectName,
+        id: project.id,
+        name: project.project_name ?? 'Untitled project',
         description: null,
-        createdAt: row.projects?.created_at ?? null,
+        createdAt: project.created_at ?? null,
         clientEmail,
-        clientName,
-      } satisfies ProjectRecord;
+        clientName: clientEmail ? clientNameMap.get(clientEmail) ?? null : null,
+      } as ProjectRecord;
     })
-    .filter((record): record is ProjectRecord => record !== null);
+    .filter((x): x is ProjectRecord => x !== null);
 }
-
-

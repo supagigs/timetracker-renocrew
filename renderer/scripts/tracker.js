@@ -1,25 +1,25 @@
 document.addEventListener('DOMContentLoaded', () => {
   let timerInterval;
   let sessionStartTime;
-  let currentSessionId; // Store the database session ID
-  let workStartTime; // Track when user actually starts working
+  let currentSessionId; 
+  let workStartTime;
   let isActive = false;
   let isOnBreak = false;
   let breakStartTime;
   let totalBreakDuration = 0;
   let totalActiveDuration = 0;
-  let breakCount = 0; // Track number of individual breaks taken
+  let breakCount = 0; 
   let screenshotInterval;
-  let activityChart = null; // Store chart instance for updates
-  let projectChart = null; // Store project chart instance for updates
-  let idleTracker = null; // Idle time tracker instance
-  let totalIdleTime = 0; // Total idle time accumulated
-  let isIdle = false; // Track idle state
+  let activityChart = null; 
+  let projectChart = null; 
+  let idleTracker = null; 
+  let totalIdleTime = 0; 
+  let isIdle = false; 
   let idleStartTime = null;
   let userEmail = null;
   let removeSystemIdleListener = null;
 
-  // DOM elements
+  
   const activeTimeDisplay = document.getElementById('activeTimeDisplay');
   const breakTimeDisplay = document.getElementById('breakTimeDisplay');
   const totalTimeDisplay = document.getElementById('totalTimeDisplay');
@@ -38,9 +38,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const projectTimeSection = document.getElementById('projectTimeSection');
   const projectTimeList = document.getElementById('projectTimeList');
   
-  let projectTimeData = new Map(); // Store project times: projectId -> {name, time, currentSessionTime}
+  let projectTimeData = new Map(); 
 
-  // Initialize
+  
   init();
 
   // Helper function to update timer state in main process
@@ -66,7 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
       window.SessionSync.updateAppState(true);
     }
 
-    // Load session data
+    
     sessionStartTime = StorageService.getItem('sessionStartTime');
     currentSessionId = StorageService.getItem('currentSessionId');
     workStartTime = StorageService.getItem('workStartTime');
@@ -80,7 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
     isIdle = StorageService.getItem('isIdle') === 'true';
     idleStartTime = StorageService.getItem('idleStartTime');
 
-    // Convert string dates back to Date objects
+    
     if (sessionStartTime) {
       sessionStartTime = new Date(sessionStartTime);
       console.log('Restored session start time:', sessionStartTime);
@@ -104,36 +104,29 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionStartTime) {
       updateTimer();
       if (isActive) {
-        // Notify main process that timer is active
         updateTimerStateInMainProcess(true);
         
         if (isOnBreak) {
-          // Resume break state
           breakBtn.textContent = 'End Break';
           breakBtn.className = 'btn-success';
           breakBtn.disabled = false;
           startBtn.disabled = true;
-          // Don't start screenshot capture during break
         } else {
-          // Don't automatically start timer - user must click Start button
-          startBtn.disabled = true; // Keep disabled if work was previously started
+          startBtn.disabled = true; 
         }
         
-        // Show notification that timer was restored from background
         NotificationService.showInfo('Timer restored from background. Your session is still active.');
         
         if (isIdle) {
           console.log('Session restored while idle; active timer paused.');
         }
 
-        // Restore screenshot capture if it should be active
         const screenshotCaptureActive = StorageService.getItem('screenshotCaptureActive') === 'true';
         if (screenshotCaptureActive) {
           console.log('Restoring screenshot capture from background');
           startScreenshotCapture();
         }
       } else {
-        // Notify main process that timer is not active
         updateTimerStateInMainProcess(false);
       }
     }
@@ -141,20 +134,16 @@ document.addEventListener('DOMContentLoaded', () => {
     loadTodayStats();
     updateActivityChart();
     
-    // Load project distribution chart for freelancers
     const userCategory = StorageService.getItem('userCategory');
     if (userCategory === 'Freelancer') {
       loadProjectDistributionChart();
       loadProjectName();
       loadProjectTimes();
-      // Update project times every 5 seconds
       setInterval(updateProjectTimes, 5000);
     }
     
-    // Initialize idle tracker
     initializeIdleTracker();
     
-    // Setup screenshot capture notification listener
     setupScreenshotNotificationListener();
 
     if (window.electronAPI && typeof window.electronAPI.onSystemIdleState === 'function') {
@@ -167,16 +156,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function initializeIdleTracker() {
-    // Destroy old instance if it exists to prevent memory leaks
     if (idleTracker) {
       idleTracker.destroy();
       idleTracker = null;
     }
 
-    // Initialize idle tracker with 30-second threshold
+  
     idleTracker = new IdleTracker({
-      idleThreshold: 30, // 30 seconds of inactivity
-      checkInterval: 1000, // Check every second
+      idleThreshold: 30, 
+      checkInterval: 1000, 
       onIdleStart: () => {
         console.log('🔴 User became idle - red dot will appear on next screenshot');
         if (isActive && !isOnBreak && !isIdle) {
@@ -196,7 +184,6 @@ document.addEventListener('DOMContentLoaded', () => {
         StorageService.setItem('isIdle', 'true');
         idleStartTime = new Date();
         StorageService.setItem('idleStartTime', idleStartTime.toISOString());
-        // Notify main process that user is idle
         if (window.electronAPI && window.electronAPI.updateIdleState) {
           console.log('Sending idle state to main process: true');
           window.electronAPI.updateIdleState(true);
@@ -223,7 +210,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       },
       onIdleTimeUpdate: (totalIdle) => {
-        // Update idle time display
         idleTimeDisplay.textContent = formatTime(totalIdle);
       }
     });
@@ -247,17 +233,13 @@ document.addEventListener('DOMContentLoaded', () => {
       startBtn.disabled = true;
       breakBtn.disabled = false;
       
-      // Notify main process that timer is active
       updateTimerStateInMainProcess(true);
       
-      // Start idle tracking when work begins
       if (idleTracker) {
         idleTracker.startTracking();
       }
       
-      // Take an immediate screenshot so short sessions still show images
       captureScreenshot();
-      // Start screenshot capture
       startScreenshotCapture();
     }
   }
@@ -274,19 +256,16 @@ document.addEventListener('DOMContentLoaded', () => {
       startBtn.disabled = false;
       breakBtn.disabled = true;
       
-      // Stop idle tracking when work is paused
       if (idleTracker) {
         idleTracker.stopTracking();
       }
       
-      // Stop screenshot capture
       stopScreenshotCapture();
     }
   }
 
   function takeBreak() {
     if (isActive && !isOnBreak) {
-      // Start break - save current active time
       if (workStartTime) {
         const workElapsed = Math.floor((new Date() - new Date(workStartTime)) / 1000);
         totalActiveDuration += workElapsed;
@@ -302,47 +281,42 @@ document.addEventListener('DOMContentLoaded', () => {
       isOnBreak = true;
       breakStartTime = new Date();
       StorageService.setItem('isOnBreak', 'true');
-      StorageService.setItem('breakStartTime', breakStartTime.toISOString()); // Save break start time as ISO string
+      StorageService.setItem('breakStartTime', breakStartTime.toISOString()); 
       breakBtn.textContent = 'End Break';
       breakBtn.className = 'btn-success';
-      
-      // Stop screenshot capture and idle tracking during break
+  
       stopScreenshotCapture();
       if (idleTracker) {
         idleTracker.stopTracking();
       }
     } else if (isOnBreak) {
-      // End break
       const breakDuration = Math.floor((new Date() - breakStartTime) / 1000);
       totalBreakDuration += breakDuration;
-      breakCount++; // Increment break count
+      breakCount++; 
       StorageService.setItem('breakDuration', totalBreakDuration.toString());
       StorageService.setItem('breakCount', breakCount.toString());
       
       isOnBreak = false;
       StorageService.setItem('isOnBreak', 'false');
-      StorageService.removeItem('breakStartTime'); // Clear break start time
+      StorageService.removeItem('breakStartTime'); 
       isIdle = false;
       StorageService.setItem('isIdle', 'false');
       StorageService.removeItem('idleStartTime');
       breakBtn.textContent = 'Take Break';
       breakBtn.className = 'btn-warning';
       breakBtn.disabled = false;
-      // Keep start button disabled for the entire session
       
-      // Resume screenshot capture, idle tracking, and reset work start time
+      
+      
       workStartTime = new Date().toISOString();
       StorageService.setItem('workStartTime', workStartTime);
-      // Take an immediate screenshot on resume so short post-break segments are captured
       captureScreenshot();
       startScreenshotCapture();
       
-      // Resume idle tracking
       if (idleTracker) {
         idleTracker.startTracking();
       }
       
-      // Update breaks counter immediately
       breaksTaken.textContent = breakCount;
       loadTodayStats();
     }
@@ -354,9 +328,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
     const previousIdleStartTime = idleStartTime ? new Date(idleStartTime) : null;
     const previousTotalActiveDuration = totalActiveDuration;
-
-    // Immediately stop timer and calculate final time when button is clicked
-    // This prevents any additional time from being counted after user clicks Clock Out
     const clockOutTime = new Date();
 
     let finalActiveDuration = totalActiveDuration;
@@ -370,12 +341,10 @@ document.addEventListener('DOMContentLoaded', () => {
     clearInterval(timerInterval);
     stopScreenshotCapture();
 
-    // Stop idle tracking
     if (idleTracker) {
       idleTracker.stopTracking();
     }
 
-    // Mark session as ended immediately
     isActive = false;
     StorageService.setItem('isActive', 'false');
     isIdle = false;
@@ -385,7 +354,6 @@ document.addEventListener('DOMContentLoaded', () => {
     idleStartTime = null;
     StorageService.removeItem('idleStartTime');
 
-    // Notify main process that timer is not active
     updateTimerStateInMainProcess(false);
 
     if (confirm('Are you sure you want to clock out? This will end your current session.')) {
@@ -405,10 +373,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
 
-        // Get final idle time
         const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
 
-        // Save session to database and wait for completion
         await saveSession(sessionDuration, totalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
 
         // Clear session data
@@ -426,9 +392,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         totalActiveDuration = finalActiveDuration;
 
-        // Reset idle tracker
         if (idleTracker) {
-          idleTracker.destroy(); // Use destroy() instead of reset() for complete cleanup
+          idleTracker.destroy();
           idleTracker = null;
         }
         totalIdleTime = 0;
@@ -440,7 +405,6 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Error ending session. Please try again.');
       }
     } else {
-      // User cancelled - restore timer and session state
       totalActiveDuration = previousTotalActiveDuration;
       StorageService.setItem('activeDuration', previousTotalActiveDuration.toString());
 
@@ -485,7 +449,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const today = new Date().toISOString().split('T')[0];
     let selectedProjectId = StorageService.getItem('selectedProjectId');
 
-    // If project_id is not in storage, try to get it from the existing session
     if (!selectedProjectId && currentSessionId) {
       try {
         const { data: existingSession } = await window.supabase
@@ -516,7 +479,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       if (currentSessionId) {
-        // Update existing session
         const updateData = {
           end_time: new Date().toISOString(),
           break_duration: breakDuration,
@@ -1372,12 +1334,21 @@ document.addEventListener('DOMContentLoaded', () => {
   async function captureScreenshot() {
     try {
       console.log('Attempting to capture screenshot...');
-      const canvas = await window.electronAPI.captureScreen();
-      const screenshotData = canvas.toDataURL('image/png');
-      
+      // The main process returns a data URL string (or null on error)
+      const dataUrl = await window.electronAPI.captureScreen();
+  
+      if (!dataUrl) {
+        console.warn('captureScreen returned no data (null/undefined). Skipping screenshot upload.');
+        return;
+      }
+  
+      // dataUrl is already a base64 data URL (e.g. "data:image/png;base64,...")
+      const screenshotData = dataUrl;
+  
       const email = StorageService.getItem('userEmail');
       const timestamp = new Date().toISOString();
-      // Queue this screenshot for storage upload via main process (no base64 in DB)
+  
+      // Queue this screenshot for storage upload via main process
       if (window.electronAPI && window.electronAPI.queueScreenshotUpload) {
         window.electronAPI.queueScreenshotUpload({
           userEmail: email,
@@ -1385,7 +1356,8 @@ document.addEventListener('DOMContentLoaded', () => {
           screenshotData,
           timestamp,
           isIdle,
-        }).then(res => {
+        })
+        .then(res => {
           if (!res?.ok) {
             console.error('queueScreenshotUpload failed:', res?.error);
           } else {
@@ -1398,13 +1370,14 @@ document.addEventListener('DOMContentLoaded', () => {
               isIdle: res.capturedIdle || false,
             });
           }
-        }).catch(err => console.error('queueScreenshotUpload error:', err));
+        })
+        .catch(err => console.error('queueScreenshotUpload error:', err));
       }
-
     } catch (error) {
       console.error('Error capturing screenshot:', error);
     }
   }
+  
 
   function handleHomeNavigation() {
     if (isActive) {
@@ -1557,7 +1530,6 @@ document.addEventListener('DOMContentLoaded', () => {
       setTimeout(() => existingNotification.remove(), 400);
     }
 
-    // Create notification element
     const notification = document.createElement('div');
     notification.className = 'screenshot-notification';
 
