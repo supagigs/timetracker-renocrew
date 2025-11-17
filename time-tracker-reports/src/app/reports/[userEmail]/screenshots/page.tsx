@@ -12,6 +12,10 @@ type TimeSession = {
   session_date: string;
   start_time: string;
   end_time: string | null;
+  active_duration: number;
+  break_duration: number;
+  idle_duration: number | null;
+  break_count: number | null;
 };
 
 type Screenshot = {
@@ -28,7 +32,7 @@ async function fetchSessionsInRange(userEmail: string, dateRange: DateRange): Pr
 
   const { data, error } = await supabase
     .from('time_sessions')
-    .select('id, session_date, start_time, end_time')
+    .select('id, session_date, start_time, end_time, active_duration, break_duration, idle_duration, break_count')
     .eq('user_email', userEmail)
     .gte('session_date', dateRange.start)
     .lte('session_date', dateRange.end)
@@ -40,7 +44,17 @@ async function fetchSessionsInRange(userEmail: string, dateRange: DateRange): Pr
     return [];
   }
 
-  return (data ?? []) as TimeSession[];
+  // Map data to ensure all required fields are present with defaults
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    session_date: row.session_date,
+    start_time: row.start_time,
+    end_time: row.end_time ?? null,
+    active_duration: row.active_duration ?? 0,
+    break_duration: row.break_duration ?? 0,
+    idle_duration: row.idle_duration ?? null,
+    break_count: row.break_count ?? null,
+  })) as TimeSession[];
 }
 
 async function fetchScreenshots(userEmail: string, sessionId?: number): Promise<Screenshot[]> {
@@ -74,14 +88,36 @@ async function fetchScreenshots(userEmail: string, sessionId?: number): Promise<
         console.error('[screenshots-page] Failed to load screenshots (fallback)', fallbackError);
         return [];
       }
-      return (fallbackData ?? []).map((row) => ({ ...row, app_name: null, captured_idle: null })) as Screenshot[];
+      // Ensure all required fields are present
+      if (!fallbackData || Array.isArray(fallbackData) === false) {
+        return [];
+      }
+      return fallbackData.map((row: any) => ({
+        id: row.id,
+        session_id: row.session_id,
+        screenshot_data: row.screenshot_data,
+        captured_at: row.captured_at,
+        app_name: null,
+        captured_idle: null,
+      })) as Screenshot[];
     }
 
     console.error('[screenshots-page] Failed to load screenshots', error);
     return [];
   }
 
-  return (data ?? []) as Screenshot[];
+  // Ensure all required fields are present, even if some are null
+  if (!data || Array.isArray(data) === false) {
+    return [];
+  }
+  return data.map((row: any) => ({
+    id: row.id,
+    session_id: row.session_id,
+    screenshot_data: row.screenshot_data,
+    captured_at: row.captured_at,
+    app_name: row.app_name ?? null,
+    captured_idle: row.captured_idle ?? null,
+  })) as Screenshot[];
 }
 
 export default async function ScreenshotsPage({
