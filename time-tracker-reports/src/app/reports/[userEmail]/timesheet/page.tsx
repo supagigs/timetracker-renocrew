@@ -68,7 +68,7 @@ async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): P
     return [];
   }
 
-  return (data ?? []) as unknown as RawSessionRow[];
+  return (data ?? []) as RawSessionRow[];
 }
 
 async function fetchClientTimesheet({

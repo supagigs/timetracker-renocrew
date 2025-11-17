@@ -56,15 +56,8 @@ export async function GET(request: NextRequest) {
     const { data, error } = await buildQuery(true);
 
     if (error) {
-      if (
-        error.code === '42703' ||
-        /(app_name|captured_idle)/.test(error.message ?? '')
-      ) {
-        const {
-          data: fallbackData,
-          error: fallbackError,
-        } = await buildQuery(false);
-
+      if (error.code === '42703' || /(app_name|captured_idle)/.test(error.message ?? '')) {
+        const { data: fallbackData, error: fallbackError } = await buildQuery(false);
         if (fallbackError) {
           console.error('Error fetching screenshots (fallback):', fallbackError);
           return NextResponse.json(
@@ -72,28 +65,15 @@ export async function GET(request: NextRequest) {
             { status: 500 }
           );
         }
-
-        // 🔥 FIX: Validate fallbackData to avoid ParserError[] and spread errors
-        const safeData =
-          Array.isArray(fallbackData) &&
-          fallbackData.every((x) => typeof x === 'object' && x !== null)
-            ? (fallbackData as Record<string, any>[])
-            : [];
-
-        const normalized: Screenshot[] = safeData.map((row) => ({
-          id: row.id,
-          session_id: row.session_id,
-          screenshot_data: row.screenshot_data,
-          captured_at: row.captured_at,
+        const normalized = (fallbackData ?? []).map((row) => ({
+          ...row,
           app_name: null,
           captured_idle: null,
         }));
-
         console.log(
           `API: Fallback query returned ${normalized.length} screenshots for session ${sessionId}, user ${email}`
         );
-
-        return NextResponse.json(normalized);
+        return NextResponse.json(normalized as Screenshot[]);
       }
 
       console.error('Error fetching screenshots:', error);
@@ -103,10 +83,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log(
-      `API: Found ${data?.length ?? 0} screenshots for session ${sessionId}, user ${email}`
-    );
-    return NextResponse.json((data ?? []) as unknown as Screenshot[]);
+    console.log(`API: Found ${data?.length ?? 0} screenshots for session ${sessionId}, user ${email}`);
+    return NextResponse.json((data ?? []) as Screenshot[]);
   } catch (error) {
     console.error('Error in screenshots API:', error);
     return NextResponse.json(
@@ -115,3 +93,4 @@ export async function GET(request: NextRequest) {
     );
   }
 }
+
