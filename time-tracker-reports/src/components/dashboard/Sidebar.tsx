@@ -10,6 +10,7 @@ import {
   BarChart3,
   Monitor,
   CalendarClock,
+  SlidersHorizontal,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -50,6 +51,15 @@ const buildReportsNavItems = (
       ? [{ icon: <CalendarClock size={20} />, label: "Timesheet", href: `${basePath}/timesheet` }]
       : []),
     { icon: <Monitor size={20} />, label: "Screenshots", href: `${basePath}/screenshots` },
+    ...(normalizedRole === "client"
+      ? [
+          {
+            icon: <SlidersHorizontal size={20} />,
+            label: "Change screenshot interval",
+            href: `${basePath}/screenshot-interval`,
+          },
+        ]
+      : []),
   );
 
   return items.map((item) => ({

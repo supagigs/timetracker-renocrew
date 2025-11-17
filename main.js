@@ -420,6 +420,115 @@ async function compressToJpegBufferFromDataUrl(dataUrl) {
     .toBuffer();
 }
 
+async function resolveScreenshotIntervalForUser(email, sessionId) {
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      console.warn('[screenshots] No Supabase client available, using default interval');
+      return 20000;
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    console.log('[screenshots] Resolving interval for freelancer:', normalizedEmail, 'session:', sessionId);
+
+    let clientEmail = null;
+
+    // First, try to get the client from the session's project
+    if (sessionId) {
+      const sessionIdNum = typeof sessionId === 'string' ? parseInt(sessionId, 10) : sessionId;
+      if (!isNaN(sessionIdNum)) {
+        // Get the session to find the project_id
+        const { data: session, error: sessionError } = await supabase
+          .from('time_sessions')
+          .select('project_id')
+          .eq('id', sessionIdNum)
+          .maybeSingle();
+
+        if (!sessionError && session?.project_id) {
+          console.log('[screenshots] Found session with project_id:', session.project_id);
+          
+          // Get the project assignment to find the client (assigned_by)
+          const { data: projectAssignment, error: projectError } = await supabase
+            .from('project_assignments')
+            .select('assigned_by')
+            .eq('project_id', session.project_id)
+            .eq('freelancer_email', normalizedEmail)
+            .maybeSingle();
+
+          if (!projectError && projectAssignment?.assigned_by) {
+            clientEmail = projectAssignment.assigned_by.trim().toLowerCase();
+            console.log('[screenshots] Found client from project assignment:', clientEmail);
+          } else if (projectError) {
+            console.warn('[screenshots] Error looking up project assignment:', projectError);
+          }
+        } else if (sessionError) {
+          console.warn('[screenshots] Error looking up session:', sessionError);
+        }
+      }
+    }
+
+    // Fallback: If we couldn't get client from project, use the most recent assignment
+    if (!clientEmail) {
+      console.log('[screenshots] Falling back to most recent client assignment');
+      const { data: assignment, error: assignmentError } = await supabase
+        .from('client_freelancer_assignments')
+        .select('client_email')
+        .eq('freelancer_email', normalizedEmail)
+        .eq('is_active', true)
+        .order('assigned_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (assignmentError) {
+        console.warn('[screenshots] Failed to lookup client assignment:', assignmentError);
+        return 20000;
+      }
+
+      if (!assignment?.client_email) {
+        console.warn('[screenshots] No active client assignment found for freelancer:', normalizedEmail);
+        return 20000;
+      }
+
+      clientEmail = assignment.client_email.trim().toLowerCase();
+      console.log('[screenshots] Using client from most recent assignment:', clientEmail);
+    }
+
+    // Now look up the client settings
+    const { data: settings, error: settingsError } = await supabase
+      .from('client_settings')
+      .select('screenshot_interval_seconds, client_email')
+      .eq('client_email', clientEmail)
+      .maybeSingle();
+
+    if (settingsError) {
+      console.warn('[screenshots] Failed to lookup client settings:', settingsError);
+      return 20000;
+    }
+
+    if (!settings) {
+      console.warn('[screenshots] No client settings found for client:', clientEmail, '- using default interval');
+      return 20000;
+    }
+
+    console.log('[screenshots] Found client settings:', JSON.stringify(settings, null, 2));
+
+    const intervalSeconds = Number(settings.screenshot_interval_seconds);
+    if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
+      console.warn('[screenshots] Invalid interval value:', settings.screenshot_interval_seconds, '- using default');
+      return 20000;
+    }
+
+    // Clamp between 30s and 1h for safety
+    const clamped = Math.min(Math.max(intervalSeconds, 30), 3600);
+    const intervalMs = clamped * 1000;
+    console.log('[screenshots] Resolved interval:', intervalSeconds, 'seconds (', intervalMs, 'ms) for client:', clientEmail);
+    return intervalMs;
+  } catch (e) {
+    console.warn('[screenshots] resolveScreenshotIntervalForUser error:', e);
+    return 20000;
+  }
+}
+
 // Allow renderer to queue ad-hoc screenshots for upload (e.g., manual capture)
 ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle }) => {
   try {
@@ -502,6 +611,9 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   currentUserEmail = userEmail;
   currentSessionId = sessionId;
   isBackgroundCaptureActive = true;
+
+  const intervalMs = await resolveScreenshotIntervalForUser(userEmail, sessionId);
+  console.log('Using screenshot interval (ms):', intervalMs);
   
   backgroundScreenshotInterval = setInterval(async () => {
     if (!isBackgroundCaptureActive || isBackgroundTickRunning) return;
@@ -586,7 +698,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
     } finally {
       isBackgroundTickRunning = false;
     }
-  }, 20000); // Capture every 20 seconds
+  }, intervalMs);
   
   console.log('Background screenshot capture interval started');
   return true;
