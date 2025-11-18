@@ -30,3 +30,5 @@ COMMENT ON TABLE client_settings IS 'Per-client configuration such as screenshot
 
 
 
+
+
