@@ -5,13 +5,13 @@ const fs = require('fs');
 // Note: This script creates a PNG file. For a true .ico file, you'll need additional tools.
 // However, electron-builder can use PNG files for Windows icons if they're the right size.
 
-const iconPath = path.join(__dirname, '..', 'SupagigsLogo.png');
-const outputPath = path.join(__dirname, '..', 'icon.ico');
+const iconPath = path.join(__dirname, '..', 'SupagigsIcon.ico');
+const outputPath = path.join(__dirname, '..', 'SupagigsIcon.ico');
 
 async function createWindowsIcon() {
   try {
     if (!fs.existsSync(iconPath)) {
-      console.error('Error: SupagigsLogo.png not found');
+      console.error('Error: SupagigsIcon.ico not found');
       process.exit(1);
     }
 
@@ -34,11 +34,11 @@ async function createWindowsIcon() {
     console.log('✓ Created icon-256.png (256x256)');
     console.log('');
     console.log('Note: electron-builder accepts PNG files for Windows icons.');
-    console.log('The current SupagigsLogo.png (256x256) should work fine.');
+    console.log('The current SupagigsIcon.ico (256x256) should work fine.');
     console.log('');
     console.log('For a true .ico file with multiple sizes, you can:');
     console.log('  1. Use an online converter (e.g., convertio.co, icoconvert.com)');
-    console.log('  2. Use ImageMagick: magick convert SupagigsLogo.png -define icon:auto-resize icon.ico');
+    console.log('  2. Use ImageMagick: magick convert SupagigsIcon.ico -define icon:auto-resize SupagigsIcon.ico');
     console.log('  3. Use a tool like IcoFX or Greenfish Icon Editor');
   } catch (error) {
     console.error('Error creating icon:', error.message);

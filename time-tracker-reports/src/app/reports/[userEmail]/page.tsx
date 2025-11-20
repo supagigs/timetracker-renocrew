@@ -376,9 +376,9 @@ export default async function ReportsPage({
   })();
 
   const defaultSummary = {
-    labels: [],
-    activeHours: [],
-    idleHours: [],
+    labels: [] as string[],
+    activeHours: [] as number[],
+    idleHours: [] as number[],
     totalHours: 0,
     totalIdleSeconds: 0,
     avgIdlePercent: 0,
@@ -386,7 +386,15 @@ export default async function ReportsPage({
   };
 
   let sessions: TimeSession[] = [];
-  let summary = defaultSummary;
+  let summary: {
+    labels: string[];
+    activeHours: number[];
+    idleHours: number[];
+    totalHours: number;
+    totalIdleSeconds: number;
+    avgIdlePercent: number;
+    avgDailyHours: number;
+  } = defaultSummary;
   let projectSummary: Array<{ id: number; name: string; totalHours: number; totalSeconds: number }> = [];
   let errorMessage: string | null = null;
   let viewerName: string | null = null;
@@ -517,7 +525,7 @@ export default async function ReportsPage({
         <header className="space-y-3">
           <div className="flex items-center gap-4">
             <Image
-              src="/supagigs-logo.png"
+              src="/SupagigsIcon.ico"
               alt="Supatimetracker logo"
               width={56}
               height={56}

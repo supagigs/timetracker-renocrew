@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS client_settings (
   id SERIAL PRIMARY KEY,
   client_email TEXT NOT NULL UNIQUE,
-  screenshot_interval_seconds INTEGER NOT NULL DEFAULT 20,
+  screenshot_interval_seconds INTEGER NOT NULL DEFAULT 300,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -27,6 +27,9 @@ CREATE POLICY "Allow all UPDATE on client_settings" ON client_settings
   FOR UPDATE USING (true);
 
 COMMENT ON TABLE client_settings IS 'Per-client configuration such as screenshot capture interval.';
+
+
+
 
 
 

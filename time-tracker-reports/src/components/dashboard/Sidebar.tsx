@@ -89,7 +89,7 @@ export function Sidebar({
     <aside className="hidden h-screen w-64 flex-col border-r border-border bg-sidebar px-6 pb-6 pt-6 md:flex">
       <div className="mb-8 flex items-center gap-3">
         <Image
-          src="/supagigs-logo.png"
+          src="/SupagigsIcon.ico"
           alt="Supagigs logo"
           width={36}
           height={36}

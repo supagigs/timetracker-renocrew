@@ -142,7 +142,7 @@ Navigate to `http://localhost:3000`. The Electron app’s “View Reports” but
 See `BUILD_INSTRUCTIONS.md` for step-by-step guidance. In summary:
 
 1. Ensure `.env` contains production Supabase keys.
-2. Update branding assets (`SupagigsLogo.png/.ico`) or point `package.json` to your custom files.
+2. Update branding assets (`SupagigsIcon.ico/.ico`) or point `package.json` to your custom files.
 3. Delete `dist/` if it exists.
 4. Run `npm run build`.
 5. Distribute `dist/Time Tracker Setup <version>.exe`.

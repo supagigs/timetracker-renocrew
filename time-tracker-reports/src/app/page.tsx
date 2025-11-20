@@ -132,7 +132,7 @@ export default function Home() {
       <section className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
         <div className="flex flex-col items-center gap-4">
           <Image
-            src="/supagigs-logo.png"
+            src="/SupagigsIcon.ico"
             alt="Supatimetracker logo"
             width={96}
             height={96}

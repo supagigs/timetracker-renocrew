@@ -30,7 +30,7 @@ This document explains how to produce production builds of the SupaTimeTracker d
    cd ..
    ```
 3. Create a `.env` file in the project root (see `ENV_SETUP.md` for the required variables). The build pipeline copies this file into the packaged app so the Supabase credentials work after installation.
-4. Supply the Windows icon your release should use. By default the build references `SupagigsLogo.ico` (installer) and `SupagigsLogo.png` (all platforms). Replace these files or update the `build.win.icon`, `build.mac.icon`, and `build.linux.icon` fields in `package.json`.
+4. Supply the Windows icon your release should use. By default the build references `SupagigsIcon.ico` (installer) and `SupagigsIcon.ico` (all platforms). Replace these files or update the `build.win.icon`, `build.mac.icon`, and `build.linux.icon` fields in `package.json`.
 
 ---
 

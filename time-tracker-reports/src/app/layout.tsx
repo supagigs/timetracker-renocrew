@@ -16,8 +16,8 @@ export const metadata: Metadata = {
   title: "Supatimetracker",
   description: "Supatimetracker reports portal",
   icons: {
-    icon: "/supagigs-logo.png",
-    apple: "/supagigs-logo.png",
+    icon: "/SupagigsIcon.ico",
+    apple: "/SupagigsIcon.ico",
   },
 };
 

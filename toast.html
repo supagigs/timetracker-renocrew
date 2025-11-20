@@ -159,7 +159,7 @@
 <body>
   <div id="toast-container">
     <div class="toast-header-row">
-      <img id="app-logo" src="icon.ico"/>
+      <img id="app-logo" src="SupagigsIcon.ico"/>
       <div id="toast-title">Time Tracker</div>
       <button id="close-x">&times;</button>
     </div>
@@ -260,20 +260,32 @@
       }
     };
 
+    // ============ TIMER DISPLAY ============
+    const timerDisplay = document.createElement('div');
+    timerDisplay.id = 'timer-display';
+    timerDisplay.style.cssText = 'font-size: 0.85rem; color: #666; text-align: center; margin-top: 8px; font-weight: 500;';
+    document.querySelector('.side-column').appendChild(timerDisplay);
+
     // ============ LOADER ANIMATION & AUTO-CLOSE ============
     const loaderBar = document.getElementById('loader-bar');
+    const TIMER_DURATION = 5000; // 5 seconds
     const startTime = Date.now();
     
     function animateLoader() {
       const elapsed = Date.now() - startTime;
-      const percent = Math.max(0, 100 - (elapsed / 9000) * 100);
-      loaderBar.style.height = percent + '%';
+      const remaining = Math.max(0, TIMER_DURATION - elapsed);
+      const percent = Math.max(0, (remaining / TIMER_DURATION) * 100);
+      const seconds = Math.ceil(remaining / 1000);
       
-      if (percent > 0) {
+      loaderBar.style.height = percent + '%';
+      timerDisplay.textContent = `${seconds}s`;
+      
+      if (remaining > 0) {
         requestAnimationFrame(animateLoader);
       } else {
         timerExpired = true;
-        console.log('[TOAST] Timer expired after 9 seconds');
+        timerDisplay.textContent = '0s';
+        console.log('[TOAST] Timer expired after 5 seconds');
         
         // Only close if user hasn't clicked delete
         if (!isDeleting) {

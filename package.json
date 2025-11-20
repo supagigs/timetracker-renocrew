@@ -53,7 +53,7 @@
       "main.js",
       "preload.js",
       "toast.html",
-      "icon.ico",
+      "SupagigsIcon.ico",
       "renderer/**/*",
       "node_modules/**/*",
       "package.json"
@@ -65,7 +65,7 @@
     "compression": "maximum",
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "icon.ico"
+      "icon": "SupagigsIcon.ico"
     },
     "win": {
       "target": [
@@ -76,7 +76,7 @@
           ]
         }
       ],
-      "icon": "icon.ico",
+      "icon": "SupagigsIcon.ico",
       "sign": null,
       "signingHashAlgorithms": null,
       "certificateFile": null,
@@ -91,7 +91,7 @@
     },
     "linux": {
       "target": "AppImage",
-      "icon": "icon.ico"
+      "icon": "SupagigsIcon.ico"
     }
   }
 }

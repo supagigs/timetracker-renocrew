@@ -54,7 +54,7 @@ Use this document as a rapid briefing for stakeholders who need the elevator pit
 
 ## Build & Distribution
 - `npm run build` generates `dist/Time Tracker Setup <version>.exe`.
-- Icons are defined in `package.json` (`SupagigsLogo.png`/`.ico` by default). Swap files or update the paths as needed.
+- Icons are defined in `package.json` (`SupagigsIcon.ico`/`.ico` by default). Swap files or update the paths as needed.
 - `.env` is bundled automatically so make sure production keys are present before building.
 
 ---

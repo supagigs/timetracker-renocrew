@@ -1371,53 +1371,60 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function captureScreenshot() {
     try {
-      console.log('Attempting to capture screenshot...');
+      console.log('Attempting to capture screenshot from all screens...');
       
       // Get screenshot data from Electron API
-      if (!window.electronAPI || !window.electronAPI.captureScreen) {
+      if (!window.electronAPI || !window.electronAPI.captureAllScreens) {
         console.error('Electron API not available');
         return;
       }
   
-      // captureScreen() returns base64 PNG data directly
-      const screenshotData = await window.electronAPI.captureScreen();
+      // captureAllScreens() returns array of screenshots from all displays
+      const screenshots = await window.electronAPI.captureAllScreens();
       
-      if (!screenshotData) {
-        console.error('Screenshot capture returned null');
+      if (!screenshots || screenshots.length === 0) {
+        console.error('Screenshot capture returned no screens');
         return;
       }
   
-      console.log('✅ Screenshot captured successfully');
+      console.log(`✅ Captured ${screenshots.length} screen(s) successfully`);
       
       const email = StorageService.getItem('userEmail');
-      const timestamp = new Date().toISOString();
+      const baseTimestamp = new Date().toISOString();
       
-      // Queue this screenshot for storage upload via main process
+      // Queue each screenshot for storage upload via main process
       if (window.electronAPI && window.electronAPI.queueScreenshotUpload) {
-        window.electronAPI.queueScreenshotUpload({
-          userEmail: email,
-          sessionId: currentSessionId || 'temp-session',
-          screenshotData,  // ✅ Use the base64 data directly
-          timestamp,
-          isIdle,
-        }).then(res => {
-          if (!res?.ok) {
-            console.error('queueScreenshotUpload failed:', res?.error);
-          } else {
-            showScreenshotNotification({
-              timestamp,
-              previewDataUrl: screenshotData,
-              storageUrl: res.url || null,
-              sessionId: currentSessionId || 'temp-session',
-              appName: res.appName || undefined,
-              isIdle: res.capturedIdle || false,
-            });
-          }
-        }).catch(err => console.error('queueScreenshotUpload error:', err));
+        for (let i = 0; i < screenshots.length; i++) {
+          const screenshot = screenshots[i];
+          // Use original ISO timestamp - modification for filename happens in main process
+          
+          window.electronAPI.queueScreenshotUpload({
+            userEmail: email,
+            sessionId: currentSessionId || 'temp-session',
+            screenshotData: screenshot.dataURL,
+            timestamp: baseTimestamp, // Keep original ISO format
+            isIdle,
+            screenIndex: i + 1,
+            screenName: screenshot.name,
+          }).then(res => {
+            if (!res?.ok) {
+              console.error(`queueScreenshotUpload failed for screen ${i + 1}:`, res?.error);
+            } else {
+              showScreenshotNotification({
+                timestamp: baseTimestamp,
+                previewDataUrl: screenshot.dataURL,
+                storageUrl: res.url || null,
+                sessionId: currentSessionId || 'temp-session',
+                appName: res.appName || undefined,
+                isIdle: res.capturedIdle || false,
+              });
+            }
+          }).catch(err => console.error(`queueScreenshotUpload error for screen ${i + 1}:`, err));
+        }
       }
   
     } catch (error) {
-      console.error('Error capturing screenshot:', error);
+      console.error('Error capturing screenshots:', error);
     }
   }
   

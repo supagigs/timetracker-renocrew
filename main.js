@@ -31,6 +31,8 @@ function logError(context, message, ...args) { log('error', context, message, ..
 
 // ============ GLOBAL STATE ============
 const IDLE_THRESHOLD_SECONDS = 30;
+// Screenshot retention period in days (screenshots older than this will be automatically deleted)
+const SCREENSHOT_RETENTION_DAYS = parseInt(process.env.SCREENSHOT_RETENTION_DAYS || '90', 10);
 let activeWindowModule = null;
 let mainWindow = null;
 let isTimerActive = false;
@@ -53,7 +55,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
-    icon: path.join(__dirname, 'icon.ico'),
+    icon: path.join(__dirname, 'SupagigsIcon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -166,6 +168,14 @@ function getSupabaseClient() {
     if (!supabaseClientInstance) {
       const { createClient } = require('@supabase/supabase-js');
       const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+      const isServiceRole = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+      
+      if (!isServiceRole) {
+        logWarn('Supabase', 'WARNING: SUPABASE_SERVICE_ROLE_KEY not set, using ANON_KEY. RLS policies may block deletions!');
+      } else {
+        logInfo('Supabase', 'Using SERVICE_ROLE_KEY - RLS policies will be bypassed');
+      }
+      
       supabaseClientInstance = createClient(process.env.SUPABASE_URL, serviceRoleKey);
     }
     return supabaseClientInstance;
@@ -180,7 +190,7 @@ async function resolveScreenshotIntervalForUser(email, sessionId) {
     const supabase = getSupabaseClient();
     if (!supabase) {
       logWarn('SCREENSHOTS', 'No Supabase client available, using default interval');
-      return 20000;
+      return 300000; // 5 minutes default
     }
 
     const normalizedEmail = email.trim().toLowerCase();
@@ -236,12 +246,12 @@ async function resolveScreenshotIntervalForUser(email, sessionId) {
 
       if (assignmentError) {
         logWarn('SCREENSHOTS', `Failed to lookup client assignment: ${assignmentError.message}`);
-        return 20000;
+        return 300000; // 5 minutes default
       }
 
       if (!assignment?.client_email) {
         logWarn('SCREENSHOTS', `No active client assignment found for freelancer: ${normalizedEmail}`);
-        return 20000;
+        return 300000; // 5 minutes default
       }
 
       clientEmail = assignment.client_email.trim().toLowerCase();
@@ -257,12 +267,12 @@ async function resolveScreenshotIntervalForUser(email, sessionId) {
 
     if (settingsError) {
       logWarn('SCREENSHOTS', `Failed to lookup client settings: ${settingsError.message}`);
-      return 20000;
+      return 300000; // 5 minutes default
     }
 
     if (!settings) {
       logWarn('SCREENSHOTS', `No client settings found for client: ${clientEmail} - using default interval`);
-      return 20000;
+      return 300000; // 5 minutes default
     }
 
     logInfo('SCREENSHOTS', `Found client settings: ${JSON.stringify(settings)}`);
@@ -270,7 +280,7 @@ async function resolveScreenshotIntervalForUser(email, sessionId) {
     const intervalSeconds = Number(settings.screenshot_interval_seconds);
     if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
       logWarn('SCREENSHOTS', `Invalid interval value: ${settings.screenshot_interval_seconds} - using default`);
-      return 20000;
+      return 300000; // 5 minutes default
     }
 
     // Clamp between 30s and 1h for safety
@@ -280,7 +290,7 @@ async function resolveScreenshotIntervalForUser(email, sessionId) {
     return intervalMs;
   } catch (e) {
     logWarn('SCREENSHOTS', `resolveScreenshotIntervalForUser error: ${e.message}`);
-    return 20000;
+    return 300000; // 5 minutes default
   }
 }
 
@@ -298,7 +308,7 @@ async function compressToJpegBufferFromDataUrl(dataUrl) {
   return jpegBuffer;
 }
 
-function showToastNotification(filePath, base64Data) {
+function showToastNotification(screenshotId, base64Data) {
   if (toastWin) {
     toastWin.close();
     toastWin = null;
@@ -330,16 +340,21 @@ function showToastNotification(filePath, base64Data) {
   toastWin.loadFile(path.join(__dirname, 'toast.html'));
 
   toastWin.once('ready-to-show', () => {
-    toastWin.showInactive();
-    toastWin.webContents.send('toast-init', { filePath, base64Data });
+    // Check if window still exists before showing
+    if (toastWin && !toastWin.isDestroyed()) {
+      toastWin.showInactive();
+      // Pass screenshotId instead of filePath (now represents storage path)
+      toastWin.webContents.send('toast-init', { filePath: screenshotId, base64Data });
+    }
   });
 
-  setTimeout(() => { if (toastWin) toastWin.close(); }, 9000);
+  setTimeout(() => { if (toastWin) toastWin.close(); }, 5000);
   toastWin.on('closed', () => { toastWin = null; });
 }
 
 // ============ CANCELLATION CHECKER ============
-const isCancelled = (filePath) => pendingScreenshots.get(filePath) === true;
+// screenshotId can be filePath (for backward compatibility) or storagePath
+const isCancelled = (screenshotId) => pendingScreenshots.get(screenshotId) === true;
 
 // ============ BROADCAST HELPER ============
 function broadcastScreenshotCaptured(screenshotData) {
@@ -363,38 +378,49 @@ async function insertScreenshotToDatabase(supabase, userEmail, sessionId, public
 
 // ============ SCREENSHOT UPLOAD HANDLER ============
 async function handleScreenshotUpload(uploadData) {
-  const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel } = uploadData;
+  const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel, screenIndex, screenName } = uploadData;
   
   try {
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
-    const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}.jpg`;
+    
+    // Use original ISO timestamp for database
+    const dbTimestamp = timestamp;
+    
+    // Create filename-friendly timestamp (replace colons and dots with dashes)
+    let filenameTimestamp = timestamp.replace(/[:.]/g, '-');
+    
+    // Include screen identifier in filename if multiple screens
+    const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
+    const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${filenameTimestamp}${screenSuffix}.jpg`;
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error('Supabase client unavailable');
 
-    const screenshotsDir = resolveScreenshotsDir(true);
-    const filePath = path.join(screenshotsDir, jpegFilename);
-    fs.writeFileSync(filePath, jpegBuffer);
+    const storagePath = `${userEmail}/${sessionId}/${jpegFilename}`;
+    
+    // Use storagePath as unique identifier for tracking
+    const screenshotId = storagePath;
+    pendingScreenshots.set(screenshotId, false);
+    logInfo(contextLabel, `Uploading screenshot to storage: ${storagePath}`);
 
-    pendingScreenshots.set(filePath, false);
-    logInfo(contextLabel, `Screenshot saved, added to pending: ${filePath}`);
+    // Show toast notification with storage path identifier
+    showToastNotification(screenshotId, screenshotData);
 
-    showToastNotification(filePath, screenshotData);
-
-    if (isCancelled(filePath)) {
+    // Check if cancelled before upload
+    if (isCancelled(screenshotId)) {
       logInfo(contextLabel, 'Upload cancelled before storage');
-      pendingScreenshots.delete(filePath);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      pendingScreenshots.delete(screenshotId);
       return { ok: false, error: 'Upload cancelled by user' };
     }
 
-    const storagePath = `${userEmail}/${sessionId}/${jpegFilename}`;
+    // Upload directly to Supabase Storage (no local file)
     const { error: storageError } = await supabase.storage
       .from(STORAGE_BUCKET)
       .upload(storagePath, jpegBuffer, { contentType: 'image/jpeg', upsert: true });
 
-    if (isCancelled(filePath)) {
+    // Check if cancelled during upload
+    if (isCancelled(screenshotId)) {
       logInfo(contextLabel, 'Upload cancelled during storage upload');
-      pendingScreenshots.delete(filePath);
+      pendingScreenshots.delete(screenshotId);
       if (!storageError) {
         try {
           await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
@@ -403,30 +429,60 @@ async function handleScreenshotUpload(uploadData) {
           logError(contextLabel, 'Error removing from storage', e);
         }
       }
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return { ok: false, error: 'Upload cancelled by user' };
     }
 
     if (storageError) throw storageError;
+
+    // Check if cancelled after storage upload but before DB insertion
+    if (isCancelled(screenshotId)) {
+      logInfo(contextLabel, 'Upload cancelled after storage, before DB insertion');
+      pendingScreenshots.delete(screenshotId);
+      try {
+        await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+        logInfo(contextLabel, 'Removed from Supabase storage');
+      } catch (e) {
+        logError(contextLabel, 'Error removing from storage', e);
+      }
+      return { ok: false, error: 'Upload cancelled by user' };
+    }
 
     const publicUrlRes = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
     const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
     if (!publicUrl) throw new Error('Unable to get storage public URL');
 
     const appName = await getActiveAppName() || app.getName() || 'Time Tracker';
-    await insertScreenshotToDatabase(supabase, userEmail, sessionId, publicUrl, timestamp, appName, isIdle);
+    // Include screen info in app name if multiple screens
+    const displayAppName = screenIndex && screenName 
+      ? `${appName} (${screenName})` 
+      : appName;
+    
+    // Final check before DB insertion
+    if (isCancelled(screenshotId)) {
+      logInfo(contextLabel, 'Upload cancelled right before DB insertion');
+      pendingScreenshots.delete(screenshotId);
+      try {
+        await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+        logInfo(contextLabel, 'Removed from Supabase storage');
+      } catch (e) {
+        logError(contextLabel, 'Error removing from storage', e);
+      }
+      return { ok: false, error: 'Upload cancelled by user' };
+    }
+    
+    await insertScreenshotToDatabase(supabase, userEmail, sessionId, publicUrl, dbTimestamp, displayAppName, isIdle);
 
     broadcastScreenshotCaptured({
       timestamp,
       previewDataUrl: screenshotData,
       storageUrl: publicUrl,
-      filePath,
+      storagePath,
       sessionId,
       appName,
       isIdle: Boolean(isIdle)
     });
 
-    pendingScreenshots.delete(filePath);
+    pendingScreenshots.delete(screenshotId);
     logInfo(contextLabel, 'Upload completed successfully');
     
     return { ok: true, storagePath, url: publicUrl, appName, capturedIdle: Boolean(isIdle) };
@@ -450,33 +506,52 @@ ipcMain.handle('set-user-logged-in', async (event, flag) => {
 // Replace ONLY the ipcMain.handle('toast-delete-file', ...) handler in your main.js
 
 ipcMain.handle('toast-delete-file', async (event, filePath) => {
-  logInfo('DELETE', `Handler called with filePath: ${filePath}`);
+  logInfo('DELETE', `Handler called with storagePath: ${filePath}`);
   
   try {
-    // Step 1: Mark as cancelled in pending map
-    if (pendingScreenshots.has(filePath)) {
-      pendingScreenshots.set(filePath, true);
-      logInfo('DELETE', 'Marked as cancelled in pending map');
-    }
-
-    // Step 2: Delete from local disk
-    if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      logInfo('DELETE', `File deleted successfully from disk: ${filePath}`);
-      pendingScreenshots.delete(filePath);
+    // filePath is now the storagePath (e.g., "user@email.com/session123/filename.jpg")
+    const storagePath = filePath;
+    
+    // Step 1: Mark as cancelled in pending map - this will prevent DB insertion
+    if (pendingScreenshots.has(storagePath)) {
+      pendingScreenshots.set(storagePath, true);
+      logInfo('DELETE', 'Marked as cancelled in pending map - will prevent DB storage');
     } else {
-      logWarn('DELETE', `File does not exist on disk: ${filePath}`);
+      logWarn('DELETE', 'Screenshot not found in pending map - may have already been processed');
     }
 
-    // Step 3: Extract filename from path
-    const filename = path.basename(filePath);
-    logInfo('DELETE', `Extracted filename: ${filename}`);
-
-    // Step 4: Get Supabase client
+    // Step 2: Get Supabase client
     const supabase = getSupabaseClient();
     if (!supabase) {
-      throw new Error('Supabase client unavailable');
+      // If no supabase, just mark as cancelled and return
+      logWarn('DELETE', 'Supabase client unavailable, only marking as cancelled');
+      return { 
+        success: true, 
+        message: 'Screenshot cancelled (will not be stored)',
+        filename: path.basename(storagePath)
+      };
     }
+
+    // Step 3: Try to delete from storage if it was already uploaded
+    if (storagePath) {
+      try {
+        const { error: storageError } = await supabase.storage
+          .from(STORAGE_BUCKET)
+          .remove([storagePath]);
+        
+        if (storageError) {
+          logWarn('DELETE', `Error deleting from storage (may not exist yet): ${storageError.message}`);
+        } else {
+          logInfo('DELETE', `Deleted from Supabase storage: ${storagePath}`);
+        }
+      } catch (e) {
+        logWarn('DELETE', `Error attempting to delete from storage: ${e.message}`);
+      }
+    }
+
+    // Step 4: Extract filename from storage path for database lookup
+    const filename = path.basename(storagePath);
+    logInfo('DELETE', `Extracted filename: ${filename}`);
 
     // Step 5: Query database - FASTER METHOD (no ilike timeout)
     // Get recent screenshots and filter in-memory
@@ -499,33 +574,42 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
     );
 
     if (!screenshot) {
-      logWarn('DELETE', `No database record found for: ${filename}`);
-      // Continue anyway - file is already deleted from disk
+      logInfo('DELETE', `No database record found for: ${filename} - screenshot was cancelled before DB insertion`);
+      // Screenshot was cancelled before DB insertion - this is the desired behavior
+      // Storage deletion was already attempted in Step 3
+      // Return success since we prevented DB storage
+      return { 
+        success: true, 
+        message: 'Screenshot cancelled - will not be stored in database',
+        filename 
+      };
     } else {
-      logInfo('DELETE', `Found database record ID: ${screenshot.id}`);
+      logInfo('DELETE', `Found database record ID: ${screenshot.id} - deleting from DB and storage`);
 
-      // Step 6: Delete from S3 storage
+      // Step 6: Delete from storage bucket (if not already deleted)
       if (screenshot.screenshot_data) {
         try {
-          const urlParts = screenshot.screenshot_data.split('/');
-          const bucketIndex = urlParts.indexOf(STORAGE_BUCKET);
+          const extractedStoragePath = extractStoragePathFromUrl(screenshot.screenshot_data, STORAGE_BUCKET);
           
-          if (bucketIndex !== -1 && bucketIndex < urlParts.length - 1) {
-            const storagePath = urlParts.slice(bucketIndex + 1).join('/');
-            logInfo('DELETE', `Attempting to delete from S3: ${storagePath}`);
+          if (extractedStoragePath) {
+            logInfo('DELETE', `Attempting to delete from storage: ${extractedStoragePath}`);
             
             const { error: storageError } = await supabase.storage
               .from(STORAGE_BUCKET)
-              .remove([storagePath]);
+              .remove([extractedStoragePath]);
 
             if (storageError) {
-              logWarn('DELETE', `Error deleting from storage: ${storageError.message}`);
+              logError('DELETE', `Error deleting from storage: ${storageError.message}`, storageError);
+              // Don't throw - continue to delete database record even if storage deletion fails
             } else {
-              logInfo('DELETE', `Deleted from S3 storage: ${storagePath}`);
+              logInfo('DELETE', `Successfully deleted from storage: ${extractedStoragePath}`);
             }
+          } else {
+            logWarn('DELETE', `Could not extract storage path from URL: ${screenshot.screenshot_data}`);
           }
         } catch (e) {
           logError('DELETE', `Error parsing storage path: ${e.message}`, e);
+          // Don't throw - continue to delete database record even if storage deletion fails
         }
       }
 
@@ -559,7 +643,7 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
 
     return { 
       success: true, 
-      message: 'Screenshot deleted from disk, storage, and database',
+      message: 'Screenshot deleted from storage and database',
       filename
     };
     
@@ -616,32 +700,61 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   const intervalMs = await resolveScreenshotIntervalForUser(userEmail, sessionId);
   logInfo('IPC', `Starting background screenshots with interval: ${intervalMs}ms (${intervalMs / 1000}s)`);
 
-  const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().size;
-
   backgroundScreenshotInterval = setInterval(async () => {
     if (!isBackgroundCaptureActive || isBackgroundTickRunning) return;
     isBackgroundTickRunning = true;
     try {
+      // Capture all screens
+      const displays = screen.getAllDisplays();
       const sources = await desktopCapturer.getSources({
         types: ['screen'],
-        thumbnailSize: { width: screenWidth, height: screenHeight }
+        thumbnailSize: { width: 1920, height: 1080 } // High quality
       });
-      if (sources.length > 0) {
-        const source = sources[0];
-        const screenshotData = source.thumbnail.toDataURL('image/png');
-        const timestamp = new Date().toISOString();
 
-        await handleScreenshotUpload({
-          userEmail: currentUserEmail,
-          sessionId: currentSessionId,
-          screenshotData,
-          timestamp,
-          isIdle: isUserIdle,
-          contextLabel: 'BG-UPLOAD'
-        });
+      if (sources.length === 0) {
+        logWarn('BG-UPLOAD', 'No screen sources found');
+        return;
+      }
+
+      const baseTimestamp = new Date().toISOString();
+
+      // Capture and upload each screen
+      for (let i = 0; i < sources.length; i++) {
+        try {
+          const source = sources[i];
+          
+          // Get actual display size if available
+          const display = displays[i] || displays[0];
+          const { width, height } = display.size;
+          
+          // Get properly sized source for this specific display
+          const sizedSources = await desktopCapturer.getSources({
+            types: ['screen'],
+            thumbnailSize: { width, height }
+          });
+          
+          const sizedSource = sizedSources.find(s => s.id === source.id) || source;
+          const screenshotData = sizedSource.thumbnail.toDataURL('image/png');
+          
+          // Use original ISO timestamp for database, modification will happen in handleScreenshotUpload
+          await handleScreenshotUpload({
+            userEmail: currentUserEmail,
+            sessionId: currentSessionId,
+            screenshotData,
+            timestamp: baseTimestamp, // Keep original ISO format
+            isIdle: isUserIdle,
+            contextLabel: `BG-UPLOAD-SCREEN${i + 1}`,
+            screenIndex: i + 1,
+            screenName: source.name
+          });
+          
+          logInfo('BG-UPLOAD', `Uploaded screenshot from screen ${i + 1}: ${source.name}`);
+        } catch (error) {
+          logError('BG-UPLOAD', `Error uploading screenshot from screen ${i + 1}:`, error);
+        }
       }
     } catch (error) {
-      logError('BG-UPLOAD', 'Error capturing screenshot', error);
+      logError('BG-UPLOAD', 'Error capturing screenshots', error);
     } finally {
       isBackgroundTickRunning = false;
     }
@@ -689,6 +802,72 @@ ipcMain.handle('capture-screen', async () => {
   }
 });
 
+// capture-all-screens (returns array of screenshots from all displays)
+ipcMain.handle('capture-all-screens', async () => {
+  try {
+    // Get all displays to determine their actual sizes
+    const displays = screen.getAllDisplays();
+    
+    // Get all screen sources with high resolution
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1920, height: 1080 } // Large size for high quality
+    });
+
+    if (!sources || sources.length === 0) {
+      logWarn('SCREENSHOT', 'No screen sources found');
+      return [];
+    }
+
+    const screenshots = [];
+
+    // Iterate through all screen sources
+    for (const source of sources) {
+      try {
+        // Get the actual display size if available (match by name or index)
+        const display = displays.find(d => 
+          d.label === source.name || 
+          source.name.includes(`Screen ${displays.indexOf(d) + 1}`)
+        ) || displays[0]; // Fallback to primary display
+
+        // Use actual display size for better quality
+        const { width, height } = display.size;
+        
+        // Get source with proper size
+        const sizedSources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width, height }
+        });
+        
+        const sizedSource = sizedSources.find(s => s.id === source.id) || source;
+        const thumbnailImage = sizedSource.thumbnail;
+        
+        // Convert to data URL
+        const imageDataURL = thumbnailImage.toDataURL('image/png');
+        
+        screenshots.push({
+          id: source.id,
+          name: source.name,
+          displayIndex: displays.indexOf(display),
+          dataURL: imageDataURL,
+          width,
+          height
+        });
+        
+        logInfo('SCREENSHOT', `Captured screen: ${source.name} (${width}x${height})`);
+      } catch (error) {
+        logError('SCREENSHOT', `Error capturing screen ${source.name}:`, error);
+      }
+    }
+
+    logInfo('SCREENSHOT', `Captured ${screenshots.length} screen(s)`);
+    return screenshots;
+  } catch (error) {
+    logError('SCREENSHOT', 'Error capturing all screens:', error);
+    return [];
+  }
+});
+
 // save-active-session (stub - update as needed to persist session)
 ipcMain.handle('save-active-session', async (event, sessionData) => {
   try {
@@ -707,32 +886,18 @@ ipcMain.handle('is-background-screenshots-active', () => {
 });
 
 // get-local-screenshots
+// Note: Screenshots are no longer stored locally, only in Supabase Storage
 ipcMain.handle('get-local-screenshots', async (event, email, startTime, endTime) => {
-  try {
-    const dir = resolveScreenshotsDir(false);
-    if (!fs.existsSync(dir)) return [];
-    const files = fs.readdirSync(dir);
-    // simple filter - you can improve by parsing timestamps in filename if you have them
-    const matched = files
-      .filter(f => typeof email === 'string' ? f.includes(email.replace(/@/g,'_at_')) : true)
-      .map(f => path.join(dir, f));
-    return matched;
-  } catch (e) {
-    logError('IPC', 'get-local-screenshots failed', e);
-    return [];
-  }
+  // Return empty array since screenshots are stored only in Supabase
+  return [];
 });
 
 // open-local-screenshot
+// Note: Screenshots are no longer stored locally, only in Supabase Storage
 ipcMain.handle('open-local-screenshot', async (event, filePath) => {
-  try {
-    if (!filePath || !fs.existsSync(filePath)) return { ok: false, message: 'File not found' };
-    await shell.openPath(filePath);
-    return { ok: true };
-  } catch (e) {
-    logError('IPC', 'open-local-screenshot failed', e);
-    return { ok: false, error: e.message };
-  }
+  // Screenshots are stored in Supabase, not locally
+  logWarn('IPC', 'open-local-screenshot called but screenshots are not stored locally');
+  return { ok: false, error: 'Screenshots are stored in Supabase, not locally' };
 });
 
 // open-picture-in-picture
@@ -771,9 +936,388 @@ ipcMain.handle('open-external-url', async (event, url) => {
   }
 });
 
+// Manual screenshot cleanup trigger (for testing/admin)
+ipcMain.handle('cleanup-old-screenshots', async (event, daysOld = SCREENSHOT_RETENTION_DAYS) => {
+  try {
+    logInfo('IPC', `Manual cleanup triggered for screenshots older than ${daysOld} days`);
+    const result = await cleanupOldScreenshots(daysOld);
+    return { ok: true, ...result };
+  } catch (e) {
+    logError('IPC', 'cleanup-old-screenshots failed', e);
+    return { ok: false, error: e.message };
+  }
+});
+
+// ============ SCREENSHOT CLEANUP ============
+/**
+ * Extracts storage path from Supabase public URL
+ * Handles formats like:
+ * - https://[project].supabase.co/storage/v1/object/public/[bucket]/[path]
+ * - Direct storage paths: [bucket]/[path] or [path]
+ */
+function extractStoragePathFromUrl(url, bucketName) {
+  try {
+    if (!url || !bucketName) {
+      logWarn('STORAGE_PATH', `Missing url or bucketName: url=${url}, bucketName=${bucketName}`);
+      return null;
+    }
+
+    // If URL already looks like a storage path (no http/https), return as-is if it starts with bucket
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      if (url.startsWith(`${bucketName}/`)) {
+        return url.substring(bucketName.length + 1);
+      }
+      // If it's just a path without bucket prefix, assume it's the full path
+      return url;
+    }
+
+    // Parse full URL
+    const urlParts = url.split('/');
+    const bucketIndex = urlParts.indexOf(bucketName);
+    
+    if (bucketIndex !== -1 && bucketIndex < urlParts.length - 1) {
+      const storagePath = urlParts.slice(bucketIndex + 1).join('/');
+      logInfo('STORAGE_PATH', `Extracted path from URL: ${storagePath}`);
+      return storagePath;
+    }
+    
+    logWarn('STORAGE_PATH', `Could not find bucket '${bucketName}' in URL: ${url}`);
+    return null;
+  } catch (e) {
+    logError('STORAGE_PATH', `Error parsing storage path from URL: ${e.message}`, e);
+    return null;
+  }
+}
+
+/**
+ * Deletes screenshots older than the specified number of days
+ * @param {number} daysOld - Number of days (default: SCREENSHOT_RETENTION_DAYS)
+ */
+async function cleanupOldScreenshots(daysOld = SCREENSHOT_RETENTION_DAYS) {
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      logWarn('CLEANUP', 'No Supabase client available, skipping cleanup');
+      return { deleted: 0, errors: 0 };
+    }
+
+    // Calculate the cutoff date (X days ago based on daysOld parameter)
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+    const cutoffDateStr = cutoffDate.toISOString();
+
+    logInfo('CLEANUP', `Starting cleanup of screenshots older than ${daysOld} days (before ${cutoffDateStr})`);
+    
+    // NOTE: For optimal performance, ensure the index on captured_at exists:
+    // Run: database-migration-screenshot-cleanup-index.sql in Supabase SQL editor
+
+    // Process in smaller batches to avoid timeout with large datasets
+    // Start with smaller batch size to prevent timeouts
+    let BATCH_SIZE = 100; // Reduced from 1000 to prevent timeouts
+    let totalDeleted = 0;
+    let totalErrors = 0;
+    let hasMore = true;
+    let offset = 0;
+    let consecutiveErrors = 0;
+    const MAX_CONSECUTIVE_ERRORS = 3;
+
+    while (hasMore) {
+      // Query screenshots older than cutoff date in batches
+      let oldScreenshots = null;
+      let queryAttempts = 0;
+      const MAX_QUERY_ATTEMPTS = 3;
+      let querySuccess = false;
+
+      // Retry logic with exponential backoff
+      while (queryAttempts < MAX_QUERY_ATTEMPTS && !querySuccess) {
+        try {
+          const { data: queryResult, error: queryError } = await supabase
+            .from('screenshots')
+            .select('id, screenshot_data, captured_at')
+            .lt('captured_at', cutoffDateStr)
+            .order('captured_at', { ascending: true })
+            .range(offset, offset + BATCH_SIZE - 1)
+            .limit(BATCH_SIZE); // Explicit limit
+
+          if (queryError) {
+            queryAttempts++;
+            const isTimeout = queryError.code === '57014' || queryError.message?.includes('timeout') || queryError.message?.includes('522');
+            const isConnectionError = queryError.message?.includes('Connection timed out') || queryError.message?.includes('522');
+
+            if (isTimeout || isConnectionError) {
+              if (queryAttempts < MAX_QUERY_ATTEMPTS) {
+                // Exponential backoff: wait 2^attempts seconds
+                const backoffDelay = Math.min(2000 * Math.pow(2, queryAttempts - 1), 10000);
+                logWarn('CLEANUP', `Query timeout/connection error (attempt ${queryAttempts}/${MAX_QUERY_ATTEMPTS}), retrying in ${backoffDelay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, backoffDelay));
+                
+                // Reduce batch size on retry
+                if (queryAttempts === 2 && BATCH_SIZE > 50) {
+                  BATCH_SIZE = Math.max(50, Math.floor(BATCH_SIZE / 2));
+                  logInfo('CLEANUP', `Reducing batch size to ${BATCH_SIZE} to avoid timeouts`);
+                }
+                continue;
+              } else {
+                logError('CLEANUP', `Query failed after ${MAX_QUERY_ATTEMPTS} attempts (batch ${offset}-${offset + BATCH_SIZE}): ${queryError.message}`);
+                consecutiveErrors++;
+                if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                  logError('CLEANUP', `Too many consecutive errors (${consecutiveErrors}), stopping cleanup`);
+                  hasMore = false;
+                  break;
+                }
+                // Skip this batch and continue
+                offset += BATCH_SIZE;
+                totalErrors += BATCH_SIZE;
+                break;
+              }
+            } else {
+              // Non-timeout error, log and break
+              logError('CLEANUP', `Error querying old screenshots (batch ${offset}-${offset + BATCH_SIZE}): ${queryError.message}`, queryError);
+              consecutiveErrors++;
+              if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                logError('CLEANUP', `Too many consecutive errors (${consecutiveErrors}), stopping cleanup`);
+                hasMore = false;
+              }
+              totalErrors += BATCH_SIZE;
+              break;
+            }
+          } else {
+            // Success
+            oldScreenshots = queryResult;
+            querySuccess = true;
+            consecutiveErrors = 0; // Reset error counter on success
+          }
+        } catch (e) {
+          queryAttempts++;
+          logError('CLEANUP', `Exception during query (attempt ${queryAttempts}): ${e.message}`, e);
+          if (queryAttempts >= MAX_QUERY_ATTEMPTS) {
+            consecutiveErrors++;
+            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+              logError('CLEANUP', `Too many consecutive errors (${consecutiveErrors}), stopping cleanup`);
+              hasMore = false;
+            }
+            break;
+          }
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 1000 * queryAttempts));
+        }
+      }
+
+      if (!querySuccess) {
+        // Failed to get data after retries, skip this batch
+        continue;
+      }
+
+      if (!oldScreenshots || oldScreenshots.length === 0) {
+        hasMore = false;
+        if (offset === 0) {
+          logInfo('CLEANUP', 'No old screenshots found to delete');
+        }
+        break;
+      }
+
+      logInfo('CLEANUP', `Processing batch: ${oldScreenshots.length} screenshots (offset: ${offset})`);
+
+      let deletedCount = 0;
+      let errorCount = 0;
+      const storagePathsToDelete = [];
+
+      // Collect storage paths and prepare for batch deletion
+      for (const screenshot of oldScreenshots) {
+        if (screenshot.screenshot_data) {
+          const storagePath = extractStoragePathFromUrl(screenshot.screenshot_data, STORAGE_BUCKET);
+          if (storagePath) {
+            storagePathsToDelete.push(storagePath);
+          }
+        }
+      }
+
+      // Delete from storage bucket (batch delete)
+      if (storagePathsToDelete.length > 0) {
+        logInfo('CLEANUP', `Attempting to delete ${storagePathsToDelete.length} files from storage bucket`);
+        // Supabase storage remove can handle up to 1000 files at once
+        const storageBatchSize = 1000;
+        for (let i = 0; i < storagePathsToDelete.length; i += storageBatchSize) {
+          const batch = storagePathsToDelete.slice(i, i + storageBatchSize);
+          logInfo('CLEANUP', `Deleting storage batch ${i / storageBatchSize + 1} (${batch.length} files)`);
+          
+          const { error: storageError, data: storageData } = await supabase.storage
+            .from(STORAGE_BUCKET)
+            .remove(batch);
+
+          if (storageError) {
+            logError('CLEANUP', `Error deleting batch from storage: ${storageError.message}`, storageError);
+            logError('CLEANUP', `Storage error details: ${JSON.stringify(storageError)}`);
+            logWarn('CLEANUP', 'If you see permission errors, ensure storage bucket DELETE policy is configured in Supabase dashboard');
+            errorCount += batch.length;
+          } else {
+            logInfo('CLEANUP', `Successfully deleted ${batch.length} files from storage bucket`);
+            if (storageData) {
+              logInfo('CLEANUP', `Storage deletion response: ${JSON.stringify(storageData)}`);
+            }
+          }
+        }
+      } else {
+        logWarn('CLEANUP', 'No storage paths extracted from screenshot URLs - cannot delete from bucket');
+      }
+
+      // Delete from database (batch delete by IDs)
+      const screenshotIds = oldScreenshots.map(s => s.id);
+      logInfo('CLEANUP', `Attempting to delete ${screenshotIds.length} screenshot records from database`);
+      
+      if (screenshotIds.length > 0) {
+        // Delete in smaller chunks if needed (Supabase has limits on IN clause size)
+        const deleteChunkSize = 500;
+        let dbDeletedCount = 0;
+        
+        for (let i = 0; i < screenshotIds.length; i += deleteChunkSize) {
+          const chunk = screenshotIds.slice(i, i + deleteChunkSize);
+          logInfo('CLEANUP', `Deleting chunk ${Math.floor(i / deleteChunkSize) + 1}: ${chunk.length} IDs (first few: ${chunk.slice(0, 5).join(', ')})`);
+          
+          // First, verify these IDs exist before deletion
+          const { data: verifyData, error: verifyError } = await supabase
+            .from('screenshots')
+            .select('id')
+            .in('id', chunk);
+          
+          if (verifyError) {
+            logError('CLEANUP', `Error verifying IDs before deletion: ${verifyError.message}`, verifyError);
+          } else {
+            const existingCount = verifyData ? verifyData.length : 0;
+            logInfo('CLEANUP', `Found ${existingCount} of ${chunk.length} IDs in database before deletion`);
+          }
+          
+          // Perform the deletion
+          const { data: deleteResult, error: dbError } = await supabase
+            .from('screenshots')
+            .delete()
+            .in('id', chunk)
+            .select('id'); // Return deleted IDs to verify
+
+          if (dbError) {
+            logError('CLEANUP', `Error deleting chunk from database: ${dbError.message}`, dbError);
+            logError('CLEANUP', `Error details: ${JSON.stringify(dbError, null, 2)}`);
+            errorCount += chunk.length;
+          } else {
+            const actuallyDeleted = deleteResult ? deleteResult.length : 0;
+            dbDeletedCount += actuallyDeleted;
+            logInfo('CLEANUP', `Delete query returned: ${actuallyDeleted} deleted records (chunk ${Math.floor(i / deleteChunkSize) + 1})`);
+            
+            if (deleteResult && deleteResult.length > 0) {
+              logInfo('CLEANUP', `Successfully deleted IDs: ${deleteResult.slice(0, 10).map(r => r.id).join(', ')}${deleteResult.length > 10 ? '...' : ''}`);
+            }
+            
+            // Verify deletion by checking if IDs still exist
+            if (actuallyDeleted > 0) {
+              await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for DB to process
+              const { data: verifyAfter, error: verifyAfterError } = await supabase
+                .from('screenshots')
+                .select('id')
+                .in('id', deleteResult.map(r => r.id));
+              
+              if (verifyAfterError) {
+                logWarn('CLEANUP', `Could not verify deletion: ${verifyAfterError.message}`);
+              } else {
+                const stillExists = verifyAfter ? verifyAfter.length : 0;
+                if (stillExists > 0) {
+                  logError('CLEANUP', `WARNING: ${stillExists} records still exist after deletion! IDs: ${verifyAfter.map(r => r.id).join(', ')}`);
+                } else {
+                  logInfo('CLEANUP', `Verified: All ${actuallyDeleted} records successfully deleted from database`);
+                }
+              }
+            }
+          }
+        }
+        
+        deletedCount = dbDeletedCount;
+        
+        // Final verification
+        if (deletedCount < screenshotIds.length) {
+          logWarn('CLEANUP', `Warning: Expected to delete ${screenshotIds.length} records but only ${deletedCount} were deleted`);
+          
+          // Check which IDs weren't deleted
+          const deletedIds = [];
+          for (let i = 0; i < screenshotIds.length; i += deleteChunkSize) {
+            const chunk = screenshotIds.slice(i, i + deleteChunkSize);
+            const { data: stillExist } = await supabase
+              .from('screenshots')
+              .select('id')
+              .in('id', chunk);
+            if (stillExist) {
+              logWarn('CLEANUP', `Still exist in DB: ${stillExist.map(r => r.id).join(', ')}`);
+            }
+          }
+        }
+      } else {
+        logWarn('CLEANUP', 'No screenshot IDs to delete');
+      }
+
+      totalDeleted += deletedCount;
+      totalErrors += errorCount;
+
+      // Check if there are more records to process
+      hasMore = oldScreenshots.length === BATCH_SIZE;
+      offset += oldScreenshots.length; // Use actual count instead of BATCH_SIZE
+
+      // Delay between batches to avoid overwhelming the database
+      // Longer delay if we had errors, shorter if everything is smooth
+      if (hasMore) {
+        const delay = totalErrors > 0 ? 3000 : 2000; // 3s if errors, 2s otherwise
+        logInfo('CLEANUP', `Waiting ${delay}ms before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    logInfo('CLEANUP', `Cleanup completed: ${totalDeleted} deleted, ${totalErrors} errors`);
+    return { deleted: totalDeleted, errors: totalErrors };
+  } catch (e) {
+    logError('CLEANUP', `Error in cleanupOldScreenshots: ${e.message}`, e);
+    return { deleted: 0, errors: 1 };
+  }
+}
+
+// Schedule cleanup to run daily at 2 AM
+let cleanupInterval = null;
+
+function scheduleScreenshotCleanup() {
+  // Run cleanup immediately on startup (after a short delay to let app initialize)
+  setTimeout(() => {
+    cleanupOldScreenshots(SCREENSHOT_RETENTION_DAYS).catch(err => {
+      logError('CLEANUP', 'Initial cleanup failed', err);
+    });
+  }, 30000); // Wait 30 seconds after app starts
+
+  // Then run cleanup daily
+  // Calculate milliseconds until next 2 AM
+  const now = new Date();
+  const nextCleanup = new Date();
+  nextCleanup.setHours(2, 0, 0, 0);
+  if (nextCleanup <= now) {
+    nextCleanup.setDate(nextCleanup.getDate() + 1);
+  }
+  const msUntilCleanup = nextCleanup.getTime() - now.getTime();
+
+  setTimeout(() => {
+    // Run cleanup at 2 AM
+    cleanupOldScreenshots(SCREENSHOT_RETENTION_DAYS).catch(err => {
+      logError('CLEANUP', 'Scheduled cleanup failed', err);
+    });
+
+    // Then schedule it to run every 24 hours
+    cleanupInterval = setInterval(() => {
+      cleanupOldScreenshots(SCREENSHOT_RETENTION_DAYS).catch(err => {
+        logError('CLEANUP', 'Scheduled cleanup failed', err);
+      });
+    }, 24 * 60 * 60 * 1000); // 24 hours
+  }, msUntilCleanup);
+
+  logInfo('CLEANUP', `Screenshot cleanup scheduled (retention: ${SCREENSHOT_RETENTION_DAYS} days). Next run: ${nextCleanup.toISOString()}`);
+}
+
 // ============ APP LIFECYCLE ============
 app.whenReady().then(() => {
   createWindow();
+  scheduleScreenshotCleanup();
 });
 
 app.on('window-all-closed', () => {
@@ -786,6 +1330,10 @@ app.on('before-quit', async () => {
   if (backgroundScreenshotInterval) {
     clearInterval(backgroundScreenshotInterval);
     backgroundScreenshotInterval = null;
+  }
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
   }
   isBackgroundCaptureActive = false;
   if (global.__idlePollInterval) {
