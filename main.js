@@ -658,12 +658,29 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
         
         logInfo('BG-UPLOAD', `Detected ${allDisplays.length} display(s), requesting screenshots with size ${maxWidth}x${maxHeight}`);
         
+        // Log display details for debugging
+        allDisplays.forEach((display, idx) => {
+          logInfo('BG-UPLOAD', `Display ${idx + 1}: ${display.size.width}x${display.size.height} at (${display.bounds.x}, ${display.bounds.y}), scale: ${display.scaleFactor}`);
+        });
+        
         const sources = await desktopCapturer.getSources({
           types: ['screen'],
           thumbnailSize: { width: maxWidth, height: maxHeight }
         });
         
         logInfo('BG-UPLOAD', `Received ${sources?.length || 0} screen source(s) from desktopCapturer`);
+        
+        // Log detailed source information for debugging
+        if (sources && sources.length > 0) {
+          sources.forEach((source, idx) => {
+            logInfo('BG-UPLOAD', `Source ${idx + 1}: id="${source.id}", name="${source.name}", thumbnail size: ${source.thumbnail?.getSize()?.width || 'N/A'}x${source.thumbnail?.getSize()?.height || 'N/A'}`);
+          });
+        } else {
+          logWarn('BG-UPLOAD', '⚠️ No screen sources returned! This may indicate:');
+          logWarn('BG-UPLOAD', '  1. Missing screen recording permissions (macOS)');
+          logWarn('BG-UPLOAD', '  2. No displays connected');
+          logWarn('BG-UPLOAD', '  3. Platform-specific limitation');
+        }
         
         if (sources && sources.length > 0) {
           const timestamp = new Date().toISOString();
@@ -757,6 +774,11 @@ ipcMain.handle('capture-all-screens', async () => {
     const displays = screen.getAllDisplays();
     const screenshots = [];
     
+    logInfo('IPC', `[capture-all-screens] Detected ${displays.length} display(s)`);
+    displays.forEach((display, idx) => {
+      logInfo('IPC', `[capture-all-screens] Display ${idx + 1}: ${display.size.width}x${display.size.height}`);
+    });
+    
     // Get all screen sources
     const allDisplays = screen.getAllDisplays();
     const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
@@ -766,6 +788,16 @@ ipcMain.handle('capture-all-screens', async () => {
       types: ['screen'],
       thumbnailSize: { width: maxWidth, height: maxHeight },
     });
+    
+    logInfo('IPC', `[capture-all-screens] Received ${sources?.length || 0} source(s) from desktopCapturer`);
+    
+    if (sources && sources.length > 0) {
+      sources.forEach((source, idx) => {
+        logInfo('IPC', `[capture-all-screens] Source ${idx + 1}: id="${source.id}", name="${source.name}"`);
+      });
+    } else {
+      logWarn('IPC', '[capture-all-screens] ⚠️ No screen sources found! Check macOS screen recording permissions.');
+    }
     
     if (!sources || sources.length === 0) {
       logWarn('IPC', 'No screen sources found');
@@ -785,6 +817,65 @@ ipcMain.handle('capture-all-screens', async () => {
   } catch (e) {
     logError('IPC', 'capture-all-screens failed', e);
     return [];
+  }
+});
+
+// Diagnostic handler to check screen capture capabilities
+ipcMain.handle('diagnose-screen-capture', async () => {
+  const diagnostics = {
+    platform: process.platform,
+    displays: [],
+    sources: [],
+    permissions: 'unknown',
+    timestamp: new Date().toISOString()
+  };
+  
+  try {
+    // Get all displays
+    const displays = screen.getAllDisplays();
+    diagnostics.displays = displays.map((display, idx) => ({
+      index: idx + 1,
+      size: display.size,
+      bounds: display.bounds,
+      scaleFactor: display.scaleFactor,
+      primary: display === screen.getPrimaryDisplay()
+    }));
+    
+    // Try to get screen sources
+    const maxWidth = Math.max(...displays.map(d => d.size.width));
+    const maxHeight = Math.max(...displays.map(d => d.size.height));
+    
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: maxWidth, height: maxHeight }
+    });
+    
+    diagnostics.sources = (sources || []).map((source, idx) => ({
+      index: idx + 1,
+      id: source.id,
+      name: source.name,
+      thumbnailSize: source.thumbnail?.getSize()
+    }));
+    
+    // On macOS, if we get no sources, it's likely a permissions issue
+    if (process.platform === 'darwin') {
+      if (!sources || sources.length === 0) {
+        diagnostics.permissions = 'likely_denied';
+      } else if (sources.length < displays.length) {
+        diagnostics.permissions = 'partial';
+      } else {
+        diagnostics.permissions = 'granted';
+      }
+    } else {
+      diagnostics.permissions = 'not_applicable';
+    }
+    
+    logInfo('DIAGNOSTIC', JSON.stringify(diagnostics, null, 2));
+    return diagnostics;
+  } catch (error) {
+    logError('DIAGNOSTIC', 'Error diagnosing screen capture', error);
+    diagnostics.error = error.message;
+    return diagnostics;
   }
 });
 
