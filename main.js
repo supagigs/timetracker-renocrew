@@ -48,6 +48,13 @@ const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'screenshots';
 const pendingScreenshots = new Map();
 let toastWin = null;
 
+// ============ SCREENSHOT BATCH QUEUE ============
+const SCREENSHOT_BATCH_SIZE = 5;
+const SCREENSHOT_BATCH_FLUSH_INTERVAL = 5 * 60 * 1000; // Flush every 5 minutes if batch not full
+const screenshotBatchQueue = [];
+let isBatchUploading = false;
+let batchFlushInterval = null;
+
 // ============ MAIN WINDOW CREATION ============
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -287,81 +294,214 @@ async function insertScreenshotToDatabase(supabase, userEmail, sessionId, public
   if (dbErr) throw dbErr;
 }
 
-// ============ SCREENSHOT UPLOAD HANDLER ============
-async function handleScreenshotUpload(uploadData) {
+// ============ SCREENSHOT BATCH QUEUE MANAGEMENT ============
+
+// Add screenshot to batch queue and process if batch is full
+async function addScreenshotToBatch(uploadData) {
   const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel, screenIndex, screenName } = uploadData;
   
   try {
+    // Compress and save locally
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
-    // Include screen index in filename if provided (for multi-monitor setups)
     const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
     const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}${screenSuffix}.jpg`;
-    const supabase = getSupabaseClient();
-    if (!supabase) throw new Error('Supabase client unavailable');
-
+    
     const screenshotsDir = resolveScreenshotsDir(true);
     const filePath = path.join(screenshotsDir, jpegFilename);
     fs.writeFileSync(filePath, jpegBuffer);
-
-    pendingScreenshots.set(filePath, false);
-    logInfo(contextLabel, `Screenshot saved, added to pending: ${filePath}`);
-
-    showToastNotification(filePath, screenshotData);
-
-    if (isCancelled(filePath)) {
-      logInfo(contextLabel, 'Upload cancelled before storage');
-      pendingScreenshots.delete(filePath);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      return { ok: false, error: 'Upload cancelled by user' };
-    }
-
-    const storagePath = `${userEmail}/${sessionId}/${jpegFilename}`;
-    const { error: storageError } = await supabase.storage
-      .from(STORAGE_BUCKET)
-      .upload(storagePath, jpegBuffer, { contentType: 'image/jpeg', upsert: true });
-
-    if (isCancelled(filePath)) {
-      logInfo(contextLabel, 'Upload cancelled during storage upload');
-      pendingScreenshots.delete(filePath);
-      if (!storageError) {
-        try {
-          await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
-          logInfo(contextLabel, 'Removed from Supabase storage');
-        } catch (e) {
-          logError(contextLabel, 'Error removing from storage', e);
-        }
-      }
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      return { ok: false, error: 'Upload cancelled by user' };
-    }
-
-    if (storageError) throw storageError;
-
-    const publicUrlRes = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
-    const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
-    if (!publicUrl) throw new Error('Unable to get storage public URL');
-
-    const appName = await getActiveAppName() || app.getName() || 'Time Tracker';
-    await insertScreenshotToDatabase(supabase, userEmail, sessionId, publicUrl, timestamp, appName, isIdle);
-
-    broadcastScreenshotCaptured({
-      timestamp,
-      previewDataUrl: screenshotData,
-      storageUrl: publicUrl,
-      filePath,
-      sessionId,
-      appName,
-      isIdle: Boolean(isIdle)
-    });
-
-    pendingScreenshots.delete(filePath);
-    logInfo(contextLabel, 'Upload completed successfully');
     
-    return { ok: true, storagePath, url: publicUrl, appName, capturedIdle: Boolean(isIdle) };
+    // Add to batch queue
+    const batchItem = {
+      userEmail,
+      sessionId,
+      screenshotData,
+      timestamp,
+      isIdle,
+      contextLabel,
+      screenIndex,
+      screenName,
+      filePath,
+      jpegBuffer,
+      jpegFilename,
+      addedAt: Date.now()
+    };
+    
+    screenshotBatchQueue.push(batchItem);
+    pendingScreenshots.set(filePath, false);
+    
+    logInfo(contextLabel, `Screenshot queued (${screenshotBatchQueue.length}/${SCREENSHOT_BATCH_SIZE}): ${filePath}`);
+    
+    // Show toast notification for the screenshot
+    showToastNotification(filePath, screenshotData);
+    
+    // Start periodic flush timer if not already running
+    if (!batchFlushInterval && screenshotBatchQueue.length > 0) {
+      batchFlushInterval = setInterval(async () => {
+        if (screenshotBatchQueue.length > 0 && !isBatchUploading) {
+          logInfo('BATCH-UPLOAD', `Periodic flush: processing ${screenshotBatchQueue.length} screenshot(s) after timeout`);
+          await processScreenshotBatch();
+        }
+        // Clear interval if queue is empty
+        if (screenshotBatchQueue.length === 0 && batchFlushInterval) {
+          clearInterval(batchFlushInterval);
+          batchFlushInterval = null;
+        }
+      }, SCREENSHOT_BATCH_FLUSH_INTERVAL);
+    }
+    
+    // If batch is full, process it immediately
+    if (screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
+      logInfo(contextLabel, `Batch full (${SCREENSHOT_BATCH_SIZE} screenshots), starting upload...`);
+      await processScreenshotBatch();
+      // Clear flush interval since we just processed
+      if (batchFlushInterval) {
+        clearInterval(batchFlushInterval);
+        batchFlushInterval = null;
+      }
+    }
+    
+    return { ok: true, queued: true, batchSize: screenshotBatchQueue.length };
   } catch (e) {
-    logError(contextLabel, `Error: ${e?.message || 'queue error'}`, e);
+    logError(contextLabel, `Error adding to batch: ${e?.message || 'queue error'}`, e);
     return { ok: false, error: e?.message || 'queue error' };
   }
+}
+
+// Process batch of screenshots: upload all and delete local files
+async function processScreenshotBatch() {
+  if (isBatchUploading || screenshotBatchQueue.length === 0) {
+    return;
+  }
+  
+  isBatchUploading = true;
+  const batchToUpload = [...screenshotBatchQueue]; // Copy the batch
+  screenshotBatchQueue.length = 0; // Clear the queue
+  
+  logInfo('BATCH-UPLOAD', `Processing batch of ${batchToUpload.length} screenshot(s)`);
+  
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    logError('BATCH-UPLOAD', 'Supabase client unavailable, re-queuing batch');
+    screenshotBatchQueue.unshift(...batchToUpload); // Re-add to front of queue
+    isBatchUploading = false;
+    return;
+  }
+  
+  const uploadResults = [];
+  const filesToDelete = [];
+  
+  try {
+    // Upload all screenshots in parallel
+    const uploadPromises = batchToUpload.map(async (item) => {
+      try {
+        // Check if cancelled
+        if (isCancelled(item.filePath)) {
+          logInfo(item.contextLabel, 'Screenshot cancelled, skipping upload');
+          pendingScreenshots.delete(item.filePath);
+          if (fs.existsSync(item.filePath)) {
+            fs.unlinkSync(item.filePath);
+          }
+          return { ok: false, error: 'Cancelled', filePath: item.filePath };
+        }
+        
+        const storagePath = `${item.userEmail}/${item.sessionId}/${item.jpegFilename}`;
+        
+        // Upload to Supabase Storage
+        const { error: storageError } = await supabase.storage
+          .from(STORAGE_BUCKET)
+          .upload(storagePath, item.jpegBuffer, { contentType: 'image/jpeg', upsert: true });
+        
+        if (storageError) {
+          logError(item.contextLabel, `Storage upload failed: ${storageError.message}`);
+          return { ok: false, error: storageError.message, filePath: item.filePath, item };
+        }
+        
+        // Get public URL
+        const publicUrlRes = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
+        const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
+        if (!publicUrl) {
+          throw new Error('Unable to get storage public URL');
+        }
+        
+        // Insert into database
+        const appName = await getActiveAppName() || app.getName() || 'Time Tracker';
+        await insertScreenshotToDatabase(supabase, item.userEmail, item.sessionId, publicUrl, item.timestamp, appName, item.isIdle);
+        
+        // Broadcast screenshot captured event
+        broadcastScreenshotCaptured({
+          timestamp: item.timestamp,
+          previewDataUrl: item.screenshotData,
+          storageUrl: publicUrl,
+          filePath: item.filePath,
+          sessionId: item.sessionId,
+          appName,
+          isIdle: Boolean(item.isIdle)
+        });
+        
+        filesToDelete.push(item.filePath);
+        pendingScreenshots.delete(item.filePath);
+        
+        logInfo(item.contextLabel, `Uploaded successfully: ${item.jpegFilename}`);
+        return { ok: true, filePath: item.filePath, url: publicUrl, appName };
+      } catch (error) {
+        logError(item.contextLabel, `Upload error: ${error.message}`, error);
+        return { ok: false, error: error.message, filePath: item.filePath, item };
+      }
+    });
+    
+    const results = await Promise.all(uploadPromises);
+    uploadResults.push(...results);
+    
+    // Delete successfully uploaded files
+    let deletedCount = 0;
+    for (const filePath of filesToDelete) {
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          deletedCount++;
+        }
+      } catch (error) {
+        logError('BATCH-UPLOAD', `Error deleting file ${filePath}:`, error);
+      }
+    }
+    
+    // Re-queue failed uploads
+    const failedUploads = results.filter(r => !r.ok && r.item);
+    if (failedUploads.length > 0) {
+      logWarn('BATCH-UPLOAD', `Re-queuing ${failedUploads.length} failed upload(s)`);
+      screenshotBatchQueue.push(...failedUploads.map(f => f.item));
+    }
+    
+    const successCount = results.filter(r => r.ok).length;
+    logInfo('BATCH-UPLOAD', `Batch complete: ${successCount}/${batchToUpload.length} uploaded, ${deletedCount} files deleted`);
+    
+  } catch (error) {
+    logError('BATCH-UPLOAD', `Batch processing error: ${error.message}`, error);
+    // Re-queue all items on critical error
+    screenshotBatchQueue.unshift(...batchToUpload);
+  } finally {
+    isBatchUploading = false;
+  }
+}
+
+// Flush remaining screenshots in queue (called on app close or session end)
+async function flushScreenshotBatch() {
+  // Clear periodic flush interval
+  if (batchFlushInterval) {
+    clearInterval(batchFlushInterval);
+    batchFlushInterval = null;
+  }
+  
+  if (screenshotBatchQueue.length > 0) {
+    logInfo('BATCH-UPLOAD', `Flushing ${screenshotBatchQueue.length} remaining screenshot(s) in queue`);
+    await processScreenshotBatch();
+  }
+}
+
+// ============ SCREENSHOT UPLOAD HANDLER (now uses batch queue) ============
+async function handleScreenshotUpload(uploadData) {
+  // Add to batch queue instead of uploading immediately
+  return await addScreenshotToBatch(uploadData);
 }
 
 // ============ HELPER: GET SCREENSHOT INTERVAL ============
@@ -730,14 +870,32 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   return true;
 });
 
-ipcMain.handle('stop-background-screenshots', () => {
+ipcMain.handle('stop-background-screenshots', async () => {
   isBackgroundCaptureActive = false;
   if (backgroundScreenshotInterval) {
     clearTimeout(backgroundScreenshotInterval);
     backgroundScreenshotInterval = null;
   }
+  // Flush any remaining screenshots in the batch queue
+  await flushScreenshotBatch();
   logInfo('IPC', 'Background screenshots stopped');
   return true;
+});
+
+// Get batch queue status
+ipcMain.handle('get-screenshot-batch-status', () => {
+  return {
+    queueSize: screenshotBatchQueue.length,
+    batchSize: SCREENSHOT_BATCH_SIZE,
+    isUploading: isBatchUploading,
+    nextFlushIn: batchFlushInterval ? SCREENSHOT_BATCH_FLUSH_INTERVAL : null
+  };
+});
+
+// Manually flush batch queue
+ipcMain.handle('flush-screenshot-batch', async () => {
+  await flushScreenshotBatch();
+  return { ok: true, message: 'Batch flushed' };
 });
 
 // ============ NEW: missing handlers your renderer expects ============
@@ -966,9 +1124,11 @@ app.whenReady().then(() => {
   createWindow();
 });
 
-app.on('window-all-closed', () => {
+app.on('window-all-closed', async () => {
   if (backgroundScreenshotInterval) clearTimeout(backgroundScreenshotInterval);
   isBackgroundCaptureActive = false;
+  // Flush any remaining screenshots before closing
+  await flushScreenshotBatch();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -982,5 +1142,7 @@ app.on('before-quit', async () => {
     clearInterval(global.__idlePollInterval);
     global.__idlePollInterval = null;
   }
+  // Flush any remaining screenshots before quitting
+  await flushScreenshotBatch();
   logInfo('App', 'Application shutting down');
 });

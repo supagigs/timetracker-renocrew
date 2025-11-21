@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   queueScreenshotUpload: (payload) =>
     ipcRenderer.invoke('queue-screenshot-upload', payload),
 
+  getScreenshotBatchStatus: () =>
+    ipcRenderer.invoke('get-screenshot-batch-status'),
+
+  flushScreenshotBatch: () =>
+    ipcRenderer.invoke('flush-screenshot-batch'),
+
   getLocalScreenshots: (email, startTime, endTime) =>
     ipcRenderer.invoke('get-local-screenshots', email, startTime, endTime),
 
