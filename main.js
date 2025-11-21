@@ -356,6 +356,91 @@ async function handleScreenshotUpload(uploadData) {
   }
 }
 
+// ============ HELPER: GET SCREENSHOT INTERVAL ============
+async function getScreenshotInterval(userEmail, sessionId) {
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      logWarn('ScreenshotInterval', 'Supabase client unavailable, using default');
+      return 300000; // 5 minutes default
+    }
+
+    const normalizedEmail = userEmail.trim().toLowerCase();
+    let clientEmail = normalizedEmail; // Default to user's email (for clients)
+
+    // If sessionId is provided, try to get the client email from the project assignment
+    if (sessionId && sessionId !== 'temp-session') {
+      try {
+        // Get the project_id from the session
+        const { data: session, error: sessionError } = await supabase
+          .from('time_sessions')
+          .select('project_id')
+          .eq('id', parseInt(sessionId))
+          .maybeSingle();
+
+        if (!sessionError && session && session.project_id) {
+          // Get the client email (assigned_by) from the project assignment
+          const { data: assignment, error: assignmentError } = await supabase
+            .from('project_assignments')
+            .select('assigned_by')
+            .eq('project_id', session.project_id)
+            .eq('freelancer_email', normalizedEmail)
+            .maybeSingle();
+
+          if (!assignmentError && assignment && assignment.assigned_by) {
+            clientEmail = assignment.assigned_by.trim().toLowerCase();
+            logInfo('ScreenshotInterval', `Found client email from project assignment: ${clientEmail}`);
+          } else {
+            // If no assignment found, try to get client from project owner
+            const { data: project, error: projectError } = await supabase
+              .from('projects')
+              .select('user_email')
+              .eq('id', session.project_id)
+              .maybeSingle();
+
+            if (!projectError && project && project.user_email) {
+              clientEmail = project.user_email.trim().toLowerCase();
+              logInfo('ScreenshotInterval', `Found client email from project owner: ${clientEmail}`);
+            }
+          }
+        }
+      } catch (e) {
+        logWarn('ScreenshotInterval', `Error looking up client from session: ${e.message}, using user email`);
+      }
+    }
+
+    // Now look up the screenshot interval using the client email
+    const { data, error } = await supabase
+      .from('client_settings')
+      .select('screenshot_interval_seconds')
+      .eq('client_email', clientEmail)
+      .maybeSingle();
+
+    if (error) {
+      logWarn('ScreenshotInterval', `Error fetching interval: ${error.message}, using default`);
+      return 300000; // 5 minutes default
+    }
+
+    if (!data || !data.screenshot_interval_seconds) {
+      logInfo('ScreenshotInterval', `No custom interval found for client ${clientEmail}, using default`);
+      return 300000; // 5 minutes default
+    }
+
+    const intervalSeconds = Number(data.screenshot_interval_seconds);
+    if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
+      logWarn('ScreenshotInterval', `Invalid interval value: ${intervalSeconds}, using default`);
+      return 300000; // 5 minutes default
+    }
+
+    const intervalMs = intervalSeconds * 1000;
+    logInfo('ScreenshotInterval', `Using interval for client ${clientEmail}: ${intervalSeconds} seconds (${intervalMs}ms)`);
+    return intervalMs;
+  } catch (e) {
+    logError('ScreenshotInterval', 'Failed to get interval', e);
+    return 300000; // 5 minutes default
+  }
+}
+
 // ============ IPC HANDLERS ============
 
 // existing handler
@@ -534,6 +619,10 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   currentSessionId = sessionId;
   isBackgroundCaptureActive = true;
 
+  // Fetch screenshot interval from database (defaults to 5 minutes if not found)
+  // For freelancers, this will look up the client's interval from the project assignment
+  const intervalMs = await getScreenshotInterval(userEmail, sessionId);
+
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().size;
 
   backgroundScreenshotInterval = setInterval(async () => {
@@ -563,9 +652,9 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
     } finally {
       isBackgroundTickRunning = false;
     }
-  }, 20000);
+  }, intervalMs);
   
-  logInfo('IPC', 'Background screenshots started');
+  logInfo('IPC', `Background screenshots started with interval: ${intervalMs}ms`);
   return true;
 });
 
@@ -604,6 +693,43 @@ ipcMain.handle('capture-screen', async () => {
   } catch (e) {
     logError('IPC', 'capture-screen failed', e);
     return null;
+  }
+});
+
+// capture-all-screens (returns array of screenshots from all displays)
+ipcMain.handle('capture-all-screens', async () => {
+  try {
+    const displays = screen.getAllDisplays();
+    const screenshots = [];
+    
+    // Get all screen sources
+    const allDisplays = screen.getAllDisplays();
+    const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
+    const maxHeight = Math.max(...allDisplays.map(d => d.size.height));
+    
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: maxWidth, height: maxHeight },
+    });
+    
+    if (!sources || sources.length === 0) {
+      logWarn('IPC', 'No screen sources found');
+      return [];
+    }
+    
+    // Map each source to a screenshot object with dataURL and name
+    for (const source of sources) {
+      screenshots.push({
+        dataURL: source.thumbnail.toDataURL('image/png'),
+        name: source.name || `Screen ${screenshots.length + 1}`
+      });
+    }
+    
+    logInfo('IPC', `Captured ${screenshots.length} screen(s)`);
+    return screenshots;
+  } catch (e) {
+    logError('IPC', 'capture-all-screens failed', e);
+    return [];
   }
 });
 

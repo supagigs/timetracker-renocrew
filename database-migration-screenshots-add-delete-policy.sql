@@ -12,3 +12,4 @@ COMMENT ON POLICY "Allow all DELETE on screenshots" ON screenshots IS
 
 
 
+
