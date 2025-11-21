@@ -13,6 +13,13 @@ const OPTIONS: Array<{ label: string; seconds: number }> = [
   { label: "1 hour", seconds: 3600 },
 ];
 
+// Screenshot Deletion Options 
+const DELETE_OPTIONS: Array<{ label: string; days: number }> = [
+  { label: "1 days", days: 1 },
+  { label: "4 days", days: 4 },
+  { label: "5 days", days: 5 },
+];
+
 type ScreenshotIntervalFormProps = {
   clientEmail: string;
   initialIntervalSeconds: number;
@@ -26,6 +33,12 @@ export function ScreenshotIntervalForm({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Deletion state
+  const [deleteDays, setDeleteDays] = useState<number>(30);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -55,6 +68,35 @@ export function ScreenshotIntervalForm({
       setError("Unexpected error while saving. Please try again.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Screenshot deletion handler 
+  const handleDelete = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setDeleting(true);
+    setDeleteMsg(null);
+    setDeleteErr(null);
+
+    try {
+      const response = await fetch("/api/screenshots/delete-old", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: deleteDays }),
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        setDeleteErr(result.error ?? "Failed to delete screenshots. Please try again.");
+        return;
+      }
+      setDeleteMsg(
+        `Successfully deleted ${result.deleted ?? 0} screenshot records and ${result.filesDeleted ?? 0} files.`
+      );
+    } catch (err: any) {
+      setDeleteErr(err?.message ?? "Failed to delete screenshots. Please try again.");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -95,14 +137,42 @@ export function ScreenshotIntervalForm({
         <p className="text-sm text-emerald-600">{message}</p>
       ) : null}
       {error ? <p className="text-sm text-destructive-foreground">{error}</p> : null}
+
+      {/* Screenshot deletion controls  */}
+      <div className="space-y-2 mt-8 border-t pt-4">
+        <label
+          htmlFor="ss-delete-days"
+          className="block text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1"
+        >
+          Delete screenshots older than
+        </label>
+        <div className="flex gap-2 items-center">
+          <select
+            id="ss-delete-days"
+            name="ss-delete-days"
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            value={deleteDays}
+            onChange={(event) => setDeleteDays(Number(event.target.value))}
+            disabled={deleting}
+          >
+            {DELETE_OPTIONS.map((option) => (
+              <option key={option.days} value={option.days}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={deleting}
+            className="inline-flex h-10 items-center justify-center rounded-lg bg-red-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
+            onClick={handleDelete}
+          >
+            {deleting ? "Deleting…" : "Delete old screenshots"}
+          </button>
+        </div>
+        {deleteMsg ? <p className="text-sm text-emerald-600">{deleteMsg}</p> : null}
+        {deleteErr ? <p className="text-sm text-destructive-foreground">{deleteErr}</p> : null}
+      </div>
     </form>
   );
 }
-
-
-
-
-
-
-
-

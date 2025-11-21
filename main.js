@@ -493,6 +493,8 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
 });
 
 
+
+
 ipcMain.handle('get-system-idle-time', () => {
   try {
     return powerMonitor.getSystemIdleTime();
