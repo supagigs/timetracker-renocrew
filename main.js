@@ -250,11 +250,17 @@ function showToastNotification(filePath, base64Data) {
   toastWin.loadFile(path.join(__dirname, 'toast.html'));
 
   toastWin.once('ready-to-show', () => {
+    // Check if window still exists (might have been closed)
+    if (!toastWin || toastWin.isDestroyed()) {
+      return;
+    }
     toastWin.showInactive();
-    toastWin.webContents.send('toast-init', { filePath, base64Data });
+    if (toastWin.webContents && !toastWin.webContents.isDestroyed()) {
+      toastWin.webContents.send('toast-init', { filePath, base64Data });
+    }
   });
 
-  setTimeout(() => { if (toastWin) toastWin.close(); }, 9000);
+  setTimeout(() => { if (toastWin && !toastWin.isDestroyed()) toastWin.close(); }, 9000);
   toastWin.on('closed', () => { toastWin = null; });
 }
 
@@ -283,11 +289,13 @@ async function insertScreenshotToDatabase(supabase, userEmail, sessionId, public
 
 // ============ SCREENSHOT UPLOAD HANDLER ============
 async function handleScreenshotUpload(uploadData) {
-  const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel } = uploadData;
+  const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel, screenIndex, screenName } = uploadData;
   
   try {
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
-    const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}.jpg`;
+    // Include screen index in filename if provided (for multi-monitor setups)
+    const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
+    const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}${screenSuffix}.jpg`;
     const supabase = getSupabaseClient();
     if (!supabase) throw new Error('Supabase client unavailable');
 
@@ -550,14 +558,14 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
 
     // Step 8: Broadcast deletion event to main window so UI refreshes
     BrowserWindow.getAllWindows().forEach((window) => {
-      if (window !== toastWin) {
+      if (window !== toastWin && !window.isDestroyed()) {
         window.webContents.send('screenshot-deleted', { filePath, filename });
       }
     });
     logInfo('DELETE', 'Broadcasted screenshot-deleted event to main window');
 
     // Step 9: Close toast window
-    if (toastWin) {
+    if (toastWin && !toastWin.isDestroyed()) {
       toastWin.close();
       toastWin = null;
     }
@@ -643,23 +651,47 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
       
       isBackgroundTickRunning = true;
       try {
+        // Get all displays to calculate proper thumbnail size
+        const allDisplays = screen.getAllDisplays();
+        const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
+        const maxHeight = Math.max(...allDisplays.map(d => d.size.height));
+        
+        logInfo('BG-UPLOAD', `Detected ${allDisplays.length} display(s), requesting screenshots with size ${maxWidth}x${maxHeight}`);
+        
         const sources = await desktopCapturer.getSources({
           types: ['screen'],
-          thumbnailSize: { width: screenWidth, height: screenHeight }
+          thumbnailSize: { width: maxWidth, height: maxHeight }
         });
-        if (sources.length > 0) {
-          const source = sources[0];
-          const screenshotData = source.thumbnail.toDataURL('image/png');
+        
+        logInfo('BG-UPLOAD', `Received ${sources?.length || 0} screen source(s) from desktopCapturer`);
+        
+        if (sources && sources.length > 0) {
           const timestamp = new Date().toISOString();
-
-          await handleScreenshotUpload({
-            userEmail: currentUserEmail,
-            sessionId: currentSessionId,
-            screenshotData,
-            timestamp,
-            isIdle: isUserIdle,
-            contextLabel: 'BG-UPLOAD'
+          
+          // Capture and upload screenshots from all displays
+          const uploadPromises = sources.map(async (source, index) => {
+            try {
+              const screenshotData = source.thumbnail.toDataURL('image/png');
+              await handleScreenshotUpload({
+                userEmail: currentUserEmail,
+                sessionId: currentSessionId,
+                screenshotData,
+                timestamp,
+                isIdle: isUserIdle,
+                contextLabel: 'BG-UPLOAD',
+                screenIndex: index + 1,
+                screenName: source.name || `Screen ${index + 1}`
+              });
+            } catch (error) {
+              logError('BG-UPLOAD', `Error uploading screenshot for screen ${index + 1}:`, error);
+            }
           });
+          
+          // Wait for all screenshots to be uploaded
+          await Promise.all(uploadPromises);
+          logInfo('BG-UPLOAD', `Captured and uploaded ${sources.length} screen(s)`);
+        } else {
+          logWarn('BG-UPLOAD', 'No screen sources found');
         }
       } catch (error) {
         logError('BG-UPLOAD', 'Error capturing screenshot', error);
