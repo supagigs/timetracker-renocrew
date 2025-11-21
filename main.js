@@ -612,7 +612,7 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
 // start/stop-background already present in your earlier file
 ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionId) => {
   if (backgroundScreenshotInterval) {
-    clearInterval(backgroundScreenshotInterval);
+    clearTimeout(backgroundScreenshotInterval);
     backgroundScreenshotInterval = null;
   }
   currentUserEmail = userEmail;
@@ -625,43 +625,66 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
 
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().size;
 
-  backgroundScreenshotInterval = setInterval(async () => {
-    if (!isBackgroundCaptureActive || isBackgroundTickRunning) return;
-    isBackgroundTickRunning = true;
-    try {
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: { width: screenWidth, height: screenHeight }
-      });
-      if (sources.length > 0) {
-        const source = sources[0];
-        const screenshotData = source.thumbnail.toDataURL('image/png');
-        const timestamp = new Date().toISOString();
+  // Recursive function to capture screenshots at random intervals
+  const scheduleNextScreenshot = () => {
+    if (!isBackgroundCaptureActive) return;
 
-        await handleScreenshotUpload({
-          userEmail: currentUserEmail,
-          sessionId: currentSessionId,
-          screenshotData,
-          timestamp,
-          isIdle: isUserIdle,
-          contextLabel: 'BG-UPLOAD'
-        });
+    // Generate random delay between 50% and 100% of the interval
+    // This ensures screenshots are captured randomly within the specified range
+    const minDelay = Math.floor(intervalMs * 0.5);
+    const maxDelay = intervalMs;
+    const randomDelay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+
+    backgroundScreenshotInterval = setTimeout(async () => {
+      if (!isBackgroundCaptureActive || isBackgroundTickRunning) {
+        scheduleNextScreenshot(); // Reschedule even if skipped
+        return;
       }
-    } catch (error) {
-      logError('BG-UPLOAD', 'Error capturing screenshot', error);
-    } finally {
-      isBackgroundTickRunning = false;
-    }
-  }, intervalMs);
+      
+      isBackgroundTickRunning = true;
+      try {
+        const sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: screenWidth, height: screenHeight }
+        });
+        if (sources.length > 0) {
+          const source = sources[0];
+          const screenshotData = source.thumbnail.toDataURL('image/png');
+          const timestamp = new Date().toISOString();
+
+          await handleScreenshotUpload({
+            userEmail: currentUserEmail,
+            sessionId: currentSessionId,
+            screenshotData,
+            timestamp,
+            isIdle: isUserIdle,
+            contextLabel: 'BG-UPLOAD'
+          });
+        }
+      } catch (error) {
+        logError('BG-UPLOAD', 'Error capturing screenshot', error);
+      } finally {
+        isBackgroundTickRunning = false;
+        // Schedule the next screenshot with a new random delay
+        scheduleNextScreenshot();
+      }
+    }, randomDelay);
+
+    logInfo('IPC', `Next screenshot scheduled in ${randomDelay}ms (random between ${minDelay}ms and ${maxDelay}ms)`);
+  };
+
+  // Start the first screenshot immediately (or with a small initial delay)
+  // Then schedule subsequent screenshots with random intervals
+  scheduleNextScreenshot();
   
-  logInfo('IPC', `Background screenshots started with interval: ${intervalMs}ms`);
+  logInfo('IPC', `Background screenshots started with random intervals between ${Math.floor(intervalMs * 0.5)}ms and ${intervalMs}ms`);
   return true;
 });
 
 ipcMain.handle('stop-background-screenshots', () => {
   isBackgroundCaptureActive = false;
   if (backgroundScreenshotInterval) {
-    clearInterval(backgroundScreenshotInterval);
+    clearTimeout(backgroundScreenshotInterval);
     backgroundScreenshotInterval = null;
   }
   logInfo('IPC', 'Background screenshots stopped');
@@ -821,14 +844,14 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (backgroundScreenshotInterval) clearInterval(backgroundScreenshotInterval);
+  if (backgroundScreenshotInterval) clearTimeout(backgroundScreenshotInterval);
   isBackgroundCaptureActive = false;
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', async () => {
   if (backgroundScreenshotInterval) {
-    clearInterval(backgroundScreenshotInterval);
+    clearTimeout(backgroundScreenshotInterval);
     backgroundScreenshotInterval = null;
   }
   isBackgroundCaptureActive = false;
