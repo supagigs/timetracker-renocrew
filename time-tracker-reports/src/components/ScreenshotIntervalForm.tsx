@@ -13,20 +13,21 @@ const OPTIONS: Array<{ label: string; seconds: number }> = [
   { label: "1 hour", seconds: 3600 },
 ];
 
-// Screenshot Deletion Options 
 const DELETE_OPTIONS: Array<{ label: string; days: number }> = [
-  { label: "1 days", days: 1 },
-  { label: "4 days", days: 4 },
-  { label: "5 days", days: 5 },
+  { label: "30 days", days: 30 },
+  { label: "60 days", days: 60 },
+  { label: "90 days", days: 90 },
 ];
 
 type ScreenshotIntervalFormProps = {
   clientEmail: string;
+  freelancerEmail: string;
   initialIntervalSeconds: number;
 };
 
 export function ScreenshotIntervalForm({
   clientEmail,
+  freelancerEmail,
   initialIntervalSeconds,
 }: ScreenshotIntervalFormProps) {
   const [selected, setSelected] = useState<number>(initialIntervalSeconds);
@@ -34,8 +35,7 @@ export function ScreenshotIntervalForm({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Deletion state
-  const [deleteDays, setDeleteDays] = useState<number>(30);
+  const [deleteDays, setDeleteDays] = useState<number>(5);
   const [deleting, setDeleting] = useState(false);
   const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
@@ -71,29 +71,53 @@ export function ScreenshotIntervalForm({
     }
   };
 
-  // Screenshot deletion handler 
+  // ✅ FIXED: Properly send all parameters
   const handleDelete = async (event: React.FormEvent) => {
     event.preventDefault();
+    
+    console.log('[handleDelete] Starting deletion with:', {
+      days: deleteDays,
+      clientEmail,
+      freelancerEmail
+    });
+
     setDeleting(true);
     setDeleteMsg(null);
     setDeleteErr(null);
 
     try {
+      const requestBody = {
+        days: deleteDays,
+        clientEmail: clientEmail,
+        freelancerEmail: freelancerEmail,
+      };
+
+      console.log('[handleDelete] Request body:', requestBody);
+
       const response = await fetch("/api/screenshots/delete-old", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ days: deleteDays }),
+        body: JSON.stringify(requestBody),
       });
 
+      console.log('[handleDelete] Response status:', response.status);
+
       const result = await response.json();
+      console.log('[handleDelete] Response data:', result);
+
       if (!response.ok || !result.success) {
         setDeleteErr(result.error ?? "Failed to delete screenshots. Please try again.");
         return;
       }
+
+      const deletedCount = result.deleted ?? 0;
+      const filesDeleted = result.filesDeleted ?? 0;
+      
       setDeleteMsg(
-        `Successfully deleted ${result.deleted ?? 0} screenshot records and ${result.filesDeleted ?? 0} files.`
+        ` Successfully deleted ${deletedCount} screenshot(s) and ${filesDeleted} file(s) older than ${deleteDays} days for ${freelancerEmail}.`
       );
     } catch (err: any) {
+      console.error('[handleDelete] Error:', err);
       setDeleteErr(err?.message ?? "Failed to delete screenshots. Please try again.");
     } finally {
       setDeleting(false);
@@ -138,7 +162,7 @@ export function ScreenshotIntervalForm({
       ) : null}
       {error ? <p className="text-sm text-destructive-foreground">{error}</p> : null}
 
-      {/* Screenshot deletion controls  */}
+      {/* Delete screenshots section */}
       <div className="space-y-2 mt-8 border-t pt-4">
         <label
           htmlFor="ss-delete-days"
@@ -164,8 +188,8 @@ export function ScreenshotIntervalForm({
           <button
             type="button"
             disabled={deleting}
-            className="inline-flex h-10 items-center justify-center rounded-lg bg-red-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
             onClick={handleDelete}
+            className="inline-flex h-10 items-center justify-center rounded-lg bg-red-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
           >
             {deleting ? "Deleting…" : "Delete old screenshots"}
           </button>
