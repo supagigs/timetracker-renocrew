@@ -5,7 +5,7 @@ type SignupPayload = {
   email: string;
   displayName?: string;
   category?: 'Client' | 'Freelancer';
-  projects?: string[];
+  projects: string[];
 };
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

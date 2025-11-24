@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
             { status: 500 }
           );
         }
-        const normalized = (fallbackData ?? []).map((row) => ({
+        const normalized = ((fallbackData ?? [])as any[]).map((row) => ({
           ...row,
           app_name: null,
           captured_idle: null,
@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
     }
 
     console.log(`API: Found ${data?.length ?? 0} screenshots for session ${sessionId}, user ${email}`);
-    return NextResponse.json((data ?? []) as Screenshot[]);
+    return NextResponse.json((data ?? []) as unknown as Screenshot[]);
   } catch (error) {
     console.error('Error in screenshots API:', error);
     return NextResponse.json(

@@ -21,8 +21,11 @@ export function SessionWatcher({ email }: SessionWatcherProps) {
     }
 
     const unsubscribe = subscribeToSessionChanges(supabase, email, (payload) => {
-      const oldState: UserSessionRow | null = payload.old ?? null;
-      const newState: UserSessionRow | null = payload.new ?? null;
+      // const oldState: UserSessionRow | null = payload.old ?? null;
+      // const newState: UserSessionRow | null = payload.new ?? null;
+      // Changed the 'State'  to check  fields before using them
+      const oldState = (payload.old ?? null) as UserSessionRow | null;
+      const newState = (payload.new ?? null) as UserSessionRow | null;
 
       if (!newState) {
         return;

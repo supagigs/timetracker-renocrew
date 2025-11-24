@@ -28,9 +28,9 @@ type RawSessionRow = {
   active_duration: number | null;
   break_duration: number | null;
   idle_duration: number | null;
-  projects?: {
+  projects?: Array<{
     project_name: string | null;
-  } | null;
+  }> | null;
 };
 
 async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): Promise<RawSessionRow[]> {
@@ -124,7 +124,7 @@ async function fetchClientTimesheet({
     id: session.id,
     freelancerEmail: session.user_email,
     freelancerName: nameMap.get(session.user_email) ?? session.user_email,
-    projectName: session.projects?.project_name ?? null,
+    projectName: session.projects?.[0]?.project_name ?? null,  // <-- FIXED: safe access
     sessionDate: session.session_date,
     startTime: session.start_time,
     endTime: session.end_time,
@@ -164,7 +164,7 @@ async function fetchFreelancerTimesheet({
     id: session.id,
     freelancerEmail: session.user_email,
     freelancerName: displayName,
-    projectName: session.projects?.project_name ?? null,
+    projectName: session.projects?.[0]?.project_name ?? null, // <-- FIXED: safe access
     sessionDate: session.session_date,
     startTime: session.start_time,
     endTime: session.end_time,
@@ -262,7 +262,7 @@ export default async function TimesheetPage({
                 type="date"
                 id="from"
                 name="from"
-              className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                 defaultValue={dateRange.start}
                 max={dateRange.end}
               />
@@ -348,4 +348,3 @@ export default async function TimesheetPage({
     </DashboardShell>
   );
 }
-
