@@ -57,17 +57,48 @@ let batchFlushInterval = null;
 
 // ============ MAIN WINDOW CREATION ============
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  // Set icon based on platform
+  let iconPath = null;
+  if (process.platform === 'darwin') {
+    // macOS prefers .icns, but .png also works, .ico as last resort
+    const icnsPath = path.join(__dirname, 'SupagigsIcon.icns');
+    const pngPath = path.join(__dirname, 'SupagigsIcon.png');
+    const icoPath = path.join(__dirname, 'SupagigsIcon.ico');
+    if (fs.existsSync(icnsPath)) {
+      iconPath = icnsPath;
+    } else if (fs.existsSync(pngPath)) {
+      iconPath = pngPath;
+    } else if (fs.existsSync(icoPath)) {
+      iconPath = icoPath; // Fallback to .ico on macOS
+    }
+  } else {
+    // Windows and Linux use .ico
+    const icoPath = path.join(__dirname, 'SupagigsIcon.ico');
+    if (fs.existsSync(icoPath)) {
+      iconPath = icoPath;
+    }
+  }
+  
+  const windowOptions = {
     width: 900,
     height: 700,
-    icon: path.join(__dirname, 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false,
     }
-  });
+  };
+  
+  // Only set icon if file exists
+  if (iconPath) {
+    windowOptions.icon = iconPath;
+    logInfo('Window', `Using icon: ${iconPath}`);
+  } else {
+    logWarn('Window', 'No icon file found, window will use default icon');
+  }
+  
+  mainWindow = new BrowserWindow(windowOptions);
 
   mainWindow.loadFile('renderer/screens/login.html');
   mainWindow.on('closed', () => { mainWindow = null; });
@@ -140,6 +171,14 @@ function createWindow() {
 // ============ HELPER FUNCTIONS ============
 async function getActiveAppName() {
   try {
+    // Check if our own window is focused - if so, skip detection
+    // as we want to track what the user is actually working on, not our own app
+    if (mainWindow && mainWindow.isFocused()) {
+      // Return null to indicate we can't determine the active app
+      // The fallback in the caller will handle this appropriately
+      return null;
+    }
+    
     // load module if not loaded
     if (!activeWindowModule) activeWindowModule = await import('active-win');
 
@@ -158,10 +197,62 @@ async function getActiveAppName() {
     }
 
     const result = await fn();
-    if (!result) return null;
-    const windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
-    const ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
-    return windowTitle || ownerName || null;
+    if (!result) {
+      logWarn('ActiveWindow', 'active-win returned no result');
+      return null;
+    }
+    
+    // Get the app's own name to filter it out
+    const appName = app.getName();
+    const appNameLower = appName.toLowerCase();
+    
+    // On macOS, prefer owner.name (application name) over title (window title)
+    // as the window title might be the app's own window
+    let ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
+    let windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
+    
+    // Debug logging on macOS to help diagnose issues
+    if (process.platform === 'darwin') {
+      logInfo('ActiveWindow', `Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, app: ${appName}`);
+    }
+    
+    // Filter out the app's own name
+    if (ownerName && ownerName.toLowerCase() === appNameLower) {
+      ownerName = null;
+    }
+    if (windowTitle && windowTitle.toLowerCase() === appNameLower) {
+      windowTitle = null;
+    }
+    
+    // Also filter out common variations
+    const appNameVariations = [
+      'time tracker',
+      'supagigs time tracker',
+      'electron',
+      appNameLower
+    ];
+    
+    if (ownerName) {
+      const ownerNameLower = ownerName.toLowerCase();
+      if (appNameVariations.some(variation => ownerNameLower.includes(variation))) {
+        ownerName = null;
+      }
+    }
+    
+    if (windowTitle) {
+      const windowTitleLower = windowTitle.toLowerCase();
+      if (appNameVariations.some(variation => windowTitleLower.includes(variation))) {
+        windowTitle = null;
+      }
+    }
+    
+    // On macOS, prefer owner.name (the actual application) over window title
+    // On other platforms, prefer window title if available
+    if (process.platform === 'darwin') {
+      return ownerName || windowTitle || null;
+    } else {
+      return windowTitle || ownerName || null;
+    }
   } catch (error) {
     logWarn('ActiveWindow', 'Unable to resolve active window', error);
     return null;
@@ -424,7 +515,9 @@ async function processScreenshotBatch() {
         }
         
         // Insert into database
-        const appName = await getActiveAppName() || app.getName() || 'Time Tracker';
+        // Don't fallback to app.getName() as that would show our own app name
+        // Use "Unknown" if we can't determine the active app
+        const appName = await getActiveAppName() || 'Unknown';
         await insertScreenshotToDatabase(supabase, item.userEmail, item.sessionId, publicUrl, item.timestamp, appName, item.isIdle);
         
         // Broadcast screenshot captured event
