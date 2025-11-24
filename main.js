@@ -103,6 +103,23 @@ function createWindow() {
   mainWindow.loadFile('renderer/screens/login.html');
   mainWindow.on('closed', () => { mainWindow = null; });
 
+  // Check screen recording permission on macOS after window is ready
+  if (process.platform === 'darwin') {
+    mainWindow.webContents.once('did-finish-load', () => {
+      // Delay permission check slightly to ensure window is fully ready
+      setTimeout(() => {
+        checkScreenRecordingPermission().then((hasPermission) => {
+          if (!hasPermission) {
+            // Show permission dialog after a short delay
+            setTimeout(() => {
+              requestScreenRecordingPermission();
+            }, 1000);
+          }
+        });
+      }, 500);
+    });
+  }
+
   const broadcastIdleState = (isIdle) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       window.webContents.send('system-idle-state', { idle: isIdle, timestamp: Date.now() });
@@ -169,6 +186,65 @@ function createWindow() {
 }
 
 // ============ HELPER FUNCTIONS ============
+
+// Check and request screen recording permissions on macOS
+async function checkScreenRecordingPermission() {
+  if (process.platform !== 'darwin') {
+    return true; // Not macOS, no permission needed
+  }
+
+  try {
+    // Try to get screen sources - this will trigger permission request if not granted
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1, height: 1 }
+    });
+    
+    if (sources && sources.length > 0) {
+      logInfo('Permissions', 'Screen recording permission granted');
+      return true;
+    } else {
+      logWarn('Permissions', 'Screen recording permission denied or not granted');
+      return false;
+    }
+  } catch (error) {
+    logWarn('Permissions', 'Error checking screen recording permission:', error);
+    return false;
+  }
+}
+
+// Show permission dialog on macOS if needed
+async function requestScreenRecordingPermission() {
+  if (process.platform !== 'darwin') {
+    return;
+  }
+
+  const hasPermission = await checkScreenRecordingPermission();
+  
+  if (!hasPermission && mainWindow && !mainWindow.isDestroyed()) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: 'Screen Recording Permission Required',
+      message: 'Screen Recording Permission Required',
+      detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
+              'Please grant permission:\n' +
+              '1. Go to System Settings → Privacy & Security → Screen Recording\n' +
+              '2. Find "Time Tracker" in the list\n' +
+              '3. Enable the toggle\n' +
+              '4. Restart the app\n\n' +
+              'The app will request permission automatically when you start tracking.',
+      buttons: ['Open System Settings', 'OK'],
+      defaultId: 1,
+      cancelId: 1
+    }).then((result) => {
+      if (result.response === 0) {
+        // Open System Settings to Screen Recording
+        shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+      }
+    });
+  }
+}
+
 async function getActiveAppName() {
   try {
     // Check if our own window is focused - if so, skip detection
@@ -913,6 +989,14 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           logWarn('BG-UPLOAD', '  1. Missing screen recording permissions (macOS)');
           logWarn('BG-UPLOAD', '  2. No displays connected');
           logWarn('BG-UPLOAD', '  3. Platform-specific limitation');
+          
+          // On macOS, show a helpful message to the user
+          if (process.platform === 'darwin' && mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('screenshot-permission-denied', {
+              message: 'Screen recording permission is required to capture screenshots. Please grant permission in System Settings.',
+              timestamp: Date.now()
+            });
+          }
         }
         
         if (sources && sources.length > 0) {

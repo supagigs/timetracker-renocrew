@@ -65,7 +65,49 @@
     "compression": "maximum",
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "SupagigsIcon.ico"
+      "icon": "SupagigsIcon.png",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": null,
+      "entitlementsInherit": null,
+      "extendInfo": {
+        "NSCameraUsageDescription": "This app needs camera access for screenshot functionality.",
+        "NSMicrophoneUsageDescription": "This app does not use the microphone.",
+        "NSDesktopFolderUsageDescription": "This app needs to save screenshots to your desktop.",
+        "NSDocumentsFolderUsageDescription": "This app needs to save screenshots to your documents folder."
+      }
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "SupagigsIcon.png",
+      "background": null,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220,
+          "type": "file"
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "format": "UDZO"
     },
     "win": {
       "target": [

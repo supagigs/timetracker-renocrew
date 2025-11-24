@@ -239,7 +239,21 @@ class SupabaseService {
         const result = await requestFn();
         if (result.error) {
           console.error('Supabase error:', result.error);
-          NotificationService.showError(`Database error: ${result.error.message}`);
+          console.error('Error details:', {
+            message: result.error.message,
+            code: result.error.code,
+            hint: result.error.hint,
+            details: result.error.details,
+            status: result.error.status,
+            statusCode: result.error.statusCode
+          });
+          // Log full error object for debugging
+          console.error('Full error object:', JSON.stringify(result.error, null, 2));
+          
+          // Show more detailed error message
+          const errorMsg = result.error.message || 'Database error';
+          const errorCode = result.error.code || result.error.statusCode || 'Unknown';
+          NotificationService.showError(`Database error: ${errorMsg} (Code: ${errorCode})`);
           return { data: null, error: result.error };
         }
         return { data: result.data, error: null };

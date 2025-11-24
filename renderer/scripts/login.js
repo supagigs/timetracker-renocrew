@@ -327,6 +327,22 @@ async function checkUserExists(email) {
     
     if (error && error.code !== 'PGRST116') {
       console.error('Error checking user:', error);
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        hint: error.hint,
+        details: error.details,
+        status: error.status,
+        statusCode: error.statusCode
+      });
+      console.error('Full error object:', JSON.stringify(error, null, 2));
+      
+      // Check if it's an RLS policy error
+      if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy') || error.statusCode === 556) {
+        console.error('⚠️ RLS Policy Error - The users table RLS policies need to be fixed.');
+        console.error('⚠️ Please run database-migration-users-fix-rls.sql in Supabase SQL Editor.');
+        NotificationService.showError('Database permission error. Please check console for details.');
+      }
       return;
     }
     
@@ -400,7 +416,25 @@ async function handleLogin() {
         .maybeSingle() // Use maybeSingle instead of single to avoid error when no rows found
     );
 
-    if (error && error.code !== 'PGRST116') throw error;
+    if (error && error.code !== 'PGRST116') {
+      console.error('Login error details:', {
+        message: error.message,
+        code: error.code,
+        hint: error.hint,
+        details: error.details,
+        status: error.status,
+        statusCode: error.statusCode
+      });
+      console.error('Full error object:', JSON.stringify(error, null, 2));
+      
+      // Check if it's an RLS policy error
+      if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy') || error.statusCode === 556) {
+        console.error('⚠️ RLS Policy Error - The users table RLS policies need to be fixed.');
+        console.error('⚠️ Please run database-migration-users-fix-rls.sql in Supabase SQL Editor.');
+        NotificationService.showError('Database permission error. Please check console for details.');
+      }
+      throw error;
+    }
 
     if (!existingUser) {
       // New user - validate category
