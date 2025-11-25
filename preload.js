@@ -39,6 +39,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   diagnoseScreenCapture: () =>
     ipcRenderer.invoke('diagnose-screen-capture'),
 
+  checkScreenPermission: () =>
+    ipcRenderer.invoke('check-screen-permission'),
+
   queueScreenshotUpload: (payload) =>
     ipcRenderer.invoke('queue-screenshot-upload', payload),
 

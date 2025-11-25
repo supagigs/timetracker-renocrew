@@ -1379,11 +1379,64 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
   
-      // captureAllScreens() returns array of screenshots from all displays
-      const screenshots = await window.electronAPI.captureAllScreens();
+      // captureAllScreens() now returns { screenshots: array, error: string|null, permissionGranted: boolean }
+      const result = await window.electronAPI.captureAllScreens();
+      
+      // Handle both old format (array) and new format (object)
+      let screenshots = [];
+      let errorMessage = null;
+      
+      if (Array.isArray(result)) {
+        // Old format - backward compatibility
+        screenshots = result;
+      } else if (result && result.screenshots) {
+        // New format
+        screenshots = result.screenshots || [];
+        errorMessage = result.error;
+        
+        if (errorMessage) {
+          console.error('Screenshot capture error:', errorMessage);
+          if (!result.permissionGranted) {
+            console.error('⚠️ Screen recording permission not granted. Please:');
+            console.error('1. Go to System Settings → Privacy & Security → Screen Recording');
+            console.error('2. Find "Time Tracker" in the list');
+            console.error('3. Enable the toggle');
+            console.error('4. Restart the app');
+          }
+        }
+      } else {
+        screenshots = [];
+      }
       
       if (!screenshots || screenshots.length === 0) {
-        console.error('Screenshot capture returned no screens');
+        const error = errorMessage || 'Screenshot capture returned no screens';
+        console.error(error);
+        
+        // Show user-friendly error message and check permissions
+        if (window.electronAPI) {
+          try {
+            // Check permission status
+            if (window.electronAPI.checkScreenPermission) {
+              const permCheck = await window.electronAPI.checkScreenPermission();
+              console.log('Screen permission check:', permCheck);
+              if (!permCheck.granted) {
+                console.error('⚠️ PERMISSION ISSUE:', permCheck.message);
+                alert(`Screen Recording Permission Required\n\n${permCheck.message}\n\nPlease:\n1. Go to System Settings → Privacy & Security → Screen Recording\n2. Enable "Time Tracker"\n3. Restart the app`);
+              }
+            }
+            
+            // Get full diagnostics
+            if (window.electronAPI.diagnoseScreenCapture) {
+              const diagnostics = await window.electronAPI.diagnoseScreenCapture();
+              console.log('Screen capture diagnostics:', diagnostics);
+              if (diagnostics.permissionDetails && !diagnostics.permissionDetails.granted) {
+                console.error('Permission status:', diagnostics.permissionDetails);
+              }
+            }
+          } catch (diagError) {
+            console.error('Failed to get diagnostics:', diagError);
+          }
+        }
         return;
       }
   
