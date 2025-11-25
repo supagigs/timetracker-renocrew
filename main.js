@@ -107,15 +107,14 @@ function createWindow() {
   if (process.platform === 'darwin') {
     mainWindow.webContents.once('did-finish-load', () => {
       // Delay permission check slightly to ensure window is fully ready
-      setTimeout(() => {
-        checkScreenRecordingPermission().then((hasPermission) => {
-          if (!hasPermission) {
-            // Show permission dialog after a short delay
-            setTimeout(() => {
-              requestScreenRecordingPermission();
-            }, 1000);
-          }
-        });
+      setTimeout(async () => {
+        const permissionResult = await checkScreenRecordingPermission();
+        if (!permissionResult.granted) {
+          // Show permission dialog after a short delay
+          setTimeout(() => {
+            requestScreenRecordingPermission(true);
+          }, 1000);
+        }
       }, 500);
     });
   }
@@ -188,61 +187,104 @@ function createWindow() {
 // ============ HELPER FUNCTIONS ============
 
 // Check and request screen recording permissions on macOS
-async function checkScreenRecordingPermission() {
+// Returns: { granted: boolean, sources: array, error: string|null }
+async function checkScreenRecordingPermission(retryCount = 0) {
   if (process.platform !== 'darwin') {
-    return true; // Not macOS, no permission needed
+    return { granted: true, sources: [], error: null }; // Not macOS, no permission needed
   }
 
+  const maxRetries = 2;
+  
   try {
+    // Use a reasonable thumbnail size for permission check
+    // macOS sometimes requires a minimum size to properly trigger permission
+    const testSize = { width: 100, height: 100 };
+    
+    logInfo('Permissions', `Checking screen recording permission (attempt ${retryCount + 1}/${maxRetries + 1})...`);
+    
     // Try to get screen sources - this will trigger permission request if not granted
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
-      thumbnailSize: { width: 1, height: 1 }
+      thumbnailSize: testSize,
+      fetchWindowIcons: false
     });
     
     if (sources && sources.length > 0) {
-      logInfo('Permissions', 'Screen recording permission granted');
-      return true;
+      logInfo('Permissions', `✅ Screen recording permission granted - found ${sources.length} screen source(s)`);
+      sources.forEach((source, idx) => {
+        logInfo('Permissions', `  Source ${idx + 1}: id="${source.id}", name="${source.name}"`);
+      });
+      return { granted: true, sources, error: null };
     } else {
-      logWarn('Permissions', 'Screen recording permission denied or not granted');
-      return false;
+      // Retry once more with a delay if we got no sources
+      if (retryCount < maxRetries) {
+        logWarn('Permissions', `No sources found, retrying in 500ms... (attempt ${retryCount + 1}/${maxRetries + 1})`);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return await checkScreenRecordingPermission(retryCount + 1);
+      }
+      
+      logWarn('Permissions', '❌ Screen recording permission denied or not granted - no sources returned');
+      return { granted: false, sources: [], error: 'No screen sources returned - permission likely denied' };
     }
   } catch (error) {
-    logWarn('Permissions', 'Error checking screen recording permission:', error);
-    return false;
+    // Retry on error
+    if (retryCount < maxRetries) {
+      logWarn('Permissions', `Error checking permission, retrying in 500ms... (attempt ${retryCount + 1}/${maxRetries + 1}):`, error.message);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return await checkScreenRecordingPermission(retryCount + 1);
+    }
+    
+    logError('Permissions', 'Error checking screen recording permission:', error);
+    return { granted: false, sources: [], error: error.message || 'Unknown error' };
   }
 }
 
 // Show permission dialog on macOS if needed
-async function requestScreenRecordingPermission() {
+async function requestScreenRecordingPermission(showDialog = true) {
   if (process.platform !== 'darwin') {
-    return;
+    return { granted: true };
   }
 
-  const hasPermission = await checkScreenRecordingPermission();
+  const permissionResult = await checkScreenRecordingPermission();
   
-  if (!hasPermission && mainWindow && !mainWindow.isDestroyed()) {
-    dialog.showMessageBox(mainWindow, {
-      type: 'warning',
-      title: 'Screen Recording Permission Required',
-      message: 'Screen Recording Permission Required',
-      detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
-              'Please grant permission:\n' +
-              '1. Go to System Settings → Privacy & Security → Screen Recording\n' +
-              '2. Find "Time Tracker" in the list\n' +
-              '3. Enable the toggle\n' +
-              '4. Restart the app\n\n' +
-              'The app will request permission automatically when you start tracking.',
-      buttons: ['Open System Settings', 'OK'],
-      defaultId: 1,
-      cancelId: 1
-    }).then((result) => {
-      if (result.response === 0) {
-        // Open System Settings to Screen Recording
-        shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
-      }
+  if (!permissionResult.granted && showDialog && mainWindow && !mainWindow.isDestroyed()) {
+    return new Promise((resolve) => {
+      dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Screen Recording Permission Required',
+        message: 'Screen Recording Permission Required',
+        detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
+                'Please grant permission:\n' +
+                '1. Go to System Settings → Privacy & Security → Screen Recording\n' +
+                '2. Find "Time Tracker" (or the app name) in the list\n' +
+                '3. Enable the toggle\n' +
+                '4. Restart the app if needed\n\n' +
+                'After granting permission, screenshots will be captured automatically.',
+        buttons: ['Open System Settings', 'Check Again', 'OK'],
+        defaultId: 2,
+        cancelId: 2
+      }).then((result) => {
+        if (result.response === 0) {
+          // Open System Settings to Screen Recording
+          shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+          resolve({ granted: false, action: 'opened_settings' });
+        } else if (result.response === 1) {
+          // Check again
+          setTimeout(async () => {
+            const recheck = await checkScreenRecordingPermission();
+            resolve(recheck);
+          }, 1000);
+        } else {
+          resolve({ granted: false, action: 'dismissed' });
+        }
+      }).catch((error) => {
+        logError('Permissions', 'Error showing permission dialog:', error);
+        resolve({ granted: false, error: error.message });
+      });
     });
   }
+  
+  return permissionResult;
 }
 
 async function getActiveAppName() {
@@ -972,9 +1014,32 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           logInfo('BG-UPLOAD', `Display ${idx + 1}: ${display.size.width}x${display.size.height} at (${display.bounds.x}, ${display.bounds.y}), scale: ${display.scaleFactor}`);
         });
         
+        // On macOS, check permissions before attempting capture
+        if (process.platform === 'darwin') {
+          const permissionCheck = await checkScreenRecordingPermission();
+          if (!permissionCheck.granted) {
+            logWarn('BG-UPLOAD', '⚠️ Screen recording permission not granted - cannot capture screenshots');
+            logWarn('BG-UPLOAD', `   Error: ${permissionCheck.error || 'Permission denied'}`);
+            
+            // Show permission dialog (but only once per session to avoid spam)
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('screenshot-permission-denied', {
+                message: 'Screen recording permission is required to capture screenshots. Please grant permission in System Settings.',
+                timestamp: Date.now()
+              });
+            }
+            
+            // Don't show dialog on every failed attempt - only log
+            // User can manually check permissions via System Settings
+            scheduleNextScreenshot();
+            return;
+          }
+        }
+        
         const sources = await desktopCapturer.getSources({
           types: ['screen'],
-          thumbnailSize: { width: maxWidth, height: maxHeight }
+          thumbnailSize: { width: maxWidth, height: maxHeight },
+          fetchWindowIcons: false
         });
         
         logInfo('BG-UPLOAD', `Received ${sources?.length || 0} screen source(s) from desktopCapturer`);
@@ -1090,10 +1155,20 @@ ipcMain.handle('get-timer-active', () => {
 // capture-screen (returns base64 screenshot of primary screen)
 ipcMain.handle('capture-screen', async () => {
   try {
+    // On macOS, check permissions before attempting capture
+    if (process.platform === 'darwin') {
+      const permissionCheck = await checkScreenRecordingPermission();
+      if (!permissionCheck.granted) {
+        logWarn('IPC', '[capture-screen] ⚠️ Screen recording permission not granted');
+        return null;
+      }
+    }
+    
     const { width, height } = screen.getPrimaryDisplay().size;
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width, height },
+      fetchWindowIcons: false
     });
     if (!sources || sources.length === 0) return null;
     return sources[0].thumbnail.toDataURL('image/png');
@@ -1114,6 +1189,16 @@ ipcMain.handle('capture-all-screens', async () => {
       logInfo('IPC', `[capture-all-screens] Display ${idx + 1}: ${display.size.width}x${display.size.height}`);
     });
     
+    // On macOS, check permissions before attempting capture
+    if (process.platform === 'darwin') {
+      const permissionCheck = await checkScreenRecordingPermission();
+      if (!permissionCheck.granted) {
+        logWarn('IPC', '[capture-all-screens] ⚠️ Screen recording permission not granted');
+        logWarn('IPC', `[capture-all-screens] Error: ${permissionCheck.error || 'Permission denied'}`);
+        return [];
+      }
+    }
+    
     // Get all screen sources
     const allDisplays = screen.getAllDisplays();
     const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
@@ -1122,6 +1207,7 @@ ipcMain.handle('capture-all-screens', async () => {
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width: maxWidth, height: maxHeight },
+      fetchWindowIcons: false
     });
     
     logInfo('IPC', `[capture-all-screens] Received ${sources?.length || 0} source(s) from desktopCapturer`);
@@ -1162,6 +1248,7 @@ ipcMain.handle('diagnose-screen-capture', async () => {
     displays: [],
     sources: [],
     permissions: 'unknown',
+    permissionDetails: null,
     timestamp: new Date().toISOString()
   };
   
@@ -1176,13 +1263,44 @@ ipcMain.handle('diagnose-screen-capture', async () => {
       primary: display === screen.getPrimaryDisplay()
     }));
     
-    // Try to get screen sources
+    // On macOS, use the improved permission check
+    if (process.platform === 'darwin') {
+      const permissionResult = await checkScreenRecordingPermission();
+      diagnostics.permissionDetails = {
+        granted: permissionResult.granted,
+        error: permissionResult.error,
+        sourceCount: permissionResult.sources?.length || 0
+      };
+      
+      if (!permissionResult.granted) {
+        diagnostics.permissions = 'denied';
+        diagnostics.sources = [];
+        return diagnostics;
+      } else {
+        diagnostics.permissions = permissionResult.sources.length < displays.length ? 'partial' : 'granted';
+        // Use sources from permission check if available
+        if (permissionResult.sources && permissionResult.sources.length > 0) {
+          diagnostics.sources = permissionResult.sources.map((source, idx) => ({
+            index: idx + 1,
+            id: source.id,
+            name: source.name,
+            thumbnailSize: source.thumbnail?.getSize()
+          }));
+          return diagnostics;
+        }
+      }
+    } else {
+      diagnostics.permissions = 'not_applicable';
+    }
+    
+    // Try to get screen sources (fallback for non-macOS or if permission check didn't return sources)
     const maxWidth = Math.max(...displays.map(d => d.size.width));
     const maxHeight = Math.max(...displays.map(d => d.size.height));
     
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
-      thumbnailSize: { width: maxWidth, height: maxHeight }
+      thumbnailSize: { width: maxWidth, height: maxHeight },
+      fetchWindowIcons: false
     });
     
     diagnostics.sources = (sources || []).map((source, idx) => ({
@@ -1201,8 +1319,6 @@ ipcMain.handle('diagnose-screen-capture', async () => {
       } else {
         diagnostics.permissions = 'granted';
       }
-    } else {
-      diagnostics.permissions = 'not_applicable';
     }
     
     logInfo('DIAGNOSTIC', JSON.stringify(diagnostics, null, 2));

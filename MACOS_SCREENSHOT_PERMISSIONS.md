@@ -12,12 +12,16 @@ When running `npm run dev`, screenshots work fine, but when running from the DMG
 
 ## Solution
 
-### Automatic Fix (Implemented)
+### Automatic Fix (Implemented - Enhanced)
 
 The app now automatically:
-1. Checks for screen recording permission on startup
-2. Shows a helpful dialog if permission is missing
-3. Provides a button to open System Settings
+1. Checks for screen recording permission on startup with retry logic
+2. Checks permissions before each screenshot capture attempt
+3. Shows a helpful dialog if permission is missing with options to:
+   - Open System Settings directly
+   - Check permissions again
+4. Provides detailed logging for debugging permission issues
+5. Automatically re-checks permissions when screenshots fail
 
 ### Manual Steps for Users
 
@@ -51,13 +55,17 @@ If screenshots still don't work after installing from DMG:
    ```json
    "extendInfo": {
      "NSCameraUsageDescription": "This app needs camera access for screenshot functionality.",
+     "NSScreenCaptureUsageDescription": "This app needs screen recording permission to capture screenshots for time tracking. Please enable this permission in System Settings → Privacy & Security → Screen Recording.",
+     "NSAppleEventsUsageDescription": "This app needs to capture screenshots of your screen for time tracking purposes.",
      ...
    }
    ```
 
 2. **Permission Check Function** (`main.js`):
-   - `checkScreenRecordingPermission()` - Checks if permission is granted
-   - `requestScreenRecordingPermission()` - Shows dialog if permission is missing
+   - `checkScreenRecordingPermission(retryCount)` - Checks if permission is granted with automatic retry logic (up to 2 retries)
+   - `requestScreenRecordingPermission(showDialog)` - Shows dialog if permission is missing with options to open System Settings or check again
+   - Both functions now return detailed permission status including error messages
+   - Permission checks are performed before every screenshot capture attempt
 
 3. **Automatic Check on Startup**:
    - Runs after window loads
@@ -106,12 +114,15 @@ To test if permissions are working:
 1. App needs to be restarted after granting permission
 2. Multiple displays - check if all displays have permission
 3. Virtual machine limitations
+4. Permission check timing issues
 
 **Solution**:
 1. Quit the app completely (Cmd+Q)
 2. Reopen it
 3. Start a new tracking session
-4. Check console logs for error messages
+4. Check console logs for detailed error messages - the app now logs permission status before each capture attempt
+5. Use the diagnostic tool: `window.electronAPI.diagnoseScreenCapture()` to see detailed permission information
+6. The app now automatically checks permissions before each screenshot, so if permission was just granted, it should work on the next capture attempt
 
 ### Issue: "Received 0 screen source(s)" in Logs
 

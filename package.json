@@ -83,7 +83,9 @@
         "NSCameraUsageDescription": "This app needs camera access for screenshot functionality.",
         "NSMicrophoneUsageDescription": "This app does not use the microphone.",
         "NSDesktopFolderUsageDescription": "This app needs to save screenshots to your desktop.",
-        "NSDocumentsFolderUsageDescription": "This app needs to save screenshots to your documents folder."
+        "NSDocumentsFolderUsageDescription": "This app needs to save screenshots to your documents folder.",
+        "NSAppleEventsUsageDescription": "This app needs to capture screenshots of your screen for time tracking purposes.",
+        "NSScreenCaptureUsageDescription": "This app needs screen recording permission to capture screenshots for time tracking. Please enable this permission in System Settings → Privacy & Security → Screen Recording."
       }
     },
     "dmg": {
