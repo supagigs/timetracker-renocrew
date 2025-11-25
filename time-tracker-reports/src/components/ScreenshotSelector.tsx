@@ -59,6 +59,9 @@ export default function ScreenshotSelector({
   initialScreenshots,
   initialSessionId,
 }: ScreenshotSelectorProps) {
+  // ✅ ADD: Prevent hydration mismatch
+  const [mounted, setMounted] = useState(false);
+  
   const [selectedSessionId, setSelectedSessionId] = useState<number | undefined>(
     initialSessionId || (sessions.length > 0 ? sessions[0].id : undefined)
   );
@@ -66,9 +69,14 @@ export default function ScreenshotSelector({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ============ NEW: LISTEN FOR SCREENSHOT DELETION EVENT ============
+  // ✅ Set mounted flag first
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    setMounted(true);
+  }, []);
+
+  // ============ LISTEN FOR SCREENSHOT DELETION EVENT ============
+  useEffect(() => {
+    if (!mounted || typeof window === 'undefined') {
       return;
     }
 
@@ -96,10 +104,10 @@ export default function ScreenshotSelector({
       
       return unsubscribe; // cleanup on unmount
     }
-  }, []);
+  }, [mounted]);
 
   useEffect(() => {
-    if (!selectedSessionId) {
+    if (!mounted || !selectedSessionId) {
       return;
     }
 
@@ -152,7 +160,7 @@ export default function ScreenshotSelector({
     return () => {
       cancelled = true;
     };
-  }, [selectedSessionId, userEmail, initialSessionId, initialScreenshots]);
+  }, [selectedSessionId, userEmail, initialSessionId, initialScreenshots, mounted]);
 
   const formatSessionLabel = (session: TimeSession): string => {
     // Parse dates and ensure UTC timestamps are converted to local timezone
@@ -188,6 +196,32 @@ export default function ScreenshotSelector({
     return `${dateStr} ${timeStr}${endTimeStr} (${duration}h active)`;
   };
 
+  // ✅ Show loading state until mounted
+  if (!mounted) {
+    return (
+      <section className="space-y-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-foreground">Session Screenshots</h2>
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-muted-foreground">
+              Select Session:
+            </label>
+            <select
+              disabled
+              className="rounded-lg border border-border bg-white px-4 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+              suppressHydrationWarning
+            >
+              <option>Loading...</option>
+            </select>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   if (sessions.length === 0) {
     return (
       <section className="space-y-4">
@@ -222,6 +256,7 @@ export default function ScreenshotSelector({
               setSelectedSessionId(sessionId);
             }}
             className="rounded-lg border border-border bg-white px-4 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+            suppressHydrationWarning
           >
             {sessions.map((session) => (
               <option key={session.id} value={session.id}>

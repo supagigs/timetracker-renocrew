@@ -107,14 +107,15 @@ function createWindow() {
   if (process.platform === 'darwin') {
     mainWindow.webContents.once('did-finish-load', () => {
       // Delay permission check slightly to ensure window is fully ready
-      setTimeout(async () => {
-        const permissionResult = await checkScreenRecordingPermission();
-        if (!permissionResult.granted) {
-          // Show permission dialog after a short delay
-          setTimeout(() => {
-            requestScreenRecordingPermission(true);
-          }, 1000);
-        }
+      setTimeout(() => {
+        checkScreenRecordingPermission().then((hasPermission) => {
+          if (!hasPermission) {
+            // Show permission dialog after a short delay
+            setTimeout(() => {
+              requestScreenRecordingPermission();
+            }, 1000);
+          }
+        });
       }, 500);
     });
   }
@@ -187,226 +188,75 @@ function createWindow() {
 // ============ HELPER FUNCTIONS ============
 
 // Check and request screen recording permissions on macOS
-// Returns: { granted: boolean, sources: array, error: string|null }
-async function checkScreenRecordingPermission(retryCount = 0) {
+async function checkScreenRecordingPermission() {
   if (process.platform !== 'darwin') {
-    return { granted: true, sources: [], error: null }; // Not macOS, no permission needed
+    return true; // Not macOS, no permission needed
   }
 
-  const maxRetries = 2;
-  
   try {
-    // Use a reasonable thumbnail size for permission check
-    // macOS sometimes requires a minimum size to properly trigger permission
-    // Using a slightly larger size (200x200) to ensure we get valid thumbnails
-    const testSize = { width: 200, height: 200 };
-    
-    logInfo('Permissions', `Checking screen recording permission (attempt ${retryCount + 1}/${maxRetries + 1})...`);
-    
     // Try to get screen sources - this will trigger permission request if not granted
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
-      thumbnailSize: testSize,
-      fetchWindowIcons: false
+      thumbnailSize: { width: 1, height: 1 }
     });
     
     if (sources && sources.length > 0) {
-      logInfo('Permissions', `✅ Screen recording permission granted - found ${sources.length} screen source(s)`);
-      sources.forEach((source, idx) => {
-        const thumbSize = source.thumbnail?.getSize();
-        logInfo('Permissions', `  Source ${idx + 1}: id="${source.id}", name="${source.name}", thumbnail: ${thumbSize?.width || 'N/A'}x${thumbSize?.height || 'N/A'}`);
-      });
-      return { granted: true, sources, error: null };
+      logInfo('Permissions', 'Screen recording permission granted');
+      return true;
     } else {
-      // Retry once more with a delay if we got no sources
-      if (retryCount < maxRetries) {
-        logWarn('Permissions', `No sources found, retrying in 500ms... (attempt ${retryCount + 1}/${maxRetries + 1})`);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        return await checkScreenRecordingPermission(retryCount + 1);
-      }
-      
-      logWarn('Permissions', '❌ Screen recording permission denied or not granted - no sources returned');
-      logWarn('Permissions', '   This usually means:');
-      logWarn('Permissions', '   1. Permission was denied in System Settings');
-      logWarn('Permissions', '   2. App needs to be restarted after granting permission');
-      logWarn('Permissions', '   3. Permission was granted to a different app identifier (dev vs packaged)');
-      return { granted: false, sources: [], error: 'No screen sources returned - permission likely denied. Please check System Settings → Privacy & Security → Screen Recording and restart the app.' };
+      logWarn('Permissions', 'Screen recording permission denied or not granted');
+      return false;
     }
   } catch (error) {
-    // Retry on error
-    if (retryCount < maxRetries) {
-      const errorMsg = error?.message || error?.toString() || 'Unknown error';
-      logWarn('Permissions', `Error checking permission, retrying in 500ms... (attempt ${retryCount + 1}/${maxRetries + 1}):`, errorMsg);
-      logWarn('Permissions', 'Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-      await new Promise(resolve => setTimeout(resolve, 500));
-      return await checkScreenRecordingPermission(retryCount + 1);
-    }
-    
-    const errorMsg = error?.message || error?.toString() || 'Unknown error';
-    const errorStack = error?.stack || 'No stack trace';
-    logError('Permissions', 'Error checking screen recording permission:', errorMsg);
-    logError('Permissions', 'Error stack:', errorStack);
-    logError('Permissions', 'Error type:', error?.constructor?.name || typeof error);
-    logError('Permissions', 'Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-    
-    // Provide more helpful error message
-    let errorDescription = errorMsg;
-    if (errorMsg === 'Unknown error' || !errorMsg) {
-      errorDescription = 'Failed to check screen recording permission. This may happen if the app needs to be restarted after granting permission, or if there is a mismatch between the app identifier and the permission grant.';
-    }
-    
-    return { granted: false, sources: [], error: errorDescription };
+    logWarn('Permissions', 'Error checking screen recording permission:', error);
+    return false;
   }
 }
 
 // Show permission dialog on macOS if needed
-async function requestScreenRecordingPermission(showDialog = true) {
+async function requestScreenRecordingPermission() {
   if (process.platform !== 'darwin') {
-    return { granted: true };
+    return;
   }
 
-  const permissionResult = await checkScreenRecordingPermission();
+  const hasPermission = await checkScreenRecordingPermission();
   
-  if (!permissionResult.granted && showDialog && mainWindow && !mainWindow.isDestroyed()) {
-    return new Promise((resolve) => {
-      dialog.showMessageBox(mainWindow, {
-        type: 'warning',
-        title: 'Screen Recording Permission Required',
-        message: 'Screen Recording Permission Required',
-        detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
-                'Please grant permission:\n' +
-                '1. Go to System Settings → Privacy & Security → Screen Recording\n' +
-                '2. Find "Time Tracker" (or the app name) in the list\n' +
-                '3. Enable the toggle\n' +
-                '4. Restart the app if needed\n\n' +
-                'After granting permission, screenshots will be captured automatically.',
-        buttons: ['Open System Settings', 'Check Again', 'OK'],
-        defaultId: 2,
-        cancelId: 2
-      }).then((result) => {
-        if (result.response === 0) {
-          // Open System Settings to Screen Recording
-          shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
-          resolve({ granted: false, action: 'opened_settings' });
-        } else if (result.response === 1) {
-          // Check again
-          setTimeout(async () => {
-            const recheck = await checkScreenRecordingPermission();
-            resolve(recheck);
-          }, 1000);
-        } else {
-          resolve({ granted: false, action: 'dismissed' });
-        }
-      }).catch((error) => {
-        logError('Permissions', 'Error showing permission dialog:', error);
-        resolve({ granted: false, error: error.message });
-      });
+  if (!hasPermission && mainWindow && !mainWindow.isDestroyed()) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: 'Screen Recording Permission Required',
+      message: 'Screen Recording Permission Required',
+      detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
+              'Please grant permission:\n' +
+              '1. Go to System Settings → Privacy & Security → Screen Recording\n' +
+              '2. Find "Time Tracker" in the list\n' +
+              '3. Enable the toggle\n' +
+              '4. Restart the app\n\n' +
+              'The app will request permission automatically when you start tracking.',
+      buttons: ['Open System Settings', 'OK'],
+      defaultId: 1,
+      cancelId: 1
+    }).then((result) => {
+      if (result.response === 0) {
+        // Open System Settings to Screen Recording
+        shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+      }
     });
   }
-  
-  return permissionResult;
-}
-
-// Convert Windows executable names to friendly application names
-function getFriendlyAppName(executableName) {
-  if (!executableName) return null;
-  
-  // Remove .exe extension if present
-  const nameWithoutExt = executableName.replace(/\.exe$/i, '').trim();
-  
-  // Map common executable names to friendly names
-  const appNameMap = {
-    // Browsers
-    'chrome': 'Google Chrome',
-    'msedge': 'Microsoft Edge',
-    'firefox': 'Mozilla Firefox',
-    'brave': 'Brave Browser',
-    'opera': 'Opera',
-    'safari': 'Safari',
-    
-    // Code Editors
-    'code': 'Visual Studio Code',
-    'devenv': 'Visual Studio',
-    'idea64': 'IntelliJ IDEA',
-    'pycharm64': 'PyCharm',
-    'webstorm64': 'WebStorm',
-    'atom': 'Atom',
-    'sublime_text': 'Sublime Text',
-    'notepad++': 'Notepad++',
-    
-    // Git/Version Control
-    'githubdesktop': 'GitHub Desktop',
-    'gitkraken': 'GitKraken',
-    'sourcetree': 'SourceTree',
-    
-    // Terminals
-    'windows terminal': 'Windows Terminal',
-    'wt': 'Windows Terminal',
-    'powershell': 'PowerShell',
-    'cmd': 'Command Prompt',
-    'wsl': 'WSL',
-    
-    // Office
-    'winword': 'Microsoft Word',
-    'excel': 'Microsoft Excel',
-    'powerpnt': 'Microsoft PowerPoint',
-    'outlook': 'Microsoft Outlook',
-    'onenote': 'Microsoft OneNote',
-    
-    // Communication
-    'teams': 'Microsoft Teams',
-    'slack': 'Slack',
-    'discord': 'Discord',
-    'zoom': 'Zoom',
-    
-    // System
-    'explorer': 'File Explorer',
-    'notepad': 'Notepad',
-    'calc': 'Calculator',
-    'mspaint': 'Paint',
-    
-    // Other common apps
-    'spotify': 'Spotify',
-    'vlc': 'VLC Media Player',
-    'photoshop': 'Adobe Photoshop',
-    'illustrator': 'Adobe Illustrator',
-    'acrobat': 'Adobe Acrobat',
-    'figma': 'Figma',
-    'sketch': 'Sketch',
-  };
-  
-  const nameLower = nameWithoutExt.toLowerCase();
-  
-  // Check exact match first
-  if (appNameMap[nameLower]) {
-    return appNameMap[nameLower];
-  }
-  
-  // Check partial matches (e.g., "Code.exe" -> "code" -> "Visual Studio Code")
-  for (const [key, value] of Object.entries(appNameMap)) {
-    if (nameLower.includes(key) || key.includes(nameLower)) {
-      return value;
-    }
-  }
-  
-  // If no mapping found, return the name without .exe but with proper capitalization
-  // Convert "githubdesktop" to "GitHub Desktop" style
-  return nameWithoutExt
-    .replace(/([a-z])([A-Z])/g, '$1 $2') // Add space before capital letters
-    .replace(/\b\w/g, l => l.toUpperCase()); // Capitalize first letter of each word
 }
 
 async function getActiveAppName() {
   try {
-    // load module if not loaded
-    if (!activeWindowModule) {
-      try {
-        activeWindowModule = await import('active-win');
-      } catch (importError) {
-        logError('ActiveWindow', 'Failed to import active-win module:', importError.message);
-        return null;
-      }
+    // Check if our own window is focused - if so, skip detection
+    // as we want to track what the user is actually working on, not our own app
+    if (mainWindow && mainWindow.isFocused()) {
+      // Return null to indicate we can't determine the active app
+      // The fallback in the caller will handle this appropriately
+      return null;
     }
+    
+    // load module if not loaded
+    if (!activeWindowModule) activeWindowModule = await import('active-win');
 
     // handle different exports across versions:
     //  - newer: activeWindow()
@@ -419,7 +269,6 @@ async function getActiveAppName() {
 
     if (typeof fn !== 'function') {
       logWarn('ActiveWindow', 'active-win export not a function', typeof fn);
-      logWarn('ActiveWindow', 'Module structure:', Object.keys(activeWindowModule || {}));
       return null;
     }
 
@@ -429,81 +278,29 @@ async function getActiveAppName() {
       return null;
     }
     
-    // Log full result for debugging (but only in dev mode to avoid spam)
-    if (!app.isPackaged) {
-      logInfo('ActiveWindow', `Full result: ${JSON.stringify(result, null, 2)}`);
-    }
-    
     // Get the app's own name to filter it out
     const appName = app.getName();
     const appNameLower = appName.toLowerCase();
     
-    // Extract owner name (application name) and window title
-    // owner.name is the actual application (e.g., "Google Chrome", "Visual Studio Code")
-    // title is the window/tab title (e.g., "GitHub - Your Repo", "New Tab")
-    let ownerName = null;
-    let windowTitle = null;
-    let processName = null;
+    // On macOS, prefer owner.name (application name) over title (window title)
+    // as the window title might be the app's own window
+    let ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
+    let windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
     
-    // Try different possible structures from active-win
-    if (result.owner) {
-      ownerName = typeof result.owner.name === 'string' ? result.owner.name.trim() : null;
-      processName = typeof result.owner.processName === 'string' ? result.owner.processName.trim() : null;
-    }
-    if (result.name && !ownerName) {
-      // Some versions might have name directly
-      ownerName = typeof result.name === 'string' ? result.name.trim() : null;
-    }
-    if (result.processName && !processName) {
-      processName = typeof result.processName === 'string' ? result.processName.trim() : null;
-    }
-    if (result.title) {
-      windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
+    // Debug logging on macOS to help diagnose issues
+    if (process.platform === 'darwin') {
+      logInfo('ActiveWindow', `Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, app: ${appName}`);
     }
     
-    // On Windows, convert executable names to friendly names
-    if (process.platform === 'win32') {
-      // Try to get friendly name from process name or owner name
-      if (processName) {
-        const friendlyFromProcess = getFriendlyAppName(processName);
-        if (friendlyFromProcess) {
-          ownerName = friendlyFromProcess;
-          logInfo('ActiveWindow', `Converted process name "${processName}" to friendly name: "${ownerName}"`);
-        }
-      }
-      if (ownerName && ownerName.endsWith('.exe')) {
-        const friendlyFromOwner = getFriendlyAppName(ownerName);
-        if (friendlyFromOwner) {
-          logInfo('ActiveWindow', `Converted owner name "${ownerName}" to friendly name: "${friendlyFromOwner}"`);
-          ownerName = friendlyFromOwner;
-        }
-      }
-    }
-    
-    // Debug logging
-    logInfo('ActiveWindow', `Platform: ${process.platform}, Owner: ${ownerName || 'null'}, Process: ${processName || 'null'}, Title: ${windowTitle || 'null'}, Our App: ${appName}`);
-    
-    // Filter out the app's own name (exact match)
-    // But keep window titles even if they match - they might be useful context
+    // Filter out the app's own name
     if (ownerName && ownerName.toLowerCase() === appNameLower) {
-      logInfo('ActiveWindow', `Filtered out owner name (matches our app): ${ownerName}`);
       ownerName = null;
     }
-    // Don't filter window title if it matches app name - it might still be useful
-    // Only filter if it's clearly our own app window
     if (windowTitle && windowTitle.toLowerCase() === appNameLower) {
-      // Check if this is likely our own app window (e.g., "Time Tracker" window)
-      // But allow it if it's something like "Chrome - Time Tracker" (a website)
-      if (ownerName && ownerName.toLowerCase() === appNameLower) {
-        logInfo('ActiveWindow', `Filtered out window title (matches our app and owner): ${windowTitle}`);
-        windowTitle = null;
-      } else {
-        logInfo('ActiveWindow', `Keeping window title even though it matches app name (might be useful): ${windowTitle}`);
-      }
+      windowTitle = null;
     }
     
-    // Also filter out common variations (but be less aggressive)
-    // Only filter owner name, never filter window titles - they're always useful context
+    // Also filter out common variations
     const appNameVariations = [
       'time tracker',
       'supagigs time tracker',
@@ -513,80 +310,27 @@ async function getActiveAppName() {
     
     if (ownerName) {
       const ownerNameLower = ownerName.toLowerCase();
-      // Only filter if it's an exact match or clearly our app
-      if (appNameVariations.some(variation => ownerNameLower === variation || ownerNameLower.includes('time tracker'))) {
-        logInfo('ActiveWindow', `Filtered out owner name (variation match): ${ownerName}`);
+      if (appNameVariations.some(variation => ownerNameLower.includes(variation))) {
         ownerName = null;
       }
     }
     
-    // Never filter window titles - they provide valuable context even if they contain app name
-    // Window titles like "Chrome - Time Tracker" or "VS Code - project-name" are always useful
-    
-    // Combine app name with window/tab title for more context
-    // Format: "App Name - Window Title" or just "App Name" if no title
-    let combinedAppName = null;
-    
-    if (ownerName && windowTitle) {
-      // Both app name and window title available
-      const ownerNameLower = ownerName.toLowerCase().trim();
-      const windowTitleLower = windowTitle.toLowerCase().trim();
-      
-      // Only filter out truly redundant/generic titles
-      // Be very permissive - we want to show tab titles, project names, file names, etc.
-      const trulyRedundantTitles = [
-        'new tab',
-        'untitled',
-        'about:blank'
-      ];
-      
-      // Check if title is exactly one of the redundant titles
-      const isTrulyRedundant = trulyRedundantTitles.includes(windowTitleLower);
-      
-      // Only exclude if title is exactly the app name (not if it contains it)
-      // This allows titles like "Chrome DevTools" or "VS Code Settings" to show
-      const isExactAppName = windowTitleLower === ownerNameLower;
-      
-      // Always combine if title exists and is not redundant
-      // This ensures we get tab titles, project names, file names, etc.
-      if (!isTrulyRedundant && !isExactAppName && windowTitle.length > 0) {
-        // Limit title length to avoid very long combined names
-        const maxTitleLength = 70;
-        const truncatedTitle = windowTitle.length > maxTitleLength 
-          ? windowTitle.substring(0, maxTitleLength) + '...'
-          : windowTitle;
-        combinedAppName = `${ownerName} - ${truncatedTitle}`;
-        logInfo('ActiveWindow', `✅ Combined: "${ownerName}" + "${windowTitle}" = "${combinedAppName}"`);
-      } else {
-        combinedAppName = ownerName;
-        if (isTrulyRedundant) {
-          logInfo('ActiveWindow', `Title filtered as redundant: "${windowTitle}", using app name only`);
-        } else if (isExactAppName) {
-          logInfo('ActiveWindow', `Title is exact app name: "${windowTitle}", using app name only`);
-        }
+    if (windowTitle) {
+      const windowTitleLower = windowTitle.toLowerCase();
+      if (appNameVariations.some(variation => windowTitleLower.includes(variation))) {
+        windowTitle = null;
       }
-    } else if (ownerName) {
-      // Only app name available
-      combinedAppName = ownerName;
-    } else if (windowTitle) {
-      // Only window title available (fallback)
-      // Limit length for standalone titles too
-      const maxTitleLength = 80;
-      combinedAppName = windowTitle.length > maxTitleLength 
-        ? windowTitle.substring(0, maxTitleLength) + '...'
-        : windowTitle;
     }
     
-    if (combinedAppName) {
-      logInfo('ActiveWindow', `✅ Detected: App="${ownerName || 'null'}", Title="${windowTitle || 'null'}", Combined="${combinedAppName}"`);
+    // On macOS, prefer owner.name (the actual application) over window title
+    // On other platforms, prefer window title if available
+    if (process.platform === 'darwin') {
+      return ownerName || windowTitle || null;
     } else {
-      logWarn('ActiveWindow', '⚠️ No app name detected after filtering');
+      return windowTitle || ownerName || null;
     }
-    
-    return combinedAppName;
   } catch (error) {
-    logError('ActiveWindow', 'Unable to resolve active window:', error);
-    logError('ActiveWindow', 'Error stack:', error.stack);
+    logWarn('ActiveWindow', 'Unable to resolve active window', error);
     return null;
   }
 }
@@ -605,121 +349,46 @@ function getSupabaseClient() {
   }
 }
 
-// Fallback compression using canvas (when sharp is not available)
-async function compressToJpegBufferFallback(dataUrl, targetSizeKB = 50) {
-  const base64 = dataUrl.split(',')[1];
-  const inputBuffer = Buffer.from(base64, 'base64');
-  const UPLOAD_WIDTH = 800;
-  const TARGET_SIZE_BYTES = targetSizeKB * 1024;
-  
-  // Try to use canvas for compression
-  let canvas = null;
-  try {
-    const { createCanvas, loadImage } = require('canvas');
-    canvas = { createCanvas, loadImage };
-  } catch (canvasError) {
-    logWarn('Compress', 'Canvas module not available:', canvasError.message);
-    // Last resort: return original buffer
-    logWarn('Compress', 'Using original image buffer without compression (no compression libraries available)');
-    return inputBuffer;
-  }
-  
-  try {
-    // Load image from buffer
-    const img = await canvas.loadImage(inputBuffer);
-    
-    // Calculate dimensions maintaining aspect ratio
-    let width = img.width;
-    let height = img.height;
-    if (width > UPLOAD_WIDTH) {
-      height = Math.floor((height * UPLOAD_WIDTH) / width);
-      width = UPLOAD_WIDTH;
-    }
-    
-    // Create canvas and draw resized image
-    const canvasInstance = canvas.createCanvas(width, height);
-    const ctx = canvasInstance.getContext('2d');
-    ctx.drawImage(img, 0, 0, width, height);
-    
-    // Convert to JPEG buffer with quality adjustment
-    let quality = 0.7;
-    let jpegBuffer = canvasInstance.toBuffer('image/jpeg', { quality });
-    
-    // Reduce quality if still too large
-    let attempts = 0;
-    while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5 && quality > 0.3) {
-      attempts++;
-      quality -= 0.1;
-      jpegBuffer = canvasInstance.toBuffer('image/jpeg', { quality });
-    }
-    
-    logInfo('Compress', `JPEG size (canvas fallback): ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
-    return jpegBuffer;
-  } catch (error) {
-    logError('Compress', 'Canvas fallback compression failed:', error.message);
-    // Last resort: return original buffer (will be larger but at least it works)
-    logWarn('Compress', 'Using original image buffer without compression');
-    return inputBuffer;
-  }
-}
-
 async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
+  const sharp = require('sharp');
   const base64 = dataUrl.split(',')[1];
   const inputBuffer = Buffer.from(base64, 'base64');
   const UPLOAD_WIDTH = 800;
   const JPEG_QUALITY = 70;
   const TARGET_SIZE_BYTES = targetSizeKB * 1024;
   
-  // Try to use sharp, fall back to canvas if it fails
-  let sharp = null;
-  try {
-    sharp = require('sharp');
-    // Test if sharp is actually working
-    await sharp(inputBuffer).metadata();
-  } catch (sharpError) {
-    logWarn('Compress', 'Sharp module not available or failed to load:', sharpError.message);
-    logWarn('Compress', 'Falling back to canvas-based compression');
-    return await compressToJpegBufferFallback(dataUrl, targetSizeKB);
-  }
+  let quality = JPEG_QUALITY;
+  let jpegBuffer = await sharp(inputBuffer)  // Changed const to let
+    .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
+    .jpeg({ quality: quality, mozjpeg: true })
+    .toBuffer();
   
-  try {
-    let quality = JPEG_QUALITY;
-    let jpegBuffer = await sharp(inputBuffer)
+  // Keep compressing if needed
+  let attempts = 0;
+  while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5) {
+    attempts++;
+    quality -= (jpegBuffer.length > TARGET_SIZE_BYTES * 1.5) ? 15 : 5;
+    
+    if (quality < 30) {
+      quality = 30;
+      const scaleFactor = Math.sqrt(TARGET_SIZE_BYTES / jpegBuffer.length);
+      const newWidth = Math.floor(UPLOAD_WIDTH * scaleFactor);
+      
+      jpegBuffer = await sharp(inputBuffer)
+        .resize(newWidth, null, { withoutEnlargement: true, fit: 'inside' })
+        .jpeg({ quality: 30, mozjpeg: true })
+        .toBuffer();
+      break;
+    }
+    
+    jpegBuffer = await sharp(inputBuffer)  // Reassign jpegBuffer
       .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
       .jpeg({ quality: quality, mozjpeg: true })
       .toBuffer();
-    
-    // Keep compressing if needed
-    let attempts = 0;
-    while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5) {
-      attempts++;
-      quality -= (jpegBuffer.length > TARGET_SIZE_BYTES * 1.5) ? 15 : 5;
-      
-      if (quality < 30) {
-        quality = 30;
-        const scaleFactor = Math.sqrt(TARGET_SIZE_BYTES / jpegBuffer.length);
-        const newWidth = Math.floor(UPLOAD_WIDTH * scaleFactor);
-        
-        jpegBuffer = await sharp(inputBuffer)
-          .resize(newWidth, null, { withoutEnlargement: true, fit: 'inside' })
-          .jpeg({ quality: 30, mozjpeg: true })
-          .toBuffer();
-        break;
-      }
-      
-      jpegBuffer = await sharp(inputBuffer)
-        .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
-        .jpeg({ quality: quality, mozjpeg: true })
-        .toBuffer();
-    }
-    
-    logInfo('Compress', `JPEG size: ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
-    return jpegBuffer;
-  } catch (error) {
-    logError('Compress', 'Sharp compression failed:', error.message);
-    logWarn('Compress', 'Falling back to canvas-based compression');
-    return await compressToJpegBufferFallback(dataUrl, targetSizeKB);
   }
+  
+  logInfo('Compress', `JPEG size: ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
+  return jpegBuffer;
 }
 
 
@@ -799,30 +468,8 @@ async function addScreenshotToBatch(uploadData) {
   const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel, screenIndex, screenName } = uploadData;
   
   try {
-    // Capture app name NOW (when screenshot is taken), not later when batch is processed
-    // This ensures each screenshot gets the correct app name for when it was actually captured
-    const appName = await getActiveAppName() || 'Unknown';
-    logInfo(contextLabel, `Captured app name at screenshot time: ${appName}`);
-    
     // Compress and save locally
-    let jpegBuffer;
-    try {
-      jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
-    } catch (compressError) {
-      logError(contextLabel, 'Compression failed:', compressError.message);
-      // Try fallback compression
-      try {
-        jpegBuffer = await compressToJpegBufferFallback(screenshotData);
-        logWarn(contextLabel, 'Using fallback compression method');
-      } catch (fallbackError) {
-        logError(contextLabel, 'Fallback compression also failed:', fallbackError.message);
-        // Last resort: use original PNG data
-        const base64 = screenshotData.split(',')[1];
-        jpegBuffer = Buffer.from(base64, 'base64');
-        logWarn(contextLabel, 'Using original image without compression (may be larger)');
-      }
-    }
-    
+    const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
     const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
     const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}${screenSuffix}.jpg`;
     
@@ -843,7 +490,6 @@ async function addScreenshotToBatch(uploadData) {
       filePath,
       jpegBuffer,
       jpegFilename,
-      appName, // Store the app name captured at screenshot time
       addedAt: Date.now()
     };
     
@@ -893,65 +539,56 @@ async function processScreenshotBatch() {
   if (isBatchUploading || screenshotBatchQueue.length === 0) {
     return;
   }
-  
+
   isBatchUploading = true;
   const batchToUpload = [...screenshotBatchQueue]; // Copy the batch
   screenshotBatchQueue.length = 0; // Clear the queue
-  
+
   logInfo('BATCH-UPLOAD', `Processing batch of ${batchToUpload.length} screenshot(s)`);
-  
+
+  // --- CRITICAL FILTER STEP ---
+  // Only upload screenshots that are NOT cancelled and that DO exist.
+  const validScreenshots = batchToUpload.filter(item => {
+    const isCancelled = pendingScreenshots.get(item.filePath) === true;
+    const exists = fs.existsSync(item.filePath);
+    if (isCancelled) logInfo('BATCH-UPLOAD', `Skipping CANCELLED: ${item.filePath}`);
+    if (!exists) logInfo('BATCH-UPLOAD', `Skipping MISSING: ${item.filePath}`);
+    return !isCancelled && exists;
+  });
+
   const supabase = getSupabaseClient();
   if (!supabase) {
     logError('BATCH-UPLOAD', 'Supabase client unavailable, re-queuing batch');
-    screenshotBatchQueue.unshift(...batchToUpload); // Re-add to front of queue
+    screenshotBatchQueue.unshift(...validScreenshots); // Only re-queue valid ones
     isBatchUploading = false;
     return;
   }
-  
+
   const uploadResults = [];
   const filesToDelete = [];
-  
+
   try {
-    // Upload all screenshots in parallel
-    const uploadPromises = batchToUpload.map(async (item) => {
+    // Upload all valid screenshots in parallel
+    const uploadPromises = validScreenshots.map(async (item) => {
       try {
-        // Check if cancelled
-        if (isCancelled(item.filePath)) {
-          logInfo(item.contextLabel, 'Screenshot cancelled, skipping upload');
-          pendingScreenshots.delete(item.filePath);
-          if (fs.existsSync(item.filePath)) {
-            fs.unlinkSync(item.filePath);
-          }
-          return { ok: false, error: 'Cancelled', filePath: item.filePath };
-        }
-        
+        // Upload logic (unchanged)
         const storagePath = `${item.userEmail}/${item.sessionId}/${item.jpegFilename}`;
-        
-        // Upload to Supabase Storage
         const { error: storageError } = await supabase.storage
           .from(STORAGE_BUCKET)
           .upload(storagePath, item.jpegBuffer, { contentType: 'image/jpeg', upsert: true });
-        
+
         if (storageError) {
           logError(item.contextLabel, `Storage upload failed: ${storageError.message}`);
           return { ok: false, error: storageError.message, filePath: item.filePath, item };
         }
-        
-        // Get public URL
+
         const publicUrlRes = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
         const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
-        if (!publicUrl) {
-          throw new Error('Unable to get storage public URL');
-        }
-        
-        // Insert into database
-        // Use the app name that was captured when the screenshot was taken (stored in batch item)
-        // This ensures each screenshot gets the correct app name for when it was actually captured
-        const appName = item.appName || 'Unknown';
-        logInfo(item.contextLabel, `Using app name from screenshot time: ${appName}`);
+        if (!publicUrl) throw new Error('Unable to get storage public URL');
+
+        const appName = await getActiveAppName() || 'Unknown';
         await insertScreenshotToDatabase(supabase, item.userEmail, item.sessionId, publicUrl, item.timestamp, appName, item.isIdle);
-        
-        // Broadcast screenshot captured event
+
         broadcastScreenshotCaptured({
           timestamp: item.timestamp,
           previewDataUrl: item.screenshotData,
@@ -961,10 +598,10 @@ async function processScreenshotBatch() {
           appName,
           isIdle: Boolean(item.isIdle)
         });
-        
+
         filesToDelete.push(item.filePath);
         pendingScreenshots.delete(item.filePath);
-        
+
         logInfo(item.contextLabel, `Uploaded successfully: ${item.jpegFilename}`);
         return { ok: true, filePath: item.filePath, url: publicUrl, appName };
       } catch (error) {
@@ -972,11 +609,11 @@ async function processScreenshotBatch() {
         return { ok: false, error: error.message, filePath: item.filePath, item };
       }
     });
-    
+
     const results = await Promise.all(uploadPromises);
     uploadResults.push(...results);
-    
-    // Delete successfully uploaded files
+
+    // Delete files
     let deletedCount = 0;
     for (const filePath of filesToDelete) {
       try {
@@ -988,25 +625,25 @@ async function processScreenshotBatch() {
         logError('BATCH-UPLOAD', `Error deleting file ${filePath}:`, error);
       }
     }
-    
+
     // Re-queue failed uploads
     const failedUploads = results.filter(r => !r.ok && r.item);
     if (failedUploads.length > 0) {
       logWarn('BATCH-UPLOAD', `Re-queuing ${failedUploads.length} failed upload(s)`);
       screenshotBatchQueue.push(...failedUploads.map(f => f.item));
     }
-    
+
     const successCount = results.filter(r => r.ok).length;
-    logInfo('BATCH-UPLOAD', `Batch complete: ${successCount}/${batchToUpload.length} uploaded, ${deletedCount} files deleted`);
-    
+    logInfo('BATCH-UPLOAD', `Batch complete: ${successCount}/${validScreenshots.length} uploaded, ${deletedCount} files deleted`);
+
   } catch (error) {
     logError('BATCH-UPLOAD', `Batch processing error: ${error.message}`, error);
-    // Re-queue all items on critical error
-    screenshotBatchQueue.unshift(...batchToUpload);
+    screenshotBatchQueue.unshift(...validScreenshots);
   } finally {
     isBatchUploading = false;
   }
 }
+
 
 // Flush remaining screenshots in queue (called on app close or session end)
 async function flushScreenshotBatch() {
@@ -1128,13 +765,10 @@ ipcMain.handle('set-user-logged-in', async (event, flag) => {
 
 ipcMain.handle('toast-delete-file', async (event, filePath) => {
   logInfo('DELETE', `Handler called with filePath: ${filePath}`);
-  
+
   try {
-    // Step 1: Mark as cancelled in pending map
-    if (pendingScreenshots.has(filePath)) {
-      pendingScreenshots.set(filePath, true);
-      logInfo('DELETE', 'Marked as cancelled in pending map');
-    }
+    // Step 1: Mark as cancelled
+    pendingScreenshots.set(filePath, true);
 
     // Step 2: Delete from local disk
     if (filePath && fs.existsSync(filePath)) {
@@ -1145,111 +779,76 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
       logWarn('DELETE', `File does not exist on disk: ${filePath}`);
     }
 
-    // Step 3: Extract filename from path
+    // Step 3: Extract filename and try DB/S3 deletion if needed
     const filename = path.basename(filePath);
-    logInfo('DELETE', `Extracted filename: ${filename}`);
 
-    // Step 4: Get Supabase client
     const supabase = getSupabaseClient();
-    if (!supabase) {
-      throw new Error('Supabase client unavailable');
-    }
+    if (supabase) {
+      const { data: screenshots, error: queryError } = await supabase
+        .from('screenshots')
+        .select('id, screenshot_data, user_email, session_id')
+        .order('captured_at', { ascending: false })
+        .limit(100);
 
-    // Step 5: Query database - FASTER METHOD (no ilike timeout)
-    // Get recent screenshots and filter in-memory
-    logInfo('DELETE', `Querying database for screenshot with filename: ${filename}`);
-    
-    const { data: screenshots, error: queryError } = await supabase
-      .from('screenshots')
-      .select('id, screenshot_data, user_email, session_id')
-      .order('captured_at', { ascending: false })
-      .limit(100);  // Get recent records
+      if (!queryError) {
+        const screenshot = screenshots?.find(s =>
+          s.screenshot_data && s.screenshot_data.includes(filename)
+        );
 
-    if (queryError) {
-      logError('DELETE', `Error querying database: ${queryError.message}`, queryError);
-      throw queryError;
-    }
-
-    // Find matching screenshot in-memory (much faster than database ILIKE)
-    const screenshot = screenshots?.find(s => 
-      s.screenshot_data && s.screenshot_data.includes(filename)
-    );
-
-    if (!screenshot) {
-      logWarn('DELETE', `No database record found for: ${filename}`);
-      // Continue anyway - file is already deleted from disk
-    } else {
-      logInfo('DELETE', `Found database record ID: ${screenshot.id}`);
-
-      // Step 6: Delete from S3 storage
-      if (screenshot.screenshot_data) {
-        try {
-          const urlParts = screenshot.screenshot_data.split('/');
-          const bucketIndex = urlParts.indexOf(STORAGE_BUCKET);
-          
-          if (bucketIndex !== -1 && bucketIndex < urlParts.length - 1) {
-            const storagePath = urlParts.slice(bucketIndex + 1).join('/');
-            logInfo('DELETE', `Attempting to delete from S3: ${storagePath}`);
-            
-            const { error: storageError } = await supabase.storage
-              .from(STORAGE_BUCKET)
-              .remove([storagePath]);
-
-            if (storageError) {
-              logWarn('DELETE', `Error deleting from storage: ${storageError.message}`);
-            } else {
-              logInfo('DELETE', `Deleted from S3 storage: ${storagePath}`);
+        if (screenshot) {
+          // Delete from S3
+          if (screenshot.screenshot_data) {
+            try {
+              const urlParts = screenshot.screenshot_data.split('/');
+              const bucketIndex = urlParts.indexOf(STORAGE_BUCKET);
+              if (bucketIndex !== -1 && bucketIndex < urlParts.length - 1) {
+                const storagePath = urlParts.slice(bucketIndex + 1).join('/');
+                await supabase.storage
+                  .from(STORAGE_BUCKET)
+                  .remove([storagePath]);
+                logInfo('DELETE', `Deleted from S3 storage: ${storagePath}`);
+              }
+            } catch (e) {
+              logError('DELETE', `Error parsing storage path: ${e.message}`, e);
             }
           }
-        } catch (e) {
-          logError('DELETE', `Error parsing storage path: ${e.message}`, e);
+          // Delete from DB
+          await supabase
+            .from('screenshots')
+            .delete()
+            .eq('id', screenshot.id);
+          logInfo('DELETE', `Deleted database record ID: ${screenshot.id}`);
+        } else {
+          logWarn('DELETE', `No database record found for: ${filename}`);
         }
       }
-
-      // Step 7: DELETE DATABASE RECORD
-      const { error: deleteError } = await supabase
-        .from('screenshots')
-        .delete()
-        .eq('id', screenshot.id);
-
-      if (deleteError) {
-        logError('DELETE', `Error deleting from database: ${deleteError.message}`, deleteError);
-        throw deleteError;
-      }
-
-      logInfo('DELETE', `Deleted database record ID: ${screenshot.id}`);
     }
 
-    // Step 8: Broadcast deletion event to main window so UI refreshes
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (window !== toastWin && !window.isDestroyed()) {
-        window.webContents.send('screenshot-deleted', { filePath, filename });
-      }
+    // Step 4: Broadcast to renderer
+    BrowserWindow.getAllWindows().forEach(window => {
+      window.webContents.send('screenshot-deleted', { filePath, filename });
     });
-    logInfo('DELETE', 'Broadcasted screenshot-deleted event to main window');
 
-    // Step 9: Close toast window
+    // Step 5: Optionally close toast window if open
     if (toastWin && !toastWin.isDestroyed()) {
       toastWin.close();
       toastWin = null;
     }
 
-    return { 
-      success: true, 
-      message: 'Screenshot deleted from disk, storage, and database',
+    return {
+      success: true,
+      message: 'Screenshot deleted from disk/storage/database',
       filename
     };
-    
+
   } catch (error) {
     logError('DELETE', `Error: ${error.message}`, error);
-    return { 
-      success: false, 
+    return {
+      success: false,
       message: error.message || 'Delete failed'
     };
   }
 });
-
-
 
 
 ipcMain.handle('get-system-idle-time', () => {
@@ -1327,32 +926,9 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           logInfo('BG-UPLOAD', `Display ${idx + 1}: ${display.size.width}x${display.size.height} at (${display.bounds.x}, ${display.bounds.y}), scale: ${display.scaleFactor}`);
         });
         
-        // On macOS, check permissions before attempting capture
-        if (process.platform === 'darwin') {
-          const permissionCheck = await checkScreenRecordingPermission();
-          if (!permissionCheck.granted) {
-            logWarn('BG-UPLOAD', '⚠️ Screen recording permission not granted - cannot capture screenshots');
-            logWarn('BG-UPLOAD', `   Error: ${permissionCheck.error || 'Permission denied'}`);
-            
-            // Show permission dialog (but only once per session to avoid spam)
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('screenshot-permission-denied', {
-                message: 'Screen recording permission is required to capture screenshots. Please grant permission in System Settings.',
-                timestamp: Date.now()
-              });
-            }
-            
-            // Don't show dialog on every failed attempt - only log
-            // User can manually check permissions via System Settings
-            scheduleNextScreenshot();
-            return;
-          }
-        }
-        
         const sources = await desktopCapturer.getSources({
           types: ['screen'],
-          thumbnailSize: { width: maxWidth, height: maxHeight },
-          fetchWindowIcons: false
+          thumbnailSize: { width: maxWidth, height: maxHeight }
         });
         
         logInfo('BG-UPLOAD', `Received ${sources?.length || 0} screen source(s) from desktopCapturer`);
@@ -1468,20 +1044,10 @@ ipcMain.handle('get-timer-active', () => {
 // capture-screen (returns base64 screenshot of primary screen)
 ipcMain.handle('capture-screen', async () => {
   try {
-    // On macOS, check permissions before attempting capture
-    if (process.platform === 'darwin') {
-      const permissionCheck = await checkScreenRecordingPermission();
-      if (!permissionCheck.granted) {
-        logWarn('IPC', '[capture-screen] ⚠️ Screen recording permission not granted');
-        return null;
-      }
-    }
-    
     const { width, height } = screen.getPrimaryDisplay().size;
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width, height },
-      fetchWindowIcons: false
     });
     if (!sources || sources.length === 0) return null;
     return sources[0].thumbnail.toDataURL('image/png');
@@ -1492,7 +1058,6 @@ ipcMain.handle('capture-screen', async () => {
 });
 
 // capture-all-screens (returns array of screenshots from all displays)
-// Returns: { screenshots: array, error: string|null, permissionGranted: boolean }
 ipcMain.handle('capture-all-screens', async () => {
   try {
     const displays = screen.getAllDisplays();
@@ -1503,101 +1068,15 @@ ipcMain.handle('capture-all-screens', async () => {
       logInfo('IPC', `[capture-all-screens] Display ${idx + 1}: ${display.size.width}x${display.size.height}`);
     });
     
-    let permissionGranted = true;
-    let permissionCheckSources = null;
-    
-    // On macOS, check permissions before attempting capture
-    // Note: We'll still try to capture even if permission check fails, as sometimes
-    // the check can fail even when permissions are actually granted
-    if (process.platform === 'darwin') {
-      const permissionCheck = await checkScreenRecordingPermission();
-      permissionGranted = permissionCheck.granted;
-      permissionCheckSources = permissionCheck.sources; // Save sources from permission check
-      
-      if (!permissionCheck.granted) {
-        logWarn('IPC', '[capture-all-screens] ⚠️ Permission check failed, but will attempt capture anyway');
-        logWarn('IPC', `[capture-all-screens] Permission check error: ${permissionCheck.error || 'Unknown'}`);
-        logWarn('IPC', '[capture-all-screens] Note: Sometimes getSources() works even if permission check fails');
-        // Don't return early - try to capture anyway as a workaround
-      } else {
-        logInfo('IPC', `[capture-all-screens] ✅ Permission check passed (found ${permissionCheckSources?.length || 0} source(s) during check)`);
-      }
-    }
-    
     // Get all screen sources
     const allDisplays = screen.getAllDisplays();
     const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
     const maxHeight = Math.max(...allDisplays.map(d => d.size.height));
     
-    logInfo('IPC', `[capture-all-screens] Requesting sources with thumbnail size: ${maxWidth}x${maxHeight}`);
-    logInfo('IPC', `[capture-all-screens] App path: ${app.getAppPath()}`);
-    logInfo('IPC', `[capture-all-screens] App name: ${app.getName()}`);
-    logInfo('IPC', `[capture-all-screens] Is packaged: ${app.isPackaged}`);
-    
-    // Try with full size first
-    let sources = null;
-    let lastError = null;
-    
-    // On macOS, if we got sources from permission check, try using those first (but with proper size)
-    if (process.platform === 'darwin' && permissionCheckSources && permissionCheckSources.length > 0) {
-      logInfo('IPC', '[capture-all-screens] Attempting to use sources from permission check, but requesting full-size thumbnails...');
-    }
-    
-    // Try multiple approaches to get sources
-    const approaches = [
-      { width: maxWidth, height: maxHeight, name: 'full size' },
-      { width: 2560, height: 1440, name: '2560x1440' },
-      { width: 1920, height: 1080, name: '1920x1080' },
-      { width: 1280, height: 720, name: '1280x720' },
-      { width: 640, height: 480, name: '640x480' }
-    ];
-    
-    let captureSuccess = false;
-    for (const approach of approaches) {
-      try {
-        logInfo('IPC', `[capture-all-screens] Trying approach: ${approach.name} (${approach.width}x${approach.height})...`);
-        sources = await desktopCapturer.getSources({
-          types: ['screen'],
-          thumbnailSize: { width: approach.width, height: approach.height },
-          fetchWindowIcons: false
-        });
-        
-        if (sources && sources.length > 0) {
-          logInfo('IPC', `[capture-all-screens] ✅ Successfully got ${sources.length} source(s) with ${approach.name}`);
-          captureSuccess = true;
-          break;
-        } else {
-          logWarn('IPC', `[capture-all-screens] Got empty array with ${approach.name}, trying next approach...`);
-        }
-      } catch (getSourcesError) {
-        const errorMsg = getSourcesError?.message || getSourcesError?.toString() || 'Unknown error';
-        lastError = getSourcesError;
-        logWarn('IPC', `[capture-all-screens] ${approach.name} failed:`, errorMsg);
-        logWarn('IPC', `[capture-all-screens] Error details:`, JSON.stringify(getSourcesError, Object.getOwnPropertyNames(getSourcesError)));
-        continue;
-      }
-    }
-    
-    if (!captureSuccess) {
-      const errorMsg = lastError?.message || lastError?.toString() || 'All capture attempts failed';
-      logError('IPC', '[capture-all-screens] ❌ All capture approaches failed');
-      logError('IPC', `[capture-all-screens] Last error: ${errorMsg}`);
-      
-      // Provide helpful troubleshooting info
-      let errorMessage = `Failed to capture screens after trying ${approaches.length} different approaches. `;
-      errorMessage += `Last error: ${errorMsg}. `;
-      errorMessage += `Please verify:\n`;
-      errorMessage += `1. Screen recording permission is enabled in System Settings → Privacy & Security → Screen Recording\n`;
-      errorMessage += `2. The app is listed and enabled in the Screen Recording list\n`;
-      errorMessage += `3. You have restarted the app after granting permission\n`;
-      errorMessage += `4. The app bundle identifier matches (dev vs packaged apps have different identifiers)`;
-      
-      return {
-        screenshots: [],
-        error: errorMessage,
-        permissionGranted
-      };
-    }
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: maxWidth, height: maxHeight },
+    });
     
     logInfo('IPC', `[capture-all-screens] Received ${sources?.length || 0} source(s) from desktopCapturer`);
     
@@ -1607,90 +1086,27 @@ ipcMain.handle('capture-all-screens', async () => {
       });
     } else {
       logWarn('IPC', '[capture-all-screens] ⚠️ No screen sources found! Check macOS screen recording permissions.');
-      return {
-        screenshots: [],
-        error: 'No screen sources returned. This usually means screen recording permission is not granted. Please check System Settings → Privacy & Security → Screen Recording and ensure the app is enabled.',
-        permissionGranted
-      };
+    }
+    
+    if (!sources || sources.length === 0) {
+      logWarn('IPC', 'No screen sources found');
+      return [];
     }
     
     // Map each source to a screenshot object with dataURL and name
     for (const source of sources) {
-      try {
-        screenshots.push({
-          dataURL: source.thumbnail.toDataURL('image/png'),
-          name: source.name || `Screen ${screenshots.length + 1}`
-        });
-      } catch (thumbnailError) {
-        logError('IPC', `[capture-all-screens] Error converting thumbnail for source ${source.id}:`, thumbnailError);
-      }
+      screenshots.push({
+        dataURL: source.thumbnail.toDataURL('image/png'),
+        name: source.name || `Screen ${screenshots.length + 1}`
+      });
     }
     
-    if (screenshots.length === 0) {
-      return {
-        screenshots: [],
-        error: 'Failed to convert screen thumbnails to images. Please try restarting the app.',
-        permissionGranted
-      };
-    }
-    
-    logInfo('IPC', `✅ Captured ${screenshots.length} screen(s) successfully`);
-    return {
-      screenshots,
-      error: null,
-      permissionGranted
-    };
+    logInfo('IPC', `Captured ${screenshots.length} screen(s)`);
+    return screenshots;
   } catch (e) {
-    logError('IPC', 'capture-all-screens failed with exception:', e);
-    return {
-      screenshots: [],
-      error: `Unexpected error: ${e.message || 'Unknown error'}. Please check the console logs for details.`,
-      permissionGranted: false
-    };
+    logError('IPC', 'capture-all-screens failed', e);
+    return [];
   }
-});
-
-// Check screen recording permission (for renderer to call)
-ipcMain.handle('check-screen-permission', async () => {
-  if (process.platform !== 'darwin') {
-    return { granted: true, message: 'Not required on this platform' };
-  }
-  
-  // Log app information for debugging
-  const appInfo = {
-    name: app.getName(),
-    version: app.getVersion(),
-    path: app.getAppPath(),
-    isPackaged: app.isPackaged,
-    bundleId: app.isPackaged ? app.getName() : 'dev-mode'
-  };
-  
-  logInfo('Permissions', 'App info for permission check:', appInfo);
-  
-  const result = await checkScreenRecordingPermission();
-  
-  const response = {
-    granted: result.granted,
-    error: result.error,
-    sourceCount: result.sources?.length || 0,
-    appInfo: appInfo,
-    message: result.granted 
-      ? `Permission granted - ${result.sources?.length || 0} screen(s) available`
-      : `Permission denied: ${result.error || 'Please grant permission in System Settings → Privacy & Security → Screen Recording'}`
-  };
-  
-  // Add troubleshooting info if permission denied
-  if (!result.granted) {
-    response.troubleshooting = {
-      appName: appInfo.name,
-      isPackaged: appInfo.isPackaged,
-      note: appInfo.isPackaged 
-        ? 'Make sure the packaged app (not dev version) is enabled in Screen Recording settings'
-        : 'Make sure the dev version is enabled in Screen Recording settings. Note: Dev and packaged apps have different identifiers.'
-    };
-  }
-  
-  return response;
 });
 
 // Diagnostic handler to check screen capture capabilities
@@ -1700,7 +1116,6 @@ ipcMain.handle('diagnose-screen-capture', async () => {
     displays: [],
     sources: [],
     permissions: 'unknown',
-    permissionDetails: null,
     timestamp: new Date().toISOString()
   };
   
@@ -1715,44 +1130,13 @@ ipcMain.handle('diagnose-screen-capture', async () => {
       primary: display === screen.getPrimaryDisplay()
     }));
     
-    // On macOS, use the improved permission check
-    if (process.platform === 'darwin') {
-      const permissionResult = await checkScreenRecordingPermission();
-      diagnostics.permissionDetails = {
-        granted: permissionResult.granted,
-        error: permissionResult.error,
-        sourceCount: permissionResult.sources?.length || 0
-      };
-      
-      if (!permissionResult.granted) {
-        diagnostics.permissions = 'denied';
-        diagnostics.sources = [];
-        return diagnostics;
-      } else {
-        diagnostics.permissions = permissionResult.sources.length < displays.length ? 'partial' : 'granted';
-        // Use sources from permission check if available
-        if (permissionResult.sources && permissionResult.sources.length > 0) {
-          diagnostics.sources = permissionResult.sources.map((source, idx) => ({
-            index: idx + 1,
-            id: source.id,
-            name: source.name,
-            thumbnailSize: source.thumbnail?.getSize()
-          }));
-          return diagnostics;
-        }
-      }
-    } else {
-      diagnostics.permissions = 'not_applicable';
-    }
-    
-    // Try to get screen sources (fallback for non-macOS or if permission check didn't return sources)
+    // Try to get screen sources
     const maxWidth = Math.max(...displays.map(d => d.size.width));
     const maxHeight = Math.max(...displays.map(d => d.size.height));
     
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
-      thumbnailSize: { width: maxWidth, height: maxHeight },
-      fetchWindowIcons: false
+      thumbnailSize: { width: maxWidth, height: maxHeight }
     });
     
     diagnostics.sources = (sources || []).map((source, idx) => ({
@@ -1771,6 +1155,8 @@ ipcMain.handle('diagnose-screen-capture', async () => {
       } else {
         diagnostics.permissions = 'granted';
       }
+    } else {
+      diagnostics.permissions = 'not_applicable';
     }
     
     logInfo('DIAGNOSTIC', JSON.stringify(diagnostics, null, 2));

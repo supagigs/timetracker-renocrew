@@ -169,6 +169,7 @@ export default async function ScreenshotsPage({
                 className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                 defaultValue={dateRange.start}
                 max={dateRange.end}
+                suppressHydrationWarning
               />
             </div>
             <div>
@@ -182,6 +183,7 @@ export default async function ScreenshotsPage({
                 className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                 defaultValue={dateRange.end}
                 min={dateRange.start}
+                suppressHydrationWarning
               />
             </div>
             {isClient && requestedFreelancer ? (
@@ -189,7 +191,8 @@ export default async function ScreenshotsPage({
             ) : null}
             <button
               type="submit"
-              className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
+              className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90" 
+              suppressHydrationWarning
             >
               Apply Filters
             </button>

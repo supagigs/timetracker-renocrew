@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter , useSearchParams } from "next/navigation";
 
 import { createSupabaseBrowserClient } from "@/lib/supabaseBrowser";
 import { setUserSessionState } from "@/lib/userSessions";
@@ -15,6 +15,7 @@ type StoredUser = {
 export default function LogoutPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [status, setStatus] = useState<"pending" | "complete">("pending");
   const origin = searchParams.get("origin") ?? "manual";
 
@@ -40,8 +41,21 @@ export default function LogoutPage() {
         }
         if (active) {
           setStatus("complete");
+          //redirecting to login page
+          setTimeout(()=> {
+            router.push("/");
+          }, 2000); //adding delay for test
         }
       }
+      //If want to redirect to login with latest logout email also need to make changes in homepage for the same
+      // if (active) {
+      //   setStatus("complete");
+      //   setTimeout(() => {
+      //     // Extract email before removing from storage
+      //     const emailToRetain = stored?.email;
+      //     router.push(emailToRetain ? `/?email=${encodeURIComponent(emailToRetain)}` : "/");
+      //   }, 2000);
+      // }
     };
 
     performLogout();
@@ -49,7 +63,7 @@ export default function LogoutPage() {
     return () => {
       active = false;
     };
-  }, [supabase]);
+  }, [supabase, router]);
 
   const headline =
     origin === "app"
@@ -69,6 +83,10 @@ export default function LogoutPage() {
         {status === "pending" && (
           <p className="mt-6 text-xs text-muted-foreground">
             Finalising sign out…
+          </p>
+        )}{status === "complete" && (
+          <p className="mt-6 text-xs text-muted-foreground">
+            Redirecting to login...
           </p>
         )}
       </div>

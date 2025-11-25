@@ -54,7 +54,7 @@ export function DashboardHeader({
               <div className="h-px bg-border/70" />
               <a
                 href={logoutHref}
-                className="mt-3 flex items-center gap-2 rounded-lg px-3 py-2 font-medium text-destructive transition hover:bg-destructive/10"
+                className="mt-3 flex items-center gap-2 rounded-lg px-3 py-2 font-medium text-white transition bg-red-600"
               >
                 <LogOut size={16} />
                 <span>Logout</span>

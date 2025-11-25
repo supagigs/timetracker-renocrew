@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard";
 import { createSupabaseBrowserClient } from "@/lib/supabaseBrowser";
@@ -118,6 +118,16 @@ export default function Home() {
     } finally {
       setLoginPending(false);
     }
+        // for redirecting and fetching email for login from storage
+        // const searchParams = useSearchParams();
+        // const emailFromQuery = searchParams.get("email");
+
+        // useEffect(() => {
+        //   if (emailFromQuery) {
+        //     setLoginEmail(emailFromQuery);
+        //   }
+        // }, [emailFromQuery]);
+
   };
 
   return (
@@ -148,7 +158,7 @@ export default function Home() {
         </div>
 
         <div className="mt-8 flex justify-center">
-          <form className="w-full max-w-xl space-y-4 rounded-xl border border-border bg-card p-6 text-left shadow-sm" onSubmit={handleLogin}>
+          <form className="w-full max-w-xl space-y-4 rounded-xl border border-border bg-card p-6 text-left shadow-sm" onSubmit={handleLogin} suppressHydrationWarning>
             <label className="block">
               <span className="text-sm font-medium text-foreground">Email address</span>
               <input
@@ -158,6 +168,7 @@ export default function Home() {
                 className="mt-1 w-full rounded-lg border border-border bg-white px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
                 placeholder="you@example.com"
                 autoComplete="email"
+                suppressHydrationWarning
               />
             </label>
 

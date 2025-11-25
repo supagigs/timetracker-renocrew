@@ -14,9 +14,9 @@ const OPTIONS: Array<{ label: string; seconds: number }> = [
 ];
 
 const DELETE_OPTIONS: Array<{ label: string; days: number }> = [
-  { label: "30 days", days: 30 },
-  { label: "60 days", days: 60 },
-  { label: "90 days", days: 90 },
+  { label: "1 days", days: 1 },
+  { label: "2 days", days: 2 },
+  { label: "3 days", days: 3 },
 ];
 
 type ScreenshotIntervalFormProps = {
