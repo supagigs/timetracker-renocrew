@@ -307,18 +307,106 @@ async function requestScreenRecordingPermission(showDialog = true) {
   return permissionResult;
 }
 
+// Convert Windows executable names to friendly application names
+function getFriendlyAppName(executableName) {
+  if (!executableName) return null;
+  
+  // Remove .exe extension if present
+  const nameWithoutExt = executableName.replace(/\.exe$/i, '').trim();
+  
+  // Map common executable names to friendly names
+  const appNameMap = {
+    // Browsers
+    'chrome': 'Google Chrome',
+    'msedge': 'Microsoft Edge',
+    'firefox': 'Mozilla Firefox',
+    'brave': 'Brave Browser',
+    'opera': 'Opera',
+    'safari': 'Safari',
+    
+    // Code Editors
+    'code': 'Visual Studio Code',
+    'devenv': 'Visual Studio',
+    'idea64': 'IntelliJ IDEA',
+    'pycharm64': 'PyCharm',
+    'webstorm64': 'WebStorm',
+    'atom': 'Atom',
+    'sublime_text': 'Sublime Text',
+    'notepad++': 'Notepad++',
+    
+    // Git/Version Control
+    'githubdesktop': 'GitHub Desktop',
+    'gitkraken': 'GitKraken',
+    'sourcetree': 'SourceTree',
+    
+    // Terminals
+    'windows terminal': 'Windows Terminal',
+    'wt': 'Windows Terminal',
+    'powershell': 'PowerShell',
+    'cmd': 'Command Prompt',
+    'wsl': 'WSL',
+    
+    // Office
+    'winword': 'Microsoft Word',
+    'excel': 'Microsoft Excel',
+    'powerpnt': 'Microsoft PowerPoint',
+    'outlook': 'Microsoft Outlook',
+    'onenote': 'Microsoft OneNote',
+    
+    // Communication
+    'teams': 'Microsoft Teams',
+    'slack': 'Slack',
+    'discord': 'Discord',
+    'zoom': 'Zoom',
+    
+    // System
+    'explorer': 'File Explorer',
+    'notepad': 'Notepad',
+    'calc': 'Calculator',
+    'mspaint': 'Paint',
+    
+    // Other common apps
+    'spotify': 'Spotify',
+    'vlc': 'VLC Media Player',
+    'photoshop': 'Adobe Photoshop',
+    'illustrator': 'Adobe Illustrator',
+    'acrobat': 'Adobe Acrobat',
+    'figma': 'Figma',
+    'sketch': 'Sketch',
+  };
+  
+  const nameLower = nameWithoutExt.toLowerCase();
+  
+  // Check exact match first
+  if (appNameMap[nameLower]) {
+    return appNameMap[nameLower];
+  }
+  
+  // Check partial matches (e.g., "Code.exe" -> "code" -> "Visual Studio Code")
+  for (const [key, value] of Object.entries(appNameMap)) {
+    if (nameLower.includes(key) || key.includes(nameLower)) {
+      return value;
+    }
+  }
+  
+  // If no mapping found, return the name without .exe but with proper capitalization
+  // Convert "githubdesktop" to "GitHub Desktop" style
+  return nameWithoutExt
+    .replace(/([a-z])([A-Z])/g, '$1 $2') // Add space before capital letters
+    .replace(/\b\w/g, l => l.toUpperCase()); // Capitalize first letter of each word
+}
+
 async function getActiveAppName() {
   try {
-    // Check if our own window is focused - if so, skip detection
-    // as we want to track what the user is actually working on, not our own app
-    if (mainWindow && mainWindow.isFocused()) {
-      // Return null to indicate we can't determine the active app
-      // The fallback in the caller will handle this appropriately
-      return null;
-    }
-    
     // load module if not loaded
-    if (!activeWindowModule) activeWindowModule = await import('active-win');
+    if (!activeWindowModule) {
+      try {
+        activeWindowModule = await import('active-win');
+      } catch (importError) {
+        logError('ActiveWindow', 'Failed to import active-win module:', importError.message);
+        return null;
+      }
+    }
 
     // handle different exports across versions:
     //  - newer: activeWindow()
@@ -331,6 +419,7 @@ async function getActiveAppName() {
 
     if (typeof fn !== 'function') {
       logWarn('ActiveWindow', 'active-win export not a function', typeof fn);
+      logWarn('ActiveWindow', 'Module structure:', Object.keys(activeWindowModule || {}));
       return null;
     }
 
@@ -340,29 +429,81 @@ async function getActiveAppName() {
       return null;
     }
     
+    // Log full result for debugging (but only in dev mode to avoid spam)
+    if (!app.isPackaged) {
+      logInfo('ActiveWindow', `Full result: ${JSON.stringify(result, null, 2)}`);
+    }
+    
     // Get the app's own name to filter it out
     const appName = app.getName();
     const appNameLower = appName.toLowerCase();
     
-    // On macOS, prefer owner.name (application name) over title (window title)
-    // as the window title might be the app's own window
-    let ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
-    let windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
+    // Extract owner name (application name) and window title
+    // owner.name is the actual application (e.g., "Google Chrome", "Visual Studio Code")
+    // title is the window/tab title (e.g., "GitHub - Your Repo", "New Tab")
+    let ownerName = null;
+    let windowTitle = null;
+    let processName = null;
     
-    // Debug logging on macOS to help diagnose issues
-    if (process.platform === 'darwin') {
-      logInfo('ActiveWindow', `Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, app: ${appName}`);
+    // Try different possible structures from active-win
+    if (result.owner) {
+      ownerName = typeof result.owner.name === 'string' ? result.owner.name.trim() : null;
+      processName = typeof result.owner.processName === 'string' ? result.owner.processName.trim() : null;
+    }
+    if (result.name && !ownerName) {
+      // Some versions might have name directly
+      ownerName = typeof result.name === 'string' ? result.name.trim() : null;
+    }
+    if (result.processName && !processName) {
+      processName = typeof result.processName === 'string' ? result.processName.trim() : null;
+    }
+    if (result.title) {
+      windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
     }
     
-    // Filter out the app's own name
+    // On Windows, convert executable names to friendly names
+    if (process.platform === 'win32') {
+      // Try to get friendly name from process name or owner name
+      if (processName) {
+        const friendlyFromProcess = getFriendlyAppName(processName);
+        if (friendlyFromProcess) {
+          ownerName = friendlyFromProcess;
+          logInfo('ActiveWindow', `Converted process name "${processName}" to friendly name: "${ownerName}"`);
+        }
+      }
+      if (ownerName && ownerName.endsWith('.exe')) {
+        const friendlyFromOwner = getFriendlyAppName(ownerName);
+        if (friendlyFromOwner) {
+          logInfo('ActiveWindow', `Converted owner name "${ownerName}" to friendly name: "${friendlyFromOwner}"`);
+          ownerName = friendlyFromOwner;
+        }
+      }
+    }
+    
+    // Debug logging
+    logInfo('ActiveWindow', `Platform: ${process.platform}, Owner: ${ownerName || 'null'}, Process: ${processName || 'null'}, Title: ${windowTitle || 'null'}, Our App: ${appName}`);
+    
+    // Filter out the app's own name (exact match)
+    // But keep window titles even if they match - they might be useful context
     if (ownerName && ownerName.toLowerCase() === appNameLower) {
+      logInfo('ActiveWindow', `Filtered out owner name (matches our app): ${ownerName}`);
       ownerName = null;
     }
+    // Don't filter window title if it matches app name - it might still be useful
+    // Only filter if it's clearly our own app window
     if (windowTitle && windowTitle.toLowerCase() === appNameLower) {
-      windowTitle = null;
+      // Check if this is likely our own app window (e.g., "Time Tracker" window)
+      // But allow it if it's something like "Chrome - Time Tracker" (a website)
+      if (ownerName && ownerName.toLowerCase() === appNameLower) {
+        logInfo('ActiveWindow', `Filtered out window title (matches our app and owner): ${windowTitle}`);
+        windowTitle = null;
+      } else {
+        logInfo('ActiveWindow', `Keeping window title even though it matches app name (might be useful): ${windowTitle}`);
+      }
     }
     
-    // Also filter out common variations
+    // Also filter out common variations (but be less aggressive)
+    // Only filter owner name, never filter window titles - they're always useful context
     const appNameVariations = [
       'time tracker',
       'supagigs time tracker',
@@ -372,27 +513,80 @@ async function getActiveAppName() {
     
     if (ownerName) {
       const ownerNameLower = ownerName.toLowerCase();
-      if (appNameVariations.some(variation => ownerNameLower.includes(variation))) {
+      // Only filter if it's an exact match or clearly our app
+      if (appNameVariations.some(variation => ownerNameLower === variation || ownerNameLower.includes('time tracker'))) {
+        logInfo('ActiveWindow', `Filtered out owner name (variation match): ${ownerName}`);
         ownerName = null;
       }
     }
     
-    if (windowTitle) {
-      const windowTitleLower = windowTitle.toLowerCase();
-      if (appNameVariations.some(variation => windowTitleLower.includes(variation))) {
-        windowTitle = null;
+    // Never filter window titles - they provide valuable context even if they contain app name
+    // Window titles like "Chrome - Time Tracker" or "VS Code - project-name" are always useful
+    
+    // Combine app name with window/tab title for more context
+    // Format: "App Name - Window Title" or just "App Name" if no title
+    let combinedAppName = null;
+    
+    if (ownerName && windowTitle) {
+      // Both app name and window title available
+      const ownerNameLower = ownerName.toLowerCase().trim();
+      const windowTitleLower = windowTitle.toLowerCase().trim();
+      
+      // Only filter out truly redundant/generic titles
+      // Be very permissive - we want to show tab titles, project names, file names, etc.
+      const trulyRedundantTitles = [
+        'new tab',
+        'untitled',
+        'about:blank'
+      ];
+      
+      // Check if title is exactly one of the redundant titles
+      const isTrulyRedundant = trulyRedundantTitles.includes(windowTitleLower);
+      
+      // Only exclude if title is exactly the app name (not if it contains it)
+      // This allows titles like "Chrome DevTools" or "VS Code Settings" to show
+      const isExactAppName = windowTitleLower === ownerNameLower;
+      
+      // Always combine if title exists and is not redundant
+      // This ensures we get tab titles, project names, file names, etc.
+      if (!isTrulyRedundant && !isExactAppName && windowTitle.length > 0) {
+        // Limit title length to avoid very long combined names
+        const maxTitleLength = 70;
+        const truncatedTitle = windowTitle.length > maxTitleLength 
+          ? windowTitle.substring(0, maxTitleLength) + '...'
+          : windowTitle;
+        combinedAppName = `${ownerName} - ${truncatedTitle}`;
+        logInfo('ActiveWindow', `✅ Combined: "${ownerName}" + "${windowTitle}" = "${combinedAppName}"`);
+      } else {
+        combinedAppName = ownerName;
+        if (isTrulyRedundant) {
+          logInfo('ActiveWindow', `Title filtered as redundant: "${windowTitle}", using app name only`);
+        } else if (isExactAppName) {
+          logInfo('ActiveWindow', `Title is exact app name: "${windowTitle}", using app name only`);
+        }
       }
+    } else if (ownerName) {
+      // Only app name available
+      combinedAppName = ownerName;
+    } else if (windowTitle) {
+      // Only window title available (fallback)
+      // Limit length for standalone titles too
+      const maxTitleLength = 80;
+      combinedAppName = windowTitle.length > maxTitleLength 
+        ? windowTitle.substring(0, maxTitleLength) + '...'
+        : windowTitle;
     }
     
-    // On macOS, prefer owner.name (the actual application) over window title
-    // On other platforms, prefer window title if available
-    if (process.platform === 'darwin') {
-      return ownerName || windowTitle || null;
+    if (combinedAppName) {
+      logInfo('ActiveWindow', `✅ Detected: App="${ownerName || 'null'}", Title="${windowTitle || 'null'}", Combined="${combinedAppName}"`);
     } else {
-      return windowTitle || ownerName || null;
+      logWarn('ActiveWindow', '⚠️ No app name detected after filtering');
     }
+    
+    return combinedAppName;
   } catch (error) {
-    logWarn('ActiveWindow', 'Unable to resolve active window', error);
+    logError('ActiveWindow', 'Unable to resolve active window:', error);
+    logError('ActiveWindow', 'Error stack:', error.stack);
     return null;
   }
 }
@@ -605,6 +799,11 @@ async function addScreenshotToBatch(uploadData) {
   const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel, screenIndex, screenName } = uploadData;
   
   try {
+    // Capture app name NOW (when screenshot is taken), not later when batch is processed
+    // This ensures each screenshot gets the correct app name for when it was actually captured
+    const appName = await getActiveAppName() || 'Unknown';
+    logInfo(contextLabel, `Captured app name at screenshot time: ${appName}`);
+    
     // Compress and save locally
     let jpegBuffer;
     try {
@@ -644,6 +843,7 @@ async function addScreenshotToBatch(uploadData) {
       filePath,
       jpegBuffer,
       jpegFilename,
+      appName, // Store the app name captured at screenshot time
       addedAt: Date.now()
     };
     
@@ -745,9 +945,10 @@ async function processScreenshotBatch() {
         }
         
         // Insert into database
-        // Don't fallback to app.getName() as that would show our own app name
-        // Use "Unknown" if we can't determine the active app
-        const appName = await getActiveAppName() || 'Unknown';
+        // Use the app name that was captured when the screenshot was taken (stored in batch item)
+        // This ensures each screenshot gets the correct app name for when it was actually captured
+        const appName = item.appName || 'Unknown';
+        logInfo(item.contextLabel, `Using app name from screenshot time: ${appName}`);
         await insertScreenshotToDatabase(supabase, item.userEmail, item.sessionId, publicUrl, item.timestamp, appName, item.isIdle);
         
         // Broadcast screenshot captured event
