@@ -235,13 +235,27 @@ async function checkScreenRecordingPermission(retryCount = 0) {
   } catch (error) {
     // Retry on error
     if (retryCount < maxRetries) {
-      logWarn('Permissions', `Error checking permission, retrying in 500ms... (attempt ${retryCount + 1}/${maxRetries + 1}):`, error.message);
+      const errorMsg = error?.message || error?.toString() || 'Unknown error';
+      logWarn('Permissions', `Error checking permission, retrying in 500ms... (attempt ${retryCount + 1}/${maxRetries + 1}):`, errorMsg);
+      logWarn('Permissions', 'Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
       await new Promise(resolve => setTimeout(resolve, 500));
       return await checkScreenRecordingPermission(retryCount + 1);
     }
     
-    logError('Permissions', 'Error checking screen recording permission:', error);
-    return { granted: false, sources: [], error: error.message || 'Unknown error' };
+    const errorMsg = error?.message || error?.toString() || 'Unknown error';
+    const errorStack = error?.stack || 'No stack trace';
+    logError('Permissions', 'Error checking screen recording permission:', errorMsg);
+    logError('Permissions', 'Error stack:', errorStack);
+    logError('Permissions', 'Error type:', error?.constructor?.name || typeof error);
+    logError('Permissions', 'Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+    
+    // Provide more helpful error message
+    let errorDescription = errorMsg;
+    if (errorMsg === 'Unknown error' || !errorMsg) {
+      errorDescription = 'Failed to check screen recording permission. This may happen if the app needs to be restarted after granting permission, or if there is a mismatch between the app identifier and the permission grant.';
+    }
+    
+    return { granted: false, sources: [], error: errorDescription };
   }
 }
 
@@ -397,46 +411,121 @@ function getSupabaseClient() {
   }
 }
 
+// Fallback compression using canvas (when sharp is not available)
+async function compressToJpegBufferFallback(dataUrl, targetSizeKB = 50) {
+  const base64 = dataUrl.split(',')[1];
+  const inputBuffer = Buffer.from(base64, 'base64');
+  const UPLOAD_WIDTH = 800;
+  const TARGET_SIZE_BYTES = targetSizeKB * 1024;
+  
+  // Try to use canvas for compression
+  let canvas = null;
+  try {
+    const { createCanvas, loadImage } = require('canvas');
+    canvas = { createCanvas, loadImage };
+  } catch (canvasError) {
+    logWarn('Compress', 'Canvas module not available:', canvasError.message);
+    // Last resort: return original buffer
+    logWarn('Compress', 'Using original image buffer without compression (no compression libraries available)');
+    return inputBuffer;
+  }
+  
+  try {
+    // Load image from buffer
+    const img = await canvas.loadImage(inputBuffer);
+    
+    // Calculate dimensions maintaining aspect ratio
+    let width = img.width;
+    let height = img.height;
+    if (width > UPLOAD_WIDTH) {
+      height = Math.floor((height * UPLOAD_WIDTH) / width);
+      width = UPLOAD_WIDTH;
+    }
+    
+    // Create canvas and draw resized image
+    const canvasInstance = canvas.createCanvas(width, height);
+    const ctx = canvasInstance.getContext('2d');
+    ctx.drawImage(img, 0, 0, width, height);
+    
+    // Convert to JPEG buffer with quality adjustment
+    let quality = 0.7;
+    let jpegBuffer = canvasInstance.toBuffer('image/jpeg', { quality });
+    
+    // Reduce quality if still too large
+    let attempts = 0;
+    while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5 && quality > 0.3) {
+      attempts++;
+      quality -= 0.1;
+      jpegBuffer = canvasInstance.toBuffer('image/jpeg', { quality });
+    }
+    
+    logInfo('Compress', `JPEG size (canvas fallback): ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
+    return jpegBuffer;
+  } catch (error) {
+    logError('Compress', 'Canvas fallback compression failed:', error.message);
+    // Last resort: return original buffer (will be larger but at least it works)
+    logWarn('Compress', 'Using original image buffer without compression');
+    return inputBuffer;
+  }
+}
+
 async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
-  const sharp = require('sharp');
   const base64 = dataUrl.split(',')[1];
   const inputBuffer = Buffer.from(base64, 'base64');
   const UPLOAD_WIDTH = 800;
   const JPEG_QUALITY = 70;
   const TARGET_SIZE_BYTES = targetSizeKB * 1024;
   
-  let quality = JPEG_QUALITY;
-  let jpegBuffer = await sharp(inputBuffer)  // Changed const to let
-    .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
-    .jpeg({ quality: quality, mozjpeg: true })
-    .toBuffer();
+  // Try to use sharp, fall back to canvas if it fails
+  let sharp = null;
+  try {
+    sharp = require('sharp');
+    // Test if sharp is actually working
+    await sharp(inputBuffer).metadata();
+  } catch (sharpError) {
+    logWarn('Compress', 'Sharp module not available or failed to load:', sharpError.message);
+    logWarn('Compress', 'Falling back to canvas-based compression');
+    return await compressToJpegBufferFallback(dataUrl, targetSizeKB);
+  }
   
-  // Keep compressing if needed
-  let attempts = 0;
-  while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5) {
-    attempts++;
-    quality -= (jpegBuffer.length > TARGET_SIZE_BYTES * 1.5) ? 15 : 5;
-    
-    if (quality < 30) {
-      quality = 30;
-      const scaleFactor = Math.sqrt(TARGET_SIZE_BYTES / jpegBuffer.length);
-      const newWidth = Math.floor(UPLOAD_WIDTH * scaleFactor);
-      
-      jpegBuffer = await sharp(inputBuffer)
-        .resize(newWidth, null, { withoutEnlargement: true, fit: 'inside' })
-        .jpeg({ quality: 30, mozjpeg: true })
-        .toBuffer();
-      break;
-    }
-    
-    jpegBuffer = await sharp(inputBuffer)  // Reassign jpegBuffer
+  try {
+    let quality = JPEG_QUALITY;
+    let jpegBuffer = await sharp(inputBuffer)
       .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
       .jpeg({ quality: quality, mozjpeg: true })
       .toBuffer();
+    
+    // Keep compressing if needed
+    let attempts = 0;
+    while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5) {
+      attempts++;
+      quality -= (jpegBuffer.length > TARGET_SIZE_BYTES * 1.5) ? 15 : 5;
+      
+      if (quality < 30) {
+        quality = 30;
+        const scaleFactor = Math.sqrt(TARGET_SIZE_BYTES / jpegBuffer.length);
+        const newWidth = Math.floor(UPLOAD_WIDTH * scaleFactor);
+        
+        jpegBuffer = await sharp(inputBuffer)
+          .resize(newWidth, null, { withoutEnlargement: true, fit: 'inside' })
+          .jpeg({ quality: 30, mozjpeg: true })
+          .toBuffer();
+        break;
+      }
+      
+      jpegBuffer = await sharp(inputBuffer)
+        .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
+        .jpeg({ quality: quality, mozjpeg: true })
+        .toBuffer();
+    }
+    
+    logInfo('Compress', `JPEG size: ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
+    return jpegBuffer;
+  } catch (error) {
+    logError('Compress', 'Sharp compression failed:', error.message);
+    logWarn('Compress', 'Falling back to canvas-based compression');
+    return await compressToJpegBufferFallback(dataUrl, targetSizeKB);
   }
-  
-  logInfo('Compress', `JPEG size: ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
-  return jpegBuffer;
 }
 
 
@@ -517,7 +606,24 @@ async function addScreenshotToBatch(uploadData) {
   
   try {
     // Compress and save locally
-    const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
+    let jpegBuffer;
+    try {
+      jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
+    } catch (compressError) {
+      logError(contextLabel, 'Compression failed:', compressError.message);
+      // Try fallback compression
+      try {
+        jpegBuffer = await compressToJpegBufferFallback(screenshotData);
+        logWarn(contextLabel, 'Using fallback compression method');
+      } catch (fallbackError) {
+        logError(contextLabel, 'Fallback compression also failed:', fallbackError.message);
+        // Last resort: use original PNG data
+        const base64 = screenshotData.split(',')[1];
+        jpegBuffer = Buffer.from(base64, 'base64');
+        logWarn(contextLabel, 'Using original image without compression (may be larger)');
+      }
+    }
+    
     const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
     const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}${screenSuffix}.jpg`;
     
@@ -1200,21 +1306,21 @@ ipcMain.handle('capture-all-screens', async () => {
     let permissionCheckSources = null;
     
     // On macOS, check permissions before attempting capture
+    // Note: We'll still try to capture even if permission check fails, as sometimes
+    // the check can fail even when permissions are actually granted
     if (process.platform === 'darwin') {
       const permissionCheck = await checkScreenRecordingPermission();
       permissionGranted = permissionCheck.granted;
       permissionCheckSources = permissionCheck.sources; // Save sources from permission check
       
       if (!permissionCheck.granted) {
-        logWarn('IPC', '[capture-all-screens] ⚠️ Screen recording permission not granted');
-        logWarn('IPC', `[capture-all-screens] Error: ${permissionCheck.error || 'Permission denied'}`);
-        return {
-          screenshots: [],
-          error: `Screen recording permission denied. ${permissionCheck.error || 'Please grant permission in System Settings → Privacy & Security → Screen Recording.'}`,
-          permissionGranted: false
-        };
+        logWarn('IPC', '[capture-all-screens] ⚠️ Permission check failed, but will attempt capture anyway');
+        logWarn('IPC', `[capture-all-screens] Permission check error: ${permissionCheck.error || 'Unknown'}`);
+        logWarn('IPC', '[capture-all-screens] Note: Sometimes getSources() works even if permission check fails');
+        // Don't return early - try to capture anyway as a workaround
+      } else {
+        logInfo('IPC', `[capture-all-screens] ✅ Permission check passed (found ${permissionCheckSources?.length || 0} source(s) during check)`);
       }
-      logInfo('IPC', `[capture-all-screens] ✅ Permission check passed (found ${permissionCheckSources?.length || 0} source(s) during check)`);
     }
     
     // Get all screen sources
@@ -1223,60 +1329,73 @@ ipcMain.handle('capture-all-screens', async () => {
     const maxHeight = Math.max(...allDisplays.map(d => d.size.height));
     
     logInfo('IPC', `[capture-all-screens] Requesting sources with thumbnail size: ${maxWidth}x${maxHeight}`);
+    logInfo('IPC', `[capture-all-screens] App path: ${app.getAppPath()}`);
+    logInfo('IPC', `[capture-all-screens] App name: ${app.getName()}`);
+    logInfo('IPC', `[capture-all-screens] Is packaged: ${app.isPackaged}`);
     
     // Try with full size first
     let sources = null;
+    let lastError = null;
     
     // On macOS, if we got sources from permission check, try using those first (but with proper size)
     if (process.platform === 'darwin' && permissionCheckSources && permissionCheckSources.length > 0) {
       logInfo('IPC', '[capture-all-screens] Attempting to use sources from permission check, but requesting full-size thumbnails...');
     }
     
-    try {
-      sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: { width: maxWidth, height: maxHeight },
-        fetchWindowIcons: false
-      });
-      logInfo('IPC', `[capture-all-screens] Successfully got ${sources?.length || 0} source(s) with full size`);
-    } catch (getSourcesError) {
-      logError('IPC', '[capture-all-screens] Error calling getSources with full size:', getSourcesError);
-      
-      // Try with progressively smaller sizes
-      const fallbackSizes = [
-        { width: 2560, height: 1440 },
-        { width: 1920, height: 1080 },
-        { width: 1280, height: 720 }
-      ];
-      
-      let fallbackSuccess = false;
-      for (const size of fallbackSizes) {
-        try {
-          logInfo('IPC', `[capture-all-screens] Retrying with thumbnail size: ${size.width}x${size.height}...`);
-          sources = await desktopCapturer.getSources({
-            types: ['screen'],
-            thumbnailSize: size,
-            fetchWindowIcons: false
-          });
-          if (sources && sources.length > 0) {
-            logInfo('IPC', `[capture-all-screens] Successfully got ${sources.length} source(s) with fallback size ${size.width}x${size.height}`);
-            fallbackSuccess = true;
-            break;
-          }
-        } catch (fallbackError) {
-          logWarn('IPC', `[capture-all-screens] Fallback size ${size.width}x${size.height} also failed:`, fallbackError.message);
-          continue;
+    // Try multiple approaches to get sources
+    const approaches = [
+      { width: maxWidth, height: maxHeight, name: 'full size' },
+      { width: 2560, height: 1440, name: '2560x1440' },
+      { width: 1920, height: 1080, name: '1920x1080' },
+      { width: 1280, height: 720, name: '1280x720' },
+      { width: 640, height: 480, name: '640x480' }
+    ];
+    
+    let captureSuccess = false;
+    for (const approach of approaches) {
+      try {
+        logInfo('IPC', `[capture-all-screens] Trying approach: ${approach.name} (${approach.width}x${approach.height})...`);
+        sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: approach.width, height: approach.height },
+          fetchWindowIcons: false
+        });
+        
+        if (sources && sources.length > 0) {
+          logInfo('IPC', `[capture-all-screens] ✅ Successfully got ${sources.length} source(s) with ${approach.name}`);
+          captureSuccess = true;
+          break;
+        } else {
+          logWarn('IPC', `[capture-all-screens] Got empty array with ${approach.name}, trying next approach...`);
         }
+      } catch (getSourcesError) {
+        const errorMsg = getSourcesError?.message || getSourcesError?.toString() || 'Unknown error';
+        lastError = getSourcesError;
+        logWarn('IPC', `[capture-all-screens] ${approach.name} failed:`, errorMsg);
+        logWarn('IPC', `[capture-all-screens] Error details:`, JSON.stringify(getSourcesError, Object.getOwnPropertyNames(getSourcesError)));
+        continue;
       }
+    }
+    
+    if (!captureSuccess) {
+      const errorMsg = lastError?.message || lastError?.toString() || 'All capture attempts failed';
+      logError('IPC', '[capture-all-screens] ❌ All capture approaches failed');
+      logError('IPC', `[capture-all-screens] Last error: ${errorMsg}`);
       
-      if (!fallbackSuccess) {
-        logError('IPC', '[capture-all-screens] All fallback sizes failed');
-        return {
-          screenshots: [],
-          error: `Failed to capture screens after multiple attempts. Error: ${getSourcesError.message || 'Unknown error'}. Please ensure screen recording permission is granted in System Settings → Privacy & Security → Screen Recording, then restart the app.`,
-          permissionGranted
-        };
-      }
+      // Provide helpful troubleshooting info
+      let errorMessage = `Failed to capture screens after trying ${approaches.length} different approaches. `;
+      errorMessage += `Last error: ${errorMsg}. `;
+      errorMessage += `Please verify:\n`;
+      errorMessage += `1. Screen recording permission is enabled in System Settings → Privacy & Security → Screen Recording\n`;
+      errorMessage += `2. The app is listed and enabled in the Screen Recording list\n`;
+      errorMessage += `3. You have restarted the app after granting permission\n`;
+      errorMessage += `4. The app bundle identifier matches (dev vs packaged apps have different identifiers)`;
+      
+      return {
+        screenshots: [],
+        error: errorMessage,
+        permissionGranted
+      };
     }
     
     logInfo('IPC', `[capture-all-screens] Received ${sources?.length || 0} source(s) from desktopCapturer`);
@@ -1336,15 +1455,41 @@ ipcMain.handle('check-screen-permission', async () => {
     return { granted: true, message: 'Not required on this platform' };
   }
   
+  // Log app information for debugging
+  const appInfo = {
+    name: app.getName(),
+    version: app.getVersion(),
+    path: app.getAppPath(),
+    isPackaged: app.isPackaged,
+    bundleId: app.isPackaged ? app.getName() : 'dev-mode'
+  };
+  
+  logInfo('Permissions', 'App info for permission check:', appInfo);
+  
   const result = await checkScreenRecordingPermission();
-  return {
+  
+  const response = {
     granted: result.granted,
     error: result.error,
     sourceCount: result.sources?.length || 0,
+    appInfo: appInfo,
     message: result.granted 
       ? `Permission granted - ${result.sources?.length || 0} screen(s) available`
       : `Permission denied: ${result.error || 'Please grant permission in System Settings → Privacy & Security → Screen Recording'}`
   };
+  
+  // Add troubleshooting info if permission denied
+  if (!result.granted) {
+    response.troubleshooting = {
+      appName: appInfo.name,
+      isPackaged: appInfo.isPackaged,
+      note: appInfo.isPackaged 
+        ? 'Make sure the packaged app (not dev version) is enabled in Screen Recording settings'
+        : 'Make sure the dev version is enabled in Screen Recording settings. Note: Dev and packaged apps have different identifiers.'
+    };
+  }
+  
+  return response;
 });
 
 // Diagnostic handler to check screen capture capabilities

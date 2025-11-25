@@ -1419,9 +1419,36 @@ document.addEventListener('DOMContentLoaded', () => {
             if (window.electronAPI.checkScreenPermission) {
               const permCheck = await window.electronAPI.checkScreenPermission();
               console.log('Screen permission check:', permCheck);
+              
               if (!permCheck.granted) {
                 console.error('⚠️ PERMISSION ISSUE:', permCheck.message);
-                alert(`Screen Recording Permission Required\n\n${permCheck.message}\n\nPlease:\n1. Go to System Settings → Privacy & Security → Screen Recording\n2. Enable "Time Tracker"\n3. Restart the app`);
+                
+                // Build detailed error message
+                let errorMsg = `Screen Recording Permission Issue\n\n${permCheck.message}\n\n`;
+                
+                if (permCheck.appInfo) {
+                  errorMsg += `App Information:\n`;
+                  errorMsg += `- Name: ${permCheck.appInfo.name}\n`;
+                  errorMsg += `- Packaged: ${permCheck.appInfo.isPackaged ? 'Yes' : 'No (Dev Mode)'}\n\n`;
+                }
+                
+                if (permCheck.troubleshooting) {
+                  errorMsg += `Troubleshooting:\n`;
+                  errorMsg += `- Look for "${permCheck.troubleshooting.appName}" in Screen Recording settings\n`;
+                  errorMsg += `- ${permCheck.troubleshooting.note}\n\n`;
+                }
+                
+                errorMsg += `Steps to fix:\n`;
+                errorMsg += `1. Go to System Settings → Privacy & Security → Screen Recording\n`;
+                errorMsg += `2. Find "${permCheck.appInfo?.name || 'Time Tracker'}" in the list\n`;
+                errorMsg += `3. Enable the toggle (you may need to enter your password)\n`;
+                errorMsg += `4. Quit the app completely (Cmd+Q) and restart it\n`;
+                errorMsg += `5. Try capturing screenshots again`;
+                
+                console.error('Full permission details:', permCheck);
+                alert(errorMsg);
+              } else {
+                console.log('✅ Permission check passed, but capture still failed. This might be a timing issue or the app needs a restart.');
               }
             }
             
