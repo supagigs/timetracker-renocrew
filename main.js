@@ -1,6 +1,9 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 
 if (process.platform === 'win32') {
   app.setAppUserModelId("Supagigs Time Tracker");
@@ -243,6 +246,198 @@ async function requestScreenRecordingPermission() {
       }
     });
   }
+  if (!permissionResult.granted && showDialog && mainWindow && !mainWindow.isDestroyed()) {
+    return new Promise((resolve) => {
+      dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Screen Recording Permission Required',
+        message: 'Screen Recording Permission Required',
+        detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
+                'Please grant permission:\n' +
+                '1. Go to System Settings → Privacy & Security → Screen Recording\n' +
+                '2. Find "Time Tracker" (or the app name) in the list\n' +
+                '3. Enable the toggle\n' +
+                '4. Restart the app if needed\n\n' +
+                'After granting permission, screenshots will be captured automatically.',
+        buttons: ['Open System Settings', 'Check Again', 'OK'],
+        defaultId: 2,
+        cancelId: 2
+      }).then((result) => {
+        if (result.response === 0) {
+          // Open System Settings to Screen Recording
+          shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+          resolve({ granted: false, action: 'opened_settings' });
+        } else if (result.response === 1) {
+          // Check again
+          setTimeout(async () => {
+            const recheck = await checkScreenRecordingPermission();
+            resolve(recheck);
+          }, 1000);
+        } else {
+          resolve({ granted: false, action: 'dismissed' });
+        }
+      }).catch((error) => {
+        logError('Permissions', 'Error showing permission dialog:', error);
+        resolve({ granted: false, error: error.message });
+      });
+    });
+  }
+  
+  return permissionResult;
+}
+
+// Show Accessibility permission dialog on macOS if app name detection fails
+function showAccessibilityPermissionDialog() {
+  if (process.platform !== 'darwin' || !mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Accessibility Permission Required',
+    message: 'Accessibility Permission Required',
+    detail: 'To detect which application you are using, this app needs Accessibility permission.\n\n' +
+            'Please grant permission:\n' +
+            '1. Go to System Settings → Privacy & Security → Accessibility\n' +
+            '2. Find "Time Tracker" (or the app name) in the list\n' +
+            '3. Enable the toggle\n' +
+            '4. Restart the app\n\n' +
+            'Without this permission, app names will show as "Unknown".',
+    buttons: ['Open System Settings', 'OK'],
+    defaultId: 1,
+    cancelId: 1
+  }).then((result) => {
+    if (result.response === 0) {
+      // Open System Settings to Accessibility
+      shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+    }
+  }).catch((error) => {
+    logError('Permissions', 'Error showing Accessibility permission dialog:', error);
+  });
+}
+
+// macOS fallback: Use AppleScript to get active app name
+async function getActiveAppNameAppleScript() {
+  if (process.platform !== 'darwin') {
+    return null;
+  }
+  
+  try {
+    // Use AppleScript to get the frontmost application name
+    const script = 'tell application "System Events" to get name of first application process whose frontmost is true';
+    const { stdout, stderr } = await execAsync(`osascript -e '${script}'`);
+    
+    if (stderr) {
+      logWarn('ActiveWindow', 'AppleScript stderr:', stderr);
+      return null;
+    }
+    
+    const appName = stdout.trim();
+    if (appName && appName.length > 0) {
+      // Filter out our own app
+      const ourAppName = app.getName();
+      if (appName.toLowerCase() === ourAppName.toLowerCase()) {
+        logInfo('ActiveWindow', 'AppleScript returned our own app, filtering it out');
+        return null;
+      }
+      return appName;
+    }
+    
+    return null;
+  } catch (error) {
+    logWarn('ActiveWindow', 'AppleScript failed:', error.message);
+    // This might fail if Accessibility permissions aren't granted, but that's okay
+    return null;
+  }
+}
+
+// Convert Windows executable names to friendly application names
+function getFriendlyAppName(executableName) {
+  if (!executableName) return null;
+  
+  // Remove .exe extension if present
+  const nameWithoutExt = executableName.replace(/\.exe$/i, '').trim();
+  
+  // Map common executable names to friendly names
+  const appNameMap = {
+    // Browsers
+    'chrome': 'Google Chrome',
+    'msedge': 'Microsoft Edge',
+    'firefox': 'Mozilla Firefox',
+    'brave': 'Brave Browser',
+    'opera': 'Opera',
+    'safari': 'Safari',
+    
+    // Code Editors
+    'code': 'Visual Studio Code',
+    'devenv': 'Visual Studio',
+    'idea64': 'IntelliJ IDEA',
+    'pycharm64': 'PyCharm',
+    'webstorm64': 'WebStorm',
+    'atom': 'Atom',
+    'sublime_text': 'Sublime Text',
+    'notepad++': 'Notepad++',
+    
+    // Git/Version Control
+    'githubdesktop': 'GitHub Desktop',
+    'gitkraken': 'GitKraken',
+    'sourcetree': 'SourceTree',
+    
+    // Terminals
+    'windows terminal': 'Windows Terminal',
+    'wt': 'Windows Terminal',
+    'powershell': 'PowerShell',
+    'cmd': 'Command Prompt',
+    'wsl': 'WSL',
+    
+    // Office
+    'winword': 'Microsoft Word',
+    'excel': 'Microsoft Excel',
+    'powerpnt': 'Microsoft PowerPoint',
+    'outlook': 'Microsoft Outlook',
+    'onenote': 'Microsoft OneNote',
+    
+    // Communication
+    'teams': 'Microsoft Teams',
+    'slack': 'Slack',
+    'discord': 'Discord',
+    'zoom': 'Zoom',
+    
+    // System
+    'explorer': 'File Explorer',
+    'notepad': 'Notepad',
+    'calc': 'Calculator',
+    'mspaint': 'Paint',
+    
+    // Other common apps
+    'spotify': 'Spotify',
+    'vlc': 'VLC Media Player',
+    'photoshop': 'Adobe Photoshop',
+    'illustrator': 'Adobe Illustrator',
+    'acrobat': 'Adobe Acrobat',
+    'figma': 'Figma',
+    'sketch': 'Sketch',
+  };
+  
+  const nameLower = nameWithoutExt.toLowerCase();
+  
+  // Check exact match first
+  if (appNameMap[nameLower]) {
+    return appNameMap[nameLower];
+  }
+  
+  // Check partial matches (e.g., "Code.exe" -> "code" -> "Visual Studio Code")
+  for (const [key, value] of Object.entries(appNameMap)) {
+    if (nameLower.includes(key) || key.includes(nameLower)) {
+      return value;
+    }
+  }
+  
+  // If no mapping found, return the name without .exe but with proper capitalization
+  // Convert "githubdesktop" to "GitHub Desktop" style
+  return nameWithoutExt
+    .replace(/([a-z])([A-Z])/g, '$1 $2') // Add space before capital letters
+    .replace(/\b\w/g, l => l.toUpperCase()); // Capitalize first letter of each word
 }
 
 async function getActiveAppName() {
@@ -253,6 +448,15 @@ async function getActiveAppName() {
       // Return null to indicate we can't determine the active app
       // The fallback in the caller will handle this appropriately
       return null;
+    // load module if not loaded
+    if (!activeWindowModule) {
+      try {
+        activeWindowModule = await import('active-win');
+      } catch (importError) {
+        logError('ActiveWindow', 'Failed to import active-win module:', importError.message);
+        logError('ActiveWindow', 'This might be a permission issue on macOS. active-win requires Accessibility permissions.');
+        return null;
+      }
     }
     
     // load module if not loaded
@@ -272,10 +476,50 @@ async function getActiveAppName() {
       return null;
     }
 
-    const result = await fn();
+    let result;
+    try {
+      result = await fn();
+    } catch (activeWinError) {
+      // On macOS, active-win might fail due to missing Accessibility permissions
+      if (process.platform === 'darwin') {
+        logError('ActiveWindow', 'active-win failed on macOS:', activeWinError.message);
+        logError('ActiveWindow', 'This usually means Accessibility permissions are not granted.');
+        logError('ActiveWindow', 'Please grant Accessibility permission in System Settings → Privacy & Security → Accessibility');
+        // Don't return null immediately - try to get at least window title from other sources
+      } else {
+        logError('ActiveWindow', 'active-win failed:', activeWinError.message);
+      }
+      return null;
+    }
+    
     if (!result) {
       logWarn('ActiveWindow', 'active-win returned no result');
+      if (process.platform === 'darwin') {
+        logWarn('ActiveWindow', 'On macOS, this might indicate missing Accessibility permissions.');
+        logWarn('ActiveWindow', 'Check System Settings → Privacy & Security → Accessibility');
+        // Show dialog once to guide user (throttle to avoid spam)
+        if (!global.__accessibilityDialogShown) {
+          global.__accessibilityDialogShown = true;
+          setTimeout(() => {
+            showAccessibilityPermissionDialog();
+            // Reset after 5 minutes so it can show again if needed
+            setTimeout(() => {
+              global.__accessibilityDialogShown = false;
+            }, 5 * 60 * 1000);
+          }, 2000);
+        }
+      }
       return null;
+    }
+    
+    // Log full result for debugging (always log on macOS to help diagnose permission issues)
+    if (process.platform === 'darwin' || !app.isPackaged) {
+      logInfo('ActiveWindow', `Full result from active-win: ${JSON.stringify(result, null, 2)}`);
+      logInfo('ActiveWindow', `Result keys: ${Object.keys(result || {}).join(', ')}`);
+      if (result.owner) {
+        logInfo('ActiveWindow', `Owner keys: ${Object.keys(result.owner || {}).join(', ')}`);
+        logInfo('ActiveWindow', `Owner object: ${JSON.stringify(result.owner, null, 2)}`);
+      }
     }
     
     // Get the app's own name to filter it out
@@ -291,6 +535,108 @@ async function getActiveAppName() {
     if (process.platform === 'darwin') {
       logInfo('ActiveWindow', `Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, app: ${appName}`);
     }
+    // Extract owner name (application name) and window title
+    // owner.name is the actual application (e.g., "Google Chrome", "Visual Studio Code")
+    // title is the window/tab title (e.g., "GitHub - Your Repo", "New Tab")
+    let ownerName = null;
+    let windowTitle = null;
+    let processName = null;
+    
+    // Try different possible structures from active-win
+    // On macOS, the structure might be different, so try all possible locations
+    if (result.owner) {
+      ownerName = typeof result.owner.name === 'string' ? result.owner.name.trim() : null;
+      processName = typeof result.owner.processName === 'string' ? result.owner.processName.trim() : null;
+      
+      // On macOS, also check for bundleId or other fields
+      if (!ownerName && result.owner.bundleId) {
+        // Try to extract app name from bundle ID (e.g., "com.google.Chrome" -> "Chrome")
+        const bundleId = result.owner.bundleId;
+        const parts = bundleId.split('.');
+        if (parts.length > 0) {
+          const lastPart = parts[parts.length - 1];
+          // Capitalize first letter
+          ownerName = lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
+          logInfo('ActiveWindow', `Extracted app name from bundleId: ${bundleId} -> ${ownerName}`);
+        }
+      }
+    }
+    
+    // Try direct fields
+    if (result.name && !ownerName) {
+      // Some versions might have name directly
+      ownerName = typeof result.name === 'string' ? result.name.trim() : null;
+    }
+    if (result.processName && !processName) {
+      processName = typeof result.processName === 'string' ? result.processName.trim() : null;
+    }
+    if (result.title) {
+      windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
+    }
+    
+    // On macOS, also try alternative field names
+    if (process.platform === 'darwin') {
+      // Try appName, application, app, etc.
+      if (!ownerName && result.appName) {
+        ownerName = typeof result.appName === 'string' ? result.appName.trim() : null;
+        logInfo('ActiveWindow', `Found app name in appName field: ${ownerName}`);
+      }
+      if (!ownerName && result.application) {
+        ownerName = typeof result.application === 'string' ? result.application.trim() : null;
+        if (!ownerName && result.application.name) {
+          ownerName = typeof result.application.name === 'string' ? result.application.name.trim() : null;
+        }
+        logInfo('ActiveWindow', `Found app name in application field: ${ownerName}`);
+      }
+      if (!ownerName && result.app) {
+        ownerName = typeof result.app === 'string' ? result.app.trim() : null;
+        logInfo('ActiveWindow', `Found app name in app field: ${ownerName}`);
+      }
+      
+      // Try windowTitle, window, etc.
+      if (!windowTitle && result.windowTitle) {
+        windowTitle = typeof result.windowTitle === 'string' ? result.windowTitle.trim() : null;
+      }
+      if (!windowTitle && result.window && result.window.title) {
+        windowTitle = typeof result.window.title === 'string' ? result.window.title.trim() : null;
+      }
+      
+      // If still no owner name, try AppleScript as fallback
+      if (!ownerName) {
+        try {
+          logInfo('ActiveWindow', 'active-win returned no owner name, trying AppleScript fallback...');
+          const appleScriptResult = await getActiveAppNameAppleScript();
+          if (appleScriptResult) {
+            ownerName = appleScriptResult;
+            logInfo('ActiveWindow', `✅ Got app name from AppleScript fallback: ${ownerName}`);
+          }
+        } catch (appleScriptError) {
+          logWarn('ActiveWindow', 'AppleScript fallback also failed:', appleScriptError.message);
+        }
+      }
+    }
+    
+    // On Windows, convert executable names to friendly names
+    if (process.platform === 'win32') {
+      // Try to get friendly name from process name or owner name
+      if (processName) {
+        const friendlyFromProcess = getFriendlyAppName(processName);
+        if (friendlyFromProcess) {
+          ownerName = friendlyFromProcess;
+          logInfo('ActiveWindow', `Converted process name "${processName}" to friendly name: "${ownerName}"`);
+        }
+      }
+      if (ownerName && ownerName.endsWith('.exe')) {
+        const friendlyFromOwner = getFriendlyAppName(ownerName);
+        if (friendlyFromOwner) {
+          logInfo('ActiveWindow', `Converted owner name "${ownerName}" to friendly name: "${friendlyFromOwner}"`);
+          ownerName = friendlyFromOwner;
+        }
+      }
+    }
+    
+    // Debug logging
+    logInfo('ActiveWindow', `Platform: ${process.platform}, Owner: ${ownerName || 'null'}, Process: ${processName || 'null'}, Title: ${windowTitle || 'null'}, Our App: ${appName}`);
     
     // Filter out the app's own name
     if (ownerName && ownerName.toLowerCase() === appNameLower) {
@@ -328,9 +674,37 @@ async function getActiveAppName() {
       return ownerName || windowTitle || null;
     } else {
       return windowTitle || ownerName || null;
+      logWarn('ActiveWindow', '⚠️ No app name detected after filtering');
+      if (process.platform === 'darwin') {
+        logWarn('ActiveWindow', 'On macOS, this might be due to:');
+        logWarn('ActiveWindow', '1. Missing Accessibility permissions (required for active-win)');
+        logWarn('ActiveWindow', '2. active-win module not working correctly');
+        logWarn('ActiveWindow', '3. App window is focused (filtered out)');
+        logWarn('ActiveWindow', 'Check System Settings → Privacy & Security → Accessibility');
+      }
     }
   } catch (error) {
     logWarn('ActiveWindow', 'Unable to resolve active window', error);
+    logError('ActiveWindow', 'Unable to resolve active window:', error);
+    logError('ActiveWindow', 'Error stack:', error.stack);
+    
+    // On macOS, provide helpful error message about permissions
+    if (process.platform === 'darwin') {
+      logError('ActiveWindow', 'macOS requires Accessibility permissions for active-win to work.');
+      logError('ActiveWindow', 'Please grant permission in System Settings → Privacy & Security → Accessibility');
+      // Show dialog once to guide user (throttle to avoid spam)
+      if (!global.__accessibilityDialogShown) {
+        global.__accessibilityDialogShown = true;
+        setTimeout(() => {
+          showAccessibilityPermissionDialog();
+          // Reset after 5 minutes so it can show again if needed
+          setTimeout(() => {
+            global.__accessibilityDialogShown = false;
+          }, 5 * 60 * 1000);
+        }, 2000);
+      }
+    }
+    
     return null;
   }
 }
