@@ -89,8 +89,7 @@
         "NSDesktopFolderUsageDescription": "This app needs to save screenshots to your desktop.",
         "NSDocumentsFolderUsageDescription": "This app needs to save screenshots to your documents folder.",
         "NSAppleEventsUsageDescription": "This app needs to detect which application you are using for accurate time tracking. This allows the app to record which app you're working in when screenshots are captured.",
-        "NSScreenCaptureUsageDescription": "This app needs screen recording permission to capture screenshots for time tracking. Please enable this permission in System Settings → Privacy & Security → Screen Recording.",
-        "NSAccessibilityUsageDescription": "This app needs Accessibility permission to detect which application you are currently using. This allows the app to record accurate app names for screenshots. Please enable this permission in System Settings → Privacy & Security → Accessibility."
+        "NSScreenCaptureUsageDescription": "This app needs screen recording permission to capture screenshots for time tracking. Please enable this permission in System Settings → Privacy & Security → Screen Recording."
       }
     },
     "dmg": {
