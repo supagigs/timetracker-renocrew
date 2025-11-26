@@ -388,11 +388,26 @@ function getSupabaseClient() {
 }
 
 async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
+<<<<<<< Updated upstream
   //Lazy load sharp for first screen shot as it loads on the satrtup
   if(!sharp) {
     sharp = require('sharp');
     logInfo('Compress', 'Sharp module loaded')
   }
+=======
+  let sharp;
+  try {
+    sharp = require('sharp');
+  } catch (error) {
+    logError('Compress', `Failed to load sharp module: ${error.message}`, error);
+    throw new Error(
+      `Sharp module not available. Please run: npm install --include=optional sharp\n` +
+      `Or for macOS: npm install --os=darwin --cpu=x64 sharp\n` +
+      `Original error: ${error.message}`
+    );
+  }
+  
+>>>>>>> Stashed changes
   const base64 = dataUrl.split(',')[1];
   const inputBuffer = Buffer.from(base64, 'base64');
   const UPLOAD_WIDTH = 800;
