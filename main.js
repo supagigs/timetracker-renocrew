@@ -56,15 +56,32 @@ function checkMacOSAccessibilityPermission() {
   }
 }
 
-// Get active app name using AppleScript (fallback for macOS when active-win fails)
+// Get active app name and window title using AppleScript (fallback for macOS when active-win fails)
 function getActiveAppNameViaAppleScript() {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'darwin') {
       return resolve(null);
     }
 
-    // AppleScript command to get the name of the frontmost application
-    const command = `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`;
+    // AppleScript command to get both the app name and window title
+    // This gets the frontmost application name and its frontmost window title
+    // The window title often contains tab/page names for browsers
+    const command = `osascript -e 'tell application "System Events"
+      set frontApp to first application process whose frontmost is true
+      set appName to name of frontApp
+      set windowTitle to ""
+      try
+        set windowTitle to name of first window of frontApp
+      on error
+        try
+          -- Some apps use different window properties
+          set windowTitle to title of first window of frontApp
+        on error
+          set windowTitle to ""
+        end try
+      end try
+      return appName & "|" & windowTitle
+    end tell'`;
 
     const { exec } = require('child_process');
     exec(command, (error, stdout, stderr) => {
@@ -77,12 +94,21 @@ function getActiveAppNameViaAppleScript() {
         logWarn('ActiveWindow', `AppleScript stderr: ${stderr}`);
       }
       
-      // Trim whitespace and newlines from the result
-      const appName = stdout.trim();
+      // Parse the result: "AppName|WindowTitle"
+      const result = stdout.trim();
       
-      if (appName && appName.length > 0) {
-        logInfo('ActiveWindow', `AppleScript Success: ${appName}`);
-        resolve(appName);
+      if (result && result.length > 0) {
+        const parts = result.split('|');
+        const appName = parts[0] ? parts[0].trim() : null;
+        const windowTitle = parts[1] ? parts[1].trim() : null;
+        
+        logInfo('ActiveWindow', `AppleScript Success - App: ${appName || 'null'}, Title: ${windowTitle || 'null'}`);
+        
+        // Return an object similar to active-win format for consistency
+        resolve({
+          owner: { name: appName },
+          title: windowTitle
+        });
       } else {
         logWarn('ActiveWindow', 'AppleScript returned empty result');
         resolve(null);
@@ -432,21 +458,13 @@ async function getActiveAppName() {
     
     // If active-win failed or we don't have permission, use AppleScript fallback (macOS only)
     if (useAppleScriptFallback && process.platform === 'darwin') {
-      logInfo('ActiveWindow', 'Using AppleScript fallback to get app name');
-      const appleScriptAppName = await getActiveAppNameViaAppleScript();
-      if (appleScriptAppName) {
-        // Filter out our own app name if detected
-        const appName = app.getName();
-        const appNameLower = appName.toLowerCase();
-        const appleScriptAppNameLower = appleScriptAppName.toLowerCase();
-        
-        if (appleScriptAppNameLower === appNameLower || 
-            appleScriptAppNameLower.includes('time tracker') ||
-            (appleScriptAppNameLower.includes('electron') && appleScriptAppNameLower.includes('time'))) {
-          return appName;
-        }
-        
-        return appleScriptAppName;
+      logInfo('ActiveWindow', 'Using AppleScript fallback to get app name and window title');
+      const appleScriptResult = await getActiveAppNameViaAppleScript();
+      if (appleScriptResult) {
+        // AppleScript returns an object similar to active-win format
+        // Process it the same way as active-win result
+        result = appleScriptResult;
+        logInfo('ActiveWindow', 'AppleScript fallback returned result, processing...');
       }
     }
     
@@ -507,10 +525,13 @@ async function getActiveAppName() {
     
     if (process.platform === 'darwin') {
       // macOS: prefer owner.name (application name) as it's more reliable
-      // Use window title as fallback or to add context
+      // Use window title as fallback or to add context (similar to Windows)
       if (ownerName) {
         // If we have both, combine them for more context: "App Name - Window Title"
+        // This matches the Windows format for consistency
         if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
+          // For browsers, the window title often contains the tab/page name
+          // Format: "App Name - Window Title" (e.g., "Google Chrome - YouTube - Google Chrome")
           finalAppName = `${ownerName} - ${windowTitle}`;
         } else {
           finalAppName = ownerName;
