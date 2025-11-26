@@ -33,6 +33,7 @@ function logError(context, message, ...args) { log('error', context, message, ..
 const IDLE_THRESHOLD_SECONDS = 30;
 let activeWindowModule = null;
 let mainWindow = null;
+let sharp = null;   //lazy load for first screenshot only
 let isTimerActive = false;
 let isUserLoggedIn = false;
 let isUserIdle = false;
@@ -59,6 +60,8 @@ let batchFlushInterval = null;
 function createWindow() {
   // Set icon based on platform
   let iconPath = null;
+  //does not block window creation
+  try{
   if (process.platform === 'darwin') {
     // macOS prefers .icns, but .png also works, .ico as last resort
     const icnsPath = path.join(__dirname, 'SupagigsIcon.icns');
@@ -78,10 +81,14 @@ function createWindow() {
       iconPath = icoPath;
     }
   }
+} catch (e) {
+  logWarn('Window', 'Error Checking icon:', e);
+}
   
   const windowOptions = {
     width: 900,
     height: 700,
+    show: false, // do not show up until ready
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -93,15 +100,18 @@ function createWindow() {
   // Only set icon if file exists
   if (iconPath) {
     windowOptions.icon = iconPath;
-    logInfo('Window', `Using icon: ${iconPath}`);
-  } else {
-    logWarn('Window', 'No icon file found, window will use default icon');
   }
   
   mainWindow = new BrowserWindow(windowOptions);
-
   mainWindow.loadFile('renderer/screens/login.html');
   mainWindow.on('closed', () => { mainWindow = null; });
+
+  mainWindow.webContents.once('dom-ready', () => {
+    if(mainWindow && !mainWindow.isDestroyed()){
+      mainWindow.show();
+      logInfo('Window', 'Window displayed (DOM is Ready)')
+    }
+  })
 
   // Check screen recording permission on macOS after window is ready
   if (process.platform === 'darwin') {
@@ -248,7 +258,10 @@ async function requestScreenRecordingPermission() {
 async function getActiveAppName() {
   try {
     // load module if not loaded
-    if (!activeWindowModule) activeWindowModule = await import('active-win');
+    if (!activeWindowModule) {
+      activeWindowModule = await import('active-win');
+      logInfo ('ActiveWindow', 'active-win loaded');
+    }
 
     // handle different exports across versions:
     //  - newer: activeWindow()
@@ -375,7 +388,11 @@ function getSupabaseClient() {
 }
 
 async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
-  const sharp = require('sharp');
+  //Lazy load sharp for first screen shot as it loads on the satrtup
+  if(!sharp) {
+    sharp = require('sharp');
+    logInfo('Compress', 'Sharp module loaded')
+  }
   const base64 = dataUrl.split(',')[1];
   const inputBuffer = Buffer.from(base64, 'base64');
   const UPLOAD_WIDTH = 800;
