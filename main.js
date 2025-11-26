@@ -418,49 +418,112 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
 
 
 function showToastNotification(filePath, base64Data) {
-  if (toastWin) {
-    toastWin.close();
+  try {
+    // Close existing toast if it exists, but wait a moment if it was just shown
+    if (toastWin && !toastWin.isDestroyed()) {
+      // If the toast was just created (less than 1 second ago), wait a bit before closing
+      const existingToastAge = Date.now() - (toastWin._createdAt || 0);
+      if (existingToastAge < 1000) {
+        // Wait a moment before closing the old toast
+        setTimeout(() => {
+          if (toastWin && !toastWin.isDestroyed()) {
+            toastWin.close();
+            toastWin = null;
+            // Create new toast after closing the old one
+            createToastWindow(filePath, base64Data);
+          }
+        }, 500);
+        return;
+      } else {
+        toastWin.close();
+        toastWin = null;
+      }
+    }
+    
+    // Create new toast immediately
+    createToastWindow(filePath, base64Data);
+  } catch (error) {
+    logError('Toast', `Error showing toast notification: ${error.message}`, error);
+    // Try to create toast anyway, even if there was an error
+    try {
+      createToastWindow(filePath, base64Data);
+    } catch (e) {
+      logError('Toast', `Failed to create toast window: ${e.message}`, e);
+    }
+  }
+}
+
+function createToastWindow(filePath, base64Data) {
+  try {
+    const TOAST_WIDTH = 520;
+    const TOAST_HEIGHT = 340;
+    toastWin = new BrowserWindow({
+      width: TOAST_WIDTH,
+      height: TOAST_HEIGHT,
+      frame: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      transparent: true,
+      resizable: false,
+      hasShadow: false,
+      show: false,
+      webPreferences: {
+        preload: path.join(__dirname, "preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+
+    // Track when this toast was created
+    toastWin._createdAt = Date.now();
+
+    const { workArea } = screen.getPrimaryDisplay();
+    const x = workArea.x + workArea.width - TOAST_WIDTH - 20;
+    const y = workArea.y + workArea.height - TOAST_HEIGHT - 20;
+    toastWin.setPosition(x, y);
+
+    toastWin.loadFile(path.join(__dirname, 'toast.html'));
+
+    toastWin.once('ready-to-show', () => {
+      // Check if window still exists (might have been closed)
+      if (!toastWin || toastWin.isDestroyed()) {
+        logWarn('Toast', 'Toast window was destroyed before ready-to-show');
+        return;
+      }
+      
+      try {
+        toastWin.showInactive();
+        logInfo('Toast', `Toast notification displayed for: ${path.basename(filePath)}`);
+        
+        if (toastWin.webContents && !toastWin.webContents.isDestroyed()) {
+          toastWin.webContents.send('toast-init', { filePath, base64Data });
+        } else {
+          logWarn('Toast', 'Toast webContents was destroyed before sending init message');
+        }
+      } catch (error) {
+        logError('Toast', `Error showing toast window: ${error.message}`, error);
+      }
+    });
+
+    // Handle errors during load
+    toastWin.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+      logError('Toast', `Failed to load toast.html: ${errorCode} - ${errorDescription}`);
+    });
+
+    // Auto-close after 9 seconds
+    setTimeout(() => { 
+      if (toastWin && !toastWin.isDestroyed()) {
+        toastWin.close(); 
+      }
+    }, 9000);
+    
+    toastWin.on('closed', () => { 
+      toastWin = null; 
+    });
+  } catch (error) {
+    logError('Toast', `Error creating toast window: ${error.message}`, error);
     toastWin = null;
   }
-  const TOAST_WIDTH = 520;
-  const TOAST_HEIGHT = 340;
-  toastWin = new BrowserWindow({
-    width: TOAST_WIDTH,
-    height: TOAST_HEIGHT,
-    frame: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    transparent: true,
-    resizable: false,
-    hasShadow: false,
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  const { workArea } = screen.getPrimaryDisplay();
-  const x = workArea.x + workArea.width - TOAST_WIDTH - 20;
-  const y = workArea.y + workArea.height - TOAST_HEIGHT - 20;
-  toastWin.setPosition(x, y);
-
-  toastWin.loadFile(path.join(__dirname, 'toast.html'));
-
-  toastWin.once('ready-to-show', () => {
-    // Check if window still exists (might have been closed)
-    if (!toastWin || toastWin.isDestroyed()) {
-      return;
-    }
-    toastWin.showInactive();
-    if (toastWin.webContents && !toastWin.webContents.isDestroyed()) {
-      toastWin.webContents.send('toast-init', { filePath, base64Data });
-    }
-  });
-
-  setTimeout(() => { if (toastWin && !toastWin.isDestroyed()) toastWin.close(); }, 9000);
-  toastWin.on('closed', () => { toastWin = null; });
 }
 
 // ============ CANCELLATION CHECKER ============
@@ -492,6 +555,21 @@ async function insertScreenshotToDatabase(supabase, userEmail, sessionId, public
 async function addScreenshotToBatch(uploadData) {
   const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel, screenIndex, screenName, appName } = uploadData;
   
+  // Generate filename early so we can show toast immediately
+  const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
+  const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}${screenSuffix}.jpg`;
+  const screenshotsDir = resolveScreenshotsDir(true);
+  const filePath = path.join(screenshotsDir, jpegFilename);
+  
+  // Show toast notification immediately when screenshot is received
+  // This ensures user sees feedback for every screenshot, even if processing fails
+  try {
+    showToastNotification(filePath, screenshotData);
+  } catch (toastError) {
+    logWarn(contextLabel, `Failed to show toast notification: ${toastError.message}`);
+    // Continue processing even if toast fails
+  }
+  
   try {
     // Capture app name at screenshot time if not already provided
     let capturedAppName = appName;
@@ -507,11 +585,6 @@ async function addScreenshotToBatch(uploadData) {
     
     // Compress and save locally
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
-    const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
-    const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}${screenSuffix}.jpg`;
-    
-    const screenshotsDir = resolveScreenshotsDir(true);
-    const filePath = path.join(screenshotsDir, jpegFilename);
     fs.writeFileSync(filePath, jpegBuffer);
     
     // Add to batch queue
@@ -535,9 +608,6 @@ async function addScreenshotToBatch(uploadData) {
     pendingScreenshots.set(filePath, false);
     
     logInfo(contextLabel, `Screenshot queued (${screenshotBatchQueue.length}/${SCREENSHOT_BATCH_SIZE}): ${filePath}`);
-    
-    // Show toast notification for the screenshot
-    showToastNotification(filePath, screenshotData);
     
     // Start periodic flush timer if not already running
     if (!batchFlushInterval && screenshotBatchQueue.length > 0) {
