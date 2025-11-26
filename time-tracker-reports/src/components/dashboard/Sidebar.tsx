@@ -55,7 +55,7 @@ const buildReportsNavItems = (
       ? [
           {
             icon: <SlidersHorizontal size={20} />,
-            label: "Change screenshot interval",
+            label: "Settings",
             href: `${basePath}/screenshot-interval`,
           },
         ]
