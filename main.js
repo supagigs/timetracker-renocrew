@@ -247,14 +247,6 @@ async function requestScreenRecordingPermission() {
 
 async function getActiveAppName() {
   try {
-    // Check if our own window is focused - if so, skip detection
-    // as we want to track what the user is actually working on, not our own app
-    if (mainWindow && mainWindow.isFocused()) {
-      // Return null to indicate we can't determine the active app
-      // The fallback in the caller will handle this appropriately
-      return null;
-    }
-    
     // load module if not loaded
     if (!activeWindowModule) activeWindowModule = await import('active-win');
 
@@ -278,57 +270,90 @@ async function getActiveAppName() {
       return null;
     }
     
-    // Get the app's own name to filter it out
+    // Get the app's own name for reference (but don't filter it out - we want to track when user is using our app)
     const appName = app.getName();
     const appNameLower = appName.toLowerCase();
     
-    // On macOS, prefer owner.name (application name) over title (window title)
-    // as the window title might be the app's own window
+    // Extract available information from result
+    // active-win returns: { owner: { name, processId }, title, url, bounds, etc. }
     let ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
     let windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
     
-    // Debug logging on macOS to help diagnose issues
-    if (process.platform === 'darwin') {
-      logInfo('ActiveWindow', `Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, app: ${appName}`);
+    // Log detected information for debugging on both platforms
+    logInfo('ActiveWindow', `[${process.platform}] Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, app: ${appName}`);
+    
+    // Check if this is our own app - if so, we still want to return it, but use a consistent name
+    const isOwnApp = (ownerName && ownerName.toLowerCase() === appNameLower) || 
+                     (windowTitle && windowTitle.toLowerCase() === appNameLower) ||
+                     (ownerName && ownerName.toLowerCase().includes('time tracker')) ||
+                     (ownerName && ownerName.toLowerCase().includes('electron') && ownerName.toLowerCase().includes('time'));
+    
+    if (isOwnApp) {
+      // Return the app name consistently when our app is active
+      logInfo('ActiveWindow', `Detected own app - returning: ${appName}`);
+      return appName;
     }
     
-    // Filter out the app's own name
-    if (ownerName && ownerName.toLowerCase() === appNameLower) {
-      ownerName = null;
-    }
-    if (windowTitle && windowTitle.toLowerCase() === appNameLower) {
-      windowTitle = null;
-    }
-    
-    // Also filter out common variations
-    const appNameVariations = [
-      'time tracker',
-      'supagigs time tracker',
-      'electron',
-      appNameLower
-    ];
+    // Filter out only if it's clearly Electron or generic names that don't provide value
+    // But keep the app name if it's detected
+    const genericNames = ['electron', 'node', 'nodejs'];
     
     if (ownerName) {
       const ownerNameLower = ownerName.toLowerCase();
-      if (appNameVariations.some(variation => ownerNameLower.includes(variation))) {
+      // Only filter out if it's a generic name AND not our app
+      if (genericNames.some(generic => ownerNameLower === generic || ownerNameLower === `${generic}.exe`)) {
+        logInfo('ActiveWindow', `Filtered out generic owner name: ${ownerName}`);
         ownerName = null;
       }
     }
     
     if (windowTitle) {
       const windowTitleLower = windowTitle.toLowerCase();
-      if (appNameVariations.some(variation => windowTitleLower.includes(variation))) {
+      // Only filter out generic Electron titles if they don't provide context
+      if (windowTitleLower === 'electron' || windowTitleLower === 'node') {
+        logInfo('ActiveWindow', `Filtered out generic window title: ${windowTitle}`);
         windowTitle = null;
       }
     }
     
-    // On macOS, prefer owner.name (the actual application) over window title
-    // On other platforms, prefer window title if available
+    // Build the app name with better logic for both platforms
+    let finalAppName = null;
+    
     if (process.platform === 'darwin') {
-      return ownerName || windowTitle || null;
+      // macOS: prefer owner.name (application name) as it's more reliable
+      // Use window title as fallback or to add context
+      if (ownerName) {
+        // If we have both, combine them for more context: "App Name - Window Title"
+        if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
+          finalAppName = `${ownerName} - ${windowTitle}`;
+        } else {
+          finalAppName = ownerName;
+        }
+      } else if (windowTitle) {
+        finalAppName = windowTitle;
+      }
     } else {
-      return windowTitle || ownerName || null;
+      // Windows: prefer owner.name (application name) as it's more useful than window title
+      // Window titles on Windows can be very generic or change frequently
+      if (ownerName) {
+        // If we have both, combine them: "App Name - Window Title"
+        if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
+          finalAppName = `${ownerName} - ${windowTitle}`;
+        } else {
+          finalAppName = ownerName;
+        }
+      } else if (windowTitle) {
+        finalAppName = windowTitle;
+      }
     }
+    
+    if (finalAppName) {
+      logInfo('ActiveWindow', `Final app name: ${finalAppName}`);
+      return finalAppName;
+    }
+    
+    logWarn('ActiveWindow', 'No valid app name found after filtering');
+    return null;
   } catch (error) {
     logWarn('ActiveWindow', 'Unable to resolve active window', error);
     return null;
@@ -465,9 +490,21 @@ async function insertScreenshotToDatabase(supabase, userEmail, sessionId, public
 
 // Add screenshot to batch queue and process if batch is full
 async function addScreenshotToBatch(uploadData) {
-  const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel, screenIndex, screenName } = uploadData;
+  const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel, screenIndex, screenName, appName } = uploadData;
   
   try {
+    // Capture app name at screenshot time if not already provided
+    let capturedAppName = appName;
+    if (!capturedAppName) {
+      try {
+        capturedAppName = await getActiveAppName() || 'Unknown';
+        logInfo(contextLabel, `Captured app name at screenshot time: ${capturedAppName}`);
+      } catch (error) {
+        logWarn(contextLabel, `Failed to capture app name: ${error.message}`);
+        capturedAppName = 'Unknown';
+      }
+    }
+    
     // Compress and save locally
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
     const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
@@ -487,6 +524,7 @@ async function addScreenshotToBatch(uploadData) {
       contextLabel,
       screenIndex,
       screenName,
+      appName: capturedAppName, // Store the app name captured at screenshot time
       filePath,
       jpegBuffer,
       jpegFilename,
@@ -586,7 +624,8 @@ async function processScreenshotBatch() {
         const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
         if (!publicUrl) throw new Error('Unable to get storage public URL');
 
-        const appName = await getActiveAppName() || 'Unknown';
+        // Use the app name captured at screenshot time (stored in batch item)
+        const appName = item.appName || 'Unknown';
         await insertScreenshotToDatabase(supabase, item.userEmail, item.sessionId, publicUrl, item.timestamp, appName, item.isIdle);
 
         broadcastScreenshotCaptured({
@@ -869,13 +908,14 @@ ipcMain.handle('get-system-idle-state', (event, thresholdSeconds) => {
   }
 });
 
-ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle }) => {
+ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle, appName }) => {
   return handleScreenshotUpload({
     userEmail,
     sessionId,
     screenshotData,
     timestamp,
     isIdle,
+    appName, // Optional: if provided, will be used; otherwise captured automatically
     contextLabel: 'UPLOAD'
   });
 });
