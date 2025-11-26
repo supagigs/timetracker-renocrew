@@ -388,11 +388,53 @@ function getSupabaseClient() {
 }
 
 async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
-  //Lazy load sharp for first screen shot as it loads on the satrtup
+  //Lazy load sharp for first screen shot as it loads on the startup
   if(!sharp) {
-    sharp = require('sharp');
-    logInfo('Compress', 'Sharp module loaded')
+    try {
+      sharp = require('sharp');
+      logInfo('Compress', 'Sharp module loaded successfully');
+    } catch (error) {
+      const platform = process.platform;
+      const arch = process.arch;
+      const errorMsg = error.message || String(error);
+      
+      logError('Compress', `Failed to load sharp module: ${errorMsg}`);
+      
+      // Provide platform-specific installation instructions
+      let installCommand = 'npm install --include=optional sharp';
+      if (platform === 'darwin') {
+        if (arch === 'x64') {
+          installCommand = 'npm install --os=darwin --cpu=x64 sharp';
+        } else if (arch === 'arm64') {
+          installCommand = 'npm install --os=darwin --cpu=arm64 sharp';
+        } else {
+          installCommand = 'npm install --include=optional sharp';
+        }
+      } else if (platform === 'win32') {
+        installCommand = 'npm install --include=optional sharp';
+      }
+      
+      const detailedError = new Error(
+        `Sharp module could not be loaded (${platform}-${arch}).\n\n` +
+        `To fix this issue, run the following command in your project directory:\n\n` +
+        `  ${installCommand}\n\n` +
+        `Or for all platforms:\n` +
+        `  npm install --include=optional sharp\n\n` +
+        `After running the command, restart the application.\n\n` +
+        `Original error: ${errorMsg}`
+      );
+      
+      // Also log to console for visibility
+      console.error('\n========================================');
+      console.error('SHARP MODULE ERROR - ACTION REQUIRED');
+      console.error('========================================');
+      console.error(detailedError.message);
+      console.error('========================================\n');
+      
+      throw detailedError;
+    }
   }
+  
   const base64 = dataUrl.split(',')[1];
   const inputBuffer = Buffer.from(base64, 'base64');
   const UPLOAD_WIDTH = 800;
