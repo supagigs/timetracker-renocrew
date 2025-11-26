@@ -29,6 +29,68 @@ function logInfo(context, message, ...args) { log('info', context, message, ...a
 function logWarn(context, message, ...args) { log('warn', context, message, ...args); }
 function logError(context, message, ...args) { log('error', context, message, ...args); }
 
+// ============ macOS PERMISSIONS HELPER ============
+// Check Accessibility permission on macOS using native API
+function checkMacOSAccessibilityPermission() {
+  if (process.platform !== 'darwin') {
+    return 'not_applicable';
+  }
+  
+  try {
+    // Use AppleScript to check if we have accessibility permissions
+    const { execSync } = require('child_process');
+    try {
+      // Try to get the frontmost application - this will fail if we don't have permission
+      execSync('osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true"', { 
+        encoding: 'utf8',
+        timeout: 1000 
+      });
+      return 'authorized';
+    } catch (e) {
+      // If it fails, we likely don't have permission
+      return 'denied';
+    }
+  } catch (error) {
+    logWarn('Permissions', 'Error checking Accessibility permission:', error);
+    return 'unknown';
+  }
+}
+
+// Get active app name using AppleScript (fallback for macOS when active-win fails)
+function getActiveAppNameViaAppleScript() {
+  return new Promise((resolve, reject) => {
+    if (process.platform !== 'darwin') {
+      return resolve(null);
+    }
+
+    // AppleScript command to get the name of the frontmost application
+    const command = `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`;
+
+    const { exec } = require('child_process');
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        logWarn('ActiveWindow', `AppleScript error: ${error.message}`);
+        // This error often means Accessibility is blocked
+        return resolve(null);
+      }
+      if (stderr) {
+        logWarn('ActiveWindow', `AppleScript stderr: ${stderr}`);
+      }
+      
+      // Trim whitespace and newlines from the result
+      const appName = stdout.trim();
+      
+      if (appName && appName.length > 0) {
+        logInfo('ActiveWindow', `AppleScript Success: ${appName}`);
+        resolve(appName);
+      } else {
+        logWarn('ActiveWindow', 'AppleScript returned empty result');
+        resolve(null);
+      }
+    });
+  });
+}
+
 // ============ GLOBAL STATE ============
 const IDLE_THRESHOLD_SECONDS = 30;
 let activeWindowModule = null;
@@ -113,17 +175,28 @@ function createWindow() {
     }
   })
 
-  // Check screen recording permission on macOS after window is ready
+  // Check screen recording and accessibility permissions on macOS after window is ready
   if (process.platform === 'darwin') {
     mainWindow.webContents.once('did-finish-load', () => {
       // Delay permission check slightly to ensure window is fully ready
       setTimeout(() => {
+        // Check screen recording permission
         checkScreenRecordingPermission().then((hasPermission) => {
           if (!hasPermission) {
             // Show permission dialog after a short delay
             setTimeout(() => {
               requestScreenRecordingPermission();
             }, 1000);
+          }
+        });
+        
+        // Check accessibility permission (needed for app name detection)
+        checkAccessibilityPermission().then((hasPermission) => {
+          if (!hasPermission) {
+            // Show permission dialog after a short delay
+            setTimeout(() => {
+              requestAccessibilityPermission();
+            }, 2000); // Show after screen recording dialog
           }
         });
       }, 500);
@@ -255,31 +328,131 @@ async function requestScreenRecordingPermission() {
   }
 }
 
+// Check and request Accessibility permission on macOS
+async function checkAccessibilityPermission() {
+  if (process.platform !== 'darwin') {
+    return true; // Not macOS, no permission needed
+  }
+
+  try {
+    const status = checkMacOSAccessibilityPermission();
+    logInfo('Permissions', `Accessibility permission status: ${status}`);
+    return status === 'authorized';
+  } catch (error) {
+    logWarn('Permissions', 'Error checking Accessibility permission:', error);
+    return false;
+  }
+}
+
+// Show permission dialog for Accessibility on macOS if needed
+async function requestAccessibilityPermission() {
+  if (process.platform !== 'darwin') {
+    return;
+  }
+
+  const hasPermission = await checkAccessibilityPermission();
+  
+  if (!hasPermission && mainWindow && !mainWindow.isDestroyed()) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: 'Accessibility Permission Required',
+      message: 'Accessibility Permission Required',
+      detail: 'This app needs Accessibility permission to detect which application you are using.\n\n' +
+              'Without this permission, app names will show as "Unknown".\n\n' +
+              'Please grant permission:\n' +
+              '1. Go to System Settings → Privacy & Security → Accessibility\n' +
+              '2. Find "Time Tracker" in the list\n' +
+              '3. Enable the toggle\n' +
+              '4. Restart the app\n\n' +
+              'The app will request permission automatically when needed.',
+      buttons: ['Open System Settings', 'OK'],
+      defaultId: 1,
+      cancelId: 1
+    }).then((result) => {
+      if (result.response === 0) {
+        // Open System Settings to Accessibility
+        shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+      }
+    });
+  }
+}
+
 async function getActiveAppName() {
   try {
-    // load module if not loaded
-    if (!activeWindowModule) {
-      activeWindowModule = await import('active-win');
-      logInfo ('ActiveWindow', 'active-win loaded');
+    // Try active-win first (provides more detailed information)
+    let result = null;
+    let useAppleScriptFallback = false;
+    
+    // On macOS, check for Accessibility permission first
+    if (process.platform === 'darwin') {
+      const accessibilityStatus = checkMacOSAccessibilityPermission();
+      if (accessibilityStatus !== 'authorized') {
+        logWarn('ActiveWindow', `Accessibility permission not granted (status: ${accessibilityStatus}). Will try AppleScript fallback.`);
+        useAppleScriptFallback = true;
+      } else {
+        logInfo('ActiveWindow', 'Accessibility permission is authorized, trying active-win first');
+      }
     }
+    
+    // Try active-win if we have permission or if not on macOS
+    if (!useAppleScriptFallback) {
+      try {
+        // load module if not loaded
+        if (!activeWindowModule) {
+          activeWindowModule = await import('active-win');
+          logInfo('ActiveWindow', 'active-win loaded');
+        }
 
-    // handle different exports across versions:
-    //  - newer: activeWindow()
-    //  - older: default()
-    //  - some bundles export the function itself
-    const fn =
-      (activeWindowModule && activeWindowModule.activeWindow) ||
-      (activeWindowModule && activeWindowModule.default) ||
-      activeWindowModule;
+        // handle different exports across versions:
+        //  - newer: activeWindow()
+        //  - older: default()
+        //  - some bundles export the function itself
+        const fn =
+          (activeWindowModule && activeWindowModule.activeWindow) ||
+          (activeWindowModule && activeWindowModule.default) ||
+          activeWindowModule;
 
-    if (typeof fn !== 'function') {
-      logWarn('ActiveWindow', 'active-win export not a function', typeof fn);
-      return null;
+        if (typeof fn === 'function') {
+          result = await fn();
+          if (result) {
+            logInfo('ActiveWindow', 'active-win returned result successfully');
+          } else {
+            logWarn('ActiveWindow', 'active-win returned no result, will try AppleScript fallback');
+            useAppleScriptFallback = true;
+          }
+        } else {
+          logWarn('ActiveWindow', 'active-win export not a function, will try AppleScript fallback');
+          useAppleScriptFallback = true;
+        }
+      } catch (error) {
+        logWarn('ActiveWindow', `active-win failed: ${error.message}, will try AppleScript fallback`);
+        useAppleScriptFallback = true;
+      }
     }
-
-    const result = await fn();
+    
+    // If active-win failed or we don't have permission, use AppleScript fallback (macOS only)
+    if (useAppleScriptFallback && process.platform === 'darwin') {
+      logInfo('ActiveWindow', 'Using AppleScript fallback to get app name');
+      const appleScriptAppName = await getActiveAppNameViaAppleScript();
+      if (appleScriptAppName) {
+        // Filter out our own app name if detected
+        const appName = app.getName();
+        const appNameLower = appName.toLowerCase();
+        const appleScriptAppNameLower = appleScriptAppName.toLowerCase();
+        
+        if (appleScriptAppNameLower === appNameLower || 
+            appleScriptAppNameLower.includes('time tracker') ||
+            (appleScriptAppNameLower.includes('electron') && appleScriptAppNameLower.includes('time'))) {
+          return appName;
+        }
+        
+        return appleScriptAppName;
+      }
+    }
+    
+    // If we got a result from active-win, process it
     if (!result) {
-      logWarn('ActiveWindow', 'active-win returned no result');
+      logWarn('ActiveWindow', 'Both active-win and AppleScript failed to get app name');
       return null;
     }
     
