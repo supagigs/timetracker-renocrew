@@ -587,6 +587,17 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
     try {
       sharp = require('sharp');
       logInfo('Compress', 'Sharp module loaded successfully');
+
+
+  // OPTIMIZATION: to avoid re-compression if already jpeg
+  const isAlreadyJpeg = dataUrl.includes('data:image/jpeg');
+  if (isAlreadyJpeg) {
+    const base64 = dataUrl.split(',')[1];
+    const jpegBuffer = Buffer.from(base64, 'base64');
+    logInfo('Compress', `JPEG (pre-compressed): ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
+    return jpegBuffer;
+  }
+
     } catch (error) {
       const platform = process.platform;
       const arch = process.arch;
@@ -708,8 +719,8 @@ function showToastNotification(filePath, base64Data) {
 
 function createToastWindow(filePath, base64Data) {
   try {
-    const TOAST_WIDTH = 520;
-    const TOAST_HEIGHT = 340;
+    const TOAST_WIDTH = process.platform === 'darwin' ? 300:520;
+    const TOAST_HEIGHT = process.platform === 'darwin' ? 200:340;
     toastWin = new BrowserWindow({
       width: TOAST_WIDTH,
       height: TOAST_HEIGHT,
