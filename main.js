@@ -135,7 +135,7 @@ const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'screenshots';
 
 // Track pending uploads that can be cancelled
 const pendingScreenshots = new Map();
-let toastWin = null;
+let toastWindows = []; // Array to track toast windows on all displays
 
 // ============ SCREENSHOT BATCH QUEUE ============
 const SCREENSHOT_BATCH_SIZE = 5;
@@ -683,45 +683,86 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
 
 function showToastNotification(filePath, base64Data) {
   try {
-    // Close existing toast if it exists, but wait a moment if it was just shown
-    if (toastWin && !toastWin.isDestroyed()) {
-      // If the toast was just created (less than 1 second ago), wait a bit before closing
-      const existingToastAge = Date.now() - (toastWin._createdAt || 0);
-      if (existingToastAge < 1000) {
-        // Wait a moment before closing the old toast
-        setTimeout(() => {
-          if (toastWin && !toastWin.isDestroyed()) {
-            toastWin.close();
-            toastWin = null;
-            // Create new toast after closing the old one
-            createToastWindow(filePath, base64Data);
-          }
-        }, 500);
-        return;
-      } else {
-        toastWin.close();
-        toastWin = null;
+    // Close existing toasts if they exist, but wait a moment if they were just shown
+    const now = Date.now();
+    const shouldWait = toastWindows.some(win => {
+      if (win && !win.isDestroyed()) {
+        const age = now - (win._createdAt || 0);
+        return age < 1000;
       }
+      return false;
+    });
+    
+    if (shouldWait) {
+      // Wait a moment before closing old toasts
+      setTimeout(() => {
+        closeAllToastWindows();
+        createToastWindowsOnAllDisplays(filePath, base64Data);
+      }, 500);
+      return;
     }
     
-    // Create new toast immediately
-    createToastWindow(filePath, base64Data);
+    // Close any existing toasts
+    closeAllToastWindows();
+    
+    // Create toasts on all displays
+    createToastWindowsOnAllDisplays(filePath, base64Data);
   } catch (error) {
     logError('Toast', `Error showing toast notification: ${error.message}`, error);
-    // Try to create toast anyway, even if there was an error
+    // Try to create toasts anyway, even if there was an error
     try {
-      createToastWindow(filePath, base64Data);
+      closeAllToastWindows();
+      createToastWindowsOnAllDisplays(filePath, base64Data);
     } catch (e) {
-      logError('Toast', `Failed to create toast window: ${e.message}`, e);
+      logError('Toast', `Failed to create toast windows: ${e.message}`, e);
     }
   }
 }
 
-function createToastWindow(filePath, base64Data) {
+// Close all existing toast windows
+function closeAllToastWindows() {
+  toastWindows.forEach(win => {
+    try {
+      if (win && !win.isDestroyed()) {
+        win.close();
+      }
+    } catch (error) {
+      logWarn('Toast', `Error closing toast window: ${error.message}`);
+    }
+  });
+  toastWindows = [];
+}
+
+// Create toast windows on all displays
+function createToastWindowsOnAllDisplays(filePath, base64Data) {
   try {
+    const allDisplays = screen.getAllDisplays();
+    logInfo('Toast', `Creating toast notifications on ${allDisplays.length} display(s)`);
+    
+    allDisplays.forEach((display, index) => {
+      try {
+        createToastWindow(filePath, base64Data, display, index);
+      } catch (error) {
+        logError('Toast', `Error creating toast on display ${display.id}: ${error.message}`, error);
+      }
+    });
+  } catch (error) {
+    logError('Toast', `Error getting displays: ${error.message}`, error);
+    // Fallback: create on primary display only
+    createToastWindow(filePath, base64Data, screen.getPrimaryDisplay(), 0);
+  }
+}
+
+function createToastWindow(filePath, base64Data, targetDisplay = null, displayIndex = 0) {
+  try {
+    // Use provided display or default to primary
+    if (!targetDisplay) {
+      targetDisplay = screen.getPrimaryDisplay();
+    }
+    
     const TOAST_WIDTH = process.platform === 'darwin' ? 300:520;
     const TOAST_HEIGHT = process.platform === 'darwin' ? 200:340;
-    toastWin = new BrowserWindow({
+    const toastWin = new BrowserWindow({
       width: TOAST_WIDTH,
       height: TOAST_HEIGHT,
       frame: false,
@@ -740,10 +781,17 @@ function createToastWindow(filePath, base64Data) {
 
     // Track when this toast was created
     toastWin._createdAt = Date.now();
-
-    const { workArea } = screen.getPrimaryDisplay();
+    toastWin._displayId = targetDisplay.id;
+    
+    // Add to the array of toast windows
+    toastWindows.push(toastWin);
+    
+    // Position toast on the target display (bottom-right corner)
+    const { workArea } = targetDisplay;
     const x = workArea.x + workArea.width - TOAST_WIDTH - 20;
     const y = workArea.y + workArea.height - TOAST_HEIGHT - 20;
+    
+    logInfo('Toast', `Positioning toast ${displayIndex + 1} at (${x}, ${y}) on display ${targetDisplay.id}`);
     toastWin.setPosition(x, y);
 
     toastWin.loadFile(path.join(__dirname, 'toast.html'));
@@ -779,10 +827,19 @@ function createToastWindow(filePath, base64Data) {
       if (toastWin && !toastWin.isDestroyed()) {
         toastWin.close(); 
       }
+      // Remove from array
+      const index = toastWindows.indexOf(toastWin);
+      if (index > -1) {
+        toastWindows.splice(index, 1);
+      }
     }, 9000);
     
     toastWin.on('closed', () => { 
-      toastWin = null; 
+      // Remove from array when closed
+      const index = toastWindows.indexOf(toastWin);
+      if (index > -1) {
+        toastWindows.splice(index, 1);
+      }
     });
   } catch (error) {
     logError('Toast', `Error creating toast window: ${error.message}`, error);
@@ -1202,11 +1259,8 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
       window.webContents.send('screenshot-deleted', { filePath, filename });
     });
 
-    // Step 5: Optionally close toast window if open
-    if (toastWin && !toastWin.isDestroyed()) {
-      toastWin.close();
-      toastWin = null;
-    }
+    // Step 5: Optionally close all toast windows if open
+    closeAllToastWindows();
 
     return {
       success: true,
