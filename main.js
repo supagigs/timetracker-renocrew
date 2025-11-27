@@ -681,40 +681,68 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
 }
 
 
-function showToastNotification(filePath, base64Data) {
+function showToastNotification(filePath, base64Data, screenIndex = null) {
   try {
-    // Close existing toasts if they exist, but wait a moment if they were just shown
-    const now = Date.now();
-    const shouldWait = toastWindows.some(win => {
-      if (win && !win.isDestroyed()) {
-        const age = now - (win._createdAt || 0);
-        return age < 1000;
+    // If screenIndex is provided, show toast only on that specific display
+    // Otherwise, show on all displays (for backward compatibility)
+    if (screenIndex !== null && screenIndex !== undefined) {
+      const allDisplays = screen.getAllDisplays();
+      const targetDisplayIndex = screenIndex - 1; // screenIndex is 1-based, array is 0-based
+      
+      if (targetDisplayIndex >= 0 && targetDisplayIndex < allDisplays.length) {
+        const targetDisplay = allDisplays[targetDisplayIndex];
+        logInfo('Toast', `Showing toast for screen ${screenIndex} on display ${targetDisplay.id}`);
+        
+        // Close any existing toast on this specific display
+        closeToastOnDisplay(targetDisplay.id);
+        
+        // Create toast only on the target display
+        createToastWindow(filePath, base64Data, targetDisplay, targetDisplayIndex);
+      } else {
+        logWarn('Toast', `Invalid screenIndex ${screenIndex}, showing on primary display`);
+        createToastWindow(filePath, base64Data, screen.getPrimaryDisplay(), 0);
       }
-      return false;
-    });
-    
-    if (shouldWait) {
-      // Wait a moment before closing old toasts
-      setTimeout(() => {
-        closeAllToastWindows();
-        createToastWindowsOnAllDisplays(filePath, base64Data);
-      }, 500);
-      return;
+    } else {
+      // No screenIndex provided - show on all displays (legacy behavior)
+      const now = Date.now();
+      const shouldWait = toastWindows.some(win => {
+        if (win && !win.isDestroyed()) {
+          const age = now - (win._createdAt || 0);
+          return age < 1000;
+        }
+        return false;
+      });
+      
+      if (shouldWait) {
+        // Wait a moment before closing old toasts
+        setTimeout(() => {
+          closeAllToastWindows();
+          createToastWindowsOnAllDisplays(filePath, base64Data);
+        }, 500);
+        return;
+      }
+      
+      // Close any existing toasts
+      closeAllToastWindows();
+      
+      // Create toasts on all displays
+      createToastWindowsOnAllDisplays(filePath, base64Data);
     }
-    
-    // Close any existing toasts
-    closeAllToastWindows();
-    
-    // Create toasts on all displays
-    createToastWindowsOnAllDisplays(filePath, base64Data);
   } catch (error) {
     logError('Toast', `Error showing toast notification: ${error.message}`, error);
-    // Try to create toasts anyway, even if there was an error
+    // Try to create toast anyway, even if there was an error
     try {
-      closeAllToastWindows();
-      createToastWindowsOnAllDisplays(filePath, base64Data);
+      if (screenIndex !== null && screenIndex !== undefined) {
+        const allDisplays = screen.getAllDisplays();
+        const targetDisplayIndex = screenIndex - 1;
+        if (targetDisplayIndex >= 0 && targetDisplayIndex < allDisplays.length) {
+          createToastWindow(filePath, base64Data, allDisplays[targetDisplayIndex], targetDisplayIndex);
+        }
+      } else {
+        createToastWindow(filePath, base64Data, screen.getPrimaryDisplay(), 0);
+      }
     } catch (e) {
-      logError('Toast', `Failed to create toast windows: ${e.message}`, e);
+      logError('Toast', `Failed to create toast window: ${e.message}`, e);
     }
   }
 }
@@ -731,6 +759,22 @@ function closeAllToastWindows() {
     }
   });
   toastWindows = [];
+}
+
+// Close toast windows on a specific display
+function closeToastOnDisplay(displayId) {
+  // Filter out toasts on this display (iterate backwards to avoid index issues)
+  for (let i = toastWindows.length - 1; i >= 0; i--) {
+    const win = toastWindows[i];
+    try {
+      if (win && !win.isDestroyed() && win._displayId === displayId) {
+        win.close();
+        toastWindows.splice(i, 1);
+      }
+    } catch (error) {
+      logWarn('Toast', `Error closing toast window on display ${displayId}: ${error.message}`);
+    }
+  }
 }
 
 // Create toast windows on all displays
@@ -779,9 +823,10 @@ function createToastWindow(filePath, base64Data, targetDisplay = null, displayIn
       },
     });
 
-    // Track when this toast was created
+    // Track when this toast was created and which file it's showing
     toastWin._createdAt = Date.now();
     toastWin._displayId = targetDisplay.id;
+    toastWin._filePath = filePath; // Store filePath to identify which toast to close on delete
     
     // Add to the array of toast windows
     toastWindows.push(toastWin);
@@ -884,8 +929,9 @@ async function addScreenshotToBatch(uploadData) {
   
   // Show toast notification immediately when screenshot is received
   // This ensures user sees feedback for every screenshot, even if processing fails
+  // Pass screenIndex so toast is shown only on the corresponding display
   try {
-    showToastNotification(filePath, screenshotData);
+    showToastNotification(filePath, screenshotData, screenIndex);
   } catch (toastError) {
     logWarn(contextLabel, `Failed to show toast notification: ${toastError.message}`);
     // Continue processing even if toast fails
@@ -977,7 +1023,16 @@ async function processScreenshotBatch() {
 
   // --- CRITICAL FILTER STEP ---
   // Only upload screenshots that are NOT cancelled and that DO exist.
+  // Also check for duplicates by filePath to prevent double processing
+  const seenFilePaths = new Set();
   const validScreenshots = batchToUpload.filter(item => {
+    // Check for duplicates
+    if (seenFilePaths.has(item.filePath)) {
+      logWarn('BATCH-UPLOAD', `Skipping DUPLICATE: ${item.filePath}`);
+      return false;
+    }
+    seenFilePaths.add(item.filePath);
+    
     const isCancelled = pendingScreenshots.get(item.filePath) === true;
     const exists = fs.existsSync(item.filePath);
     if (isCancelled) logInfo('BATCH-UPLOAD', `Skipping CANCELLED: ${item.filePath}`);
@@ -1200,6 +1255,14 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
     // Step 1: Mark as cancelled
     pendingScreenshots.set(filePath, true);
 
+    // Step 1.5: Remove from batch queue if it's still there (before processing)
+    const queueIndex = screenshotBatchQueue.findIndex(item => item.filePath === filePath);
+    if (queueIndex !== -1) {
+      const removedItem = screenshotBatchQueue.splice(queueIndex, 1)[0];
+      logInfo('DELETE', `Removed screenshot from batch queue: ${filePath}`);
+      pendingScreenshots.delete(filePath);
+    }
+
     // Step 2: Delete from local disk
     if (filePath && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
@@ -1259,8 +1322,22 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
       window.webContents.send('screenshot-deleted', { filePath, filename });
     });
 
-    // Step 5: Optionally close all toast windows if open
-    closeAllToastWindows();
+    // Step 5: Close only the toast window for this specific screenshot
+    // Don't close all toasts - other screens may have their own toasts
+    // Find and close only the toast that matches this filePath
+    const toastToClose = toastWindows.find(win => {
+      if (win && !win.isDestroyed() && win._filePath === filePath) {
+        return true;
+      }
+      return false;
+    });
+    if (toastToClose) {
+      try {
+        toastToClose.close();
+      } catch (error) {
+        logWarn('DELETE', `Error closing toast window: ${error.message}`);
+      }
+    }
 
     return {
       success: true,
