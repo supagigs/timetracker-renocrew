@@ -1050,49 +1050,36 @@ async function getScreenshotInterval(userEmail, sessionId) {
     const normalizedFreelancer = userEmail.trim().toLowerCase();
     let clientEmail = null;
 
-    // Try to resolve client email from the time session → project
-    if (sessionId && sessionId !== 'temp-session') {
-      try {
-        const { data: session, error: sessionError } = await supabase
-          .from('time_sessions')
-          .select('project_id')
-          .eq('id', parseInt(sessionId, 10))
-          .maybeSingle();
+    // 1) Try to resolve client from client_freelancer_assignments
+    try {
+      const { data: assignment, error: assignmentError } = await supabase
+        .from('client_freelancer_assignments')
+        .select('client_email')
+        .eq('freelancer_email', normalizedFreelancer)
+        .eq('is_active', true)
+        .maybeSingle();
 
-        if (sessionError) {
-          logWarn(
-            'ScreenshotInterval',
-            `Error fetching time_session ${sessionId}: ${sessionError.message}`,
-          );
-        } else if (session?.project_id) {
-          const { data: project, error: projectError } = await supabase
-            .from('projects')
-            .select('client_email')
-            .eq('id', session.project_id)
-            .maybeSingle();
-
-          if (projectError) {
-            logWarn(
-              'ScreenshotInterval',
-              `Error fetching project ${session.project_id}: ${projectError.message}`,
-            );
-          } else if (project?.client_email) {
-            clientEmail = project.client_email.trim().toLowerCase();
-          }
-        }
-      } catch (e) {
+      if (assignmentError) {
         logWarn(
           'ScreenshotInterval',
-          `Failed to resolve client from session ${sessionId}: ${e.message}`,
+          `Error fetching client_freelancer_assignments for ${normalizedFreelancer}: ${assignmentError.message}`,
         );
+      } else if (assignment?.client_email) {
+        clientEmail = assignment.client_email.trim().toLowerCase();
       }
+    } catch (e) {
+      logWarn(
+        'ScreenshotInterval',
+        `Failed to resolve client from assignments for ${normalizedFreelancer}: ${e.message}`,
+      );
     }
 
-    // Fallback: if not resolved from project, assume the logged-in user is the client
+    // 2) Fallback: assume logged-in user is the client
     if (!clientEmail) {
       clientEmail = normalizedFreelancer;
     }
 
+    // 3) Load client settings (global + per-freelancer map)
     const { data, error } = await supabase
       .from('client_settings')
       .select('screenshot_interval_seconds, freelancer_intervals')
@@ -1143,6 +1130,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
     return 300000;
   }
 }
+
 
 // ============ IPC HANDLERS ============
 
