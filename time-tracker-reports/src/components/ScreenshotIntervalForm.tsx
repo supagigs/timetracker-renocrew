@@ -1,22 +1,22 @@
-"use client";
+'use client';
 
-import { useState } from "react";
+import { useEffect, useState } from 'react';
 
 const OPTIONS: Array<{ label: string; seconds: number }> = [
-  { label: "30 seconds", seconds: 30 },
-  { label: "1 minute", seconds: 60 },
-  { label: "2 minutes", seconds: 120 },
-  { label: "5 minutes", seconds: 300 },
-  { label: "10 minutes", seconds: 600 },
-  { label: "20 minutes", seconds: 1200 },
-  { label: "30 minutes", seconds: 1800 },
-  { label: "1 hour", seconds: 3600 },
+  { label: '30 seconds', seconds: 30 },
+  { label: '1 minute', seconds: 60 },
+  { label: '2 minutes', seconds: 120 },
+  { label: '5 minutes', seconds: 300 },
+  { label: '10 minutes', seconds: 600 },
+  { label: '20 minutes', seconds: 1200 },
+  { label: '30 minutes', seconds: 1800 },
+  { label: '1 hour', seconds: 3600 },
 ];
 
 const DELETE_OPTIONS: Array<{ label: string; days: number }> = [
-  { label: "1 days", days: 1 },
-  { label: "2 days", days: 2 },
-  { label: "3 days", days: 3 },
+  { label: '1 days', days: 1 },
+  { label: '2 days', days: 2 },
+  { label: '3 days', days: 3 },
 ];
 
 type ScreenshotIntervalFormProps = {
@@ -40,6 +40,11 @@ export function ScreenshotIntervalForm({
   const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
+  // Keep select in sync when parent changes freelancer / initial value
+  useEffect(() => {
+    setSelected(initialIntervalSeconds);
+  }, [initialIntervalSeconds]);
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
@@ -47,38 +52,57 @@ export function ScreenshotIntervalForm({
     setError(null);
 
     try {
-      const response = await fetch("/api/client-settings/screenshot-interval", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const response = await fetch('/api/client-settings/screenshot-interval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           clientEmail,
+          freelancerEmail,          // ✅ per‑freelancer
           intervalSeconds: selected,
         }),
       });
 
       const payload = await response.json();
       if (!response.ok || !payload?.ok) {
-        setError(payload?.error ?? "Unable to save interval. Please try again.");
+        setError(
+          payload?.error ?? 'Unable to save interval. Please try again.',
+        );
         return;
       }
 
-      setMessage("Screenshot interval updated. New captures will follow this setting.");
+      // Optional: normalize from server response
+      const settings = payload.settings as {
+        freelancer_intervals?: Record<string, number>;
+      };
+      const key = freelancerEmail.trim().toLowerCase();
+      const perFreelancerFromServer = Number(
+        settings?.freelancer_intervals?.[key],
+      );
+      if (
+        Number.isFinite(perFreelancerFromServer) &&
+        perFreelancerFromServer > 0
+      ) {
+        setSelected(perFreelancerFromServer);
+      }
+
+      setMessage(
+        'Screenshot interval updated for this freelancer. New captures will follow this setting.',
+      );
     } catch (err) {
-      console.error("[ScreenshotIntervalForm] Failed to save interval:", err);
-      setError("Unexpected error while saving. Please try again.");
+      console.error('[ScreenshotIntervalForm] Failed to save interval:', err);
+      setError('Unexpected error while saving. Please try again.');
     } finally {
       setSaving(false);
     }
   };
 
-  // ✅ FIXED: Properly send all parameters
   const handleDelete = async (event: React.FormEvent) => {
     event.preventDefault();
-    
+
     console.log('[handleDelete] Starting deletion with:', {
       days: deleteDays,
       clientEmail,
-      freelancerEmail
+      freelancerEmail,
     });
 
     setDeleting(true);
@@ -88,15 +112,15 @@ export function ScreenshotIntervalForm({
     try {
       const requestBody = {
         days: deleteDays,
-        clientEmail: clientEmail,
-        freelancerEmail: freelancerEmail,
+        clientEmail,
+        freelancerEmail,
       };
 
       console.log('[handleDelete] Request body:', requestBody);
 
-      const response = await fetch("/api/screenshots/delete-old", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const response = await fetch('/api/screenshots/delete-old', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
       });
 
@@ -106,19 +130,23 @@ export function ScreenshotIntervalForm({
       console.log('[handleDelete] Response data:', result);
 
       if (!response.ok || !result.success) {
-        setDeleteErr(result.error ?? "Failed to delete screenshots. Please try again.");
+        setDeleteErr(
+          result.error ?? 'Failed to delete screenshots. Please try again.',
+        );
         return;
       }
 
       const deletedCount = result.deleted ?? 0;
       const filesDeleted = result.filesDeleted ?? 0;
-      
+
       setDeleteMsg(
-        ` Successfully deleted ${deletedCount} screenshot(s) and ${filesDeleted} file(s) older than ${deleteDays} days for ${freelancerEmail}.`
+        `Successfully deleted ${deletedCount} screenshot(s) and ${filesDeleted} file(s) older than ${deleteDays} days for ${freelancerEmail}.`,
       );
     } catch (err: any) {
       console.error('[handleDelete] Error:', err);
-      setDeleteErr(err?.message ?? "Failed to delete screenshots. Please try again.");
+      setDeleteErr(
+        err?.message ?? 'Failed to delete screenshots. Please try again.',
+      );
     } finally {
       setDeleting(false);
     }
@@ -154,13 +182,13 @@ export function ScreenshotIntervalForm({
         disabled={saving}
         className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
       >
-        {saving ? "Saving…" : "Save interval"}
+        {saving ? 'Saving…' : 'Save interval'}
       </button>
 
-      {message ? (
-        <p className="text-sm text-emerald-600">{message}</p>
+      {message ? <p className="text-sm text-emerald-600">{message}</p> : null}
+      {error ? (
+        <p className="text-sm text-destructive-foreground">{error}</p>
       ) : null}
-      {error ? <p className="text-sm text-destructive-foreground">{error}</p> : null}
 
       {/* Delete screenshots section */}
       <div className="space-y-2 mt-8 border-t pt-4">
@@ -191,15 +219,16 @@ export function ScreenshotIntervalForm({
             onClick={handleDelete}
             className="inline-flex h-10 items-center justify-center rounded-lg bg-red-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
           >
-            {deleting ? "Deleting…" : "Delete old screenshots"}
+            {deleting ? 'Deleting…' : 'Delete old screenshots'}
           </button>
         </div>
-        {deleteMsg ? <p className="text-sm text-emerald-600">{deleteMsg}</p> : null}
-        {deleteErr ? <p className="text-sm text-destructive-foreground">{deleteErr}</p> : null}
+        {deleteMsg ? (
+          <p className="text-sm text-emerald-600">{deleteMsg}</p>
+        ) : null}
+        {deleteErr ? (
+          <p className="text-sm text-destructive-foreground">{deleteErr}</p>
+        ) : null}
       </div>
     </form>
   );
 }
-
-
-

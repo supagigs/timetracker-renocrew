@@ -1,20 +1,33 @@
 import { NextResponse } from 'next/server';
-import { upsertClientScreenshotInterval } from '@/lib/clientSettings';
+import { upsertClientFreelancerInterval } from '@/lib/clientSettings';
 
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
-    const clientEmail = typeof body.clientEmail === 'string' ? body.clientEmail : '';
+
+    const clientEmail =
+      typeof body.clientEmail === 'string' ? body.clientEmail : '';
+    const freelancerEmail =
+      typeof body.freelancerEmail === 'string' ? body.freelancerEmail : '';
     const intervalSeconds = Number(body.intervalSeconds);
 
-    if (!clientEmail || !Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
+    if (
+      !clientEmail ||
+      !freelancerEmail ||
+      !Number.isFinite(intervalSeconds) ||
+      intervalSeconds <= 0
+    ) {
       return NextResponse.json(
         { error: 'Invalid payload' },
         { status: 400 },
       );
     }
 
-    const settings = await upsertClientScreenshotInterval(clientEmail, intervalSeconds);
+    const settings = await upsertClientFreelancerInterval(
+      clientEmail,
+      freelancerEmail,
+      intervalSeconds,
+    );
 
     if (!settings) {
       return NextResponse.json(
@@ -32,14 +45,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
-
-
-
-
-
-
-
-
-
-

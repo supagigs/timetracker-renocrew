@@ -14,9 +14,12 @@ export default async function ScreenshotIntervalPage({
   params: Promise<{ userEmail: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const [{ userEmail }, resolvedSearchParams] = await Promise.all([params, searchParams]);
+  const [{ userEmail }, resolvedSearchParams] = await Promise.all([
+    params,
+    searchParams,
+  ]);
   const decodedEmail = decodeURIComponent(userEmail);
-  
+
   const selectedFreelancerEmail = (() => {
     const value = resolvedSearchParams?.freelancer;
     if (Array.isArray(value)) return value[0];
@@ -27,10 +30,16 @@ export default async function ScreenshotIntervalPage({
 
   if (!profile) {
     return (
-      <DashboardShell userName={decodedEmail} userEmail={decodedEmail} userRole={null}>
+      <DashboardShell
+        userName={decodedEmail}
+        userEmail={decodedEmail}
+        userRole={null}
+      >
         <div className="space-y-6">
           <section className="rounded-2xl border border-border bg-card p-6 text-center shadow-sm">
-            <h1 className="text-2xl font-semibold text-foreground">Account not found</h1>
+            <h1 className="text-2xl font-semibold text-foreground">
+              Account not found
+            </h1>
           </section>
         </div>
       </DashboardShell>
@@ -42,7 +51,18 @@ export default async function ScreenshotIntervalPage({
   }
 
   const existingSettings = await getClientSettings(decodedEmail);
-  const intervalSeconds = existingSettings?.screenshot_interval_seconds ?? DEFAULT_INTERVAL_SECONDS;
+
+  const globalInterval =
+    existingSettings?.screenshot_interval_seconds ?? DEFAULT_INTERVAL_SECONDS;
+
+  const perFreelancerInterval =
+    selectedFreelancerEmail && existingSettings?.freelancer_intervals
+      ? existingSettings.freelancer_intervals[
+          selectedFreelancerEmail.trim().toLowerCase()
+        ]
+      : undefined;
+
+  const intervalSeconds = perFreelancerInterval ?? globalInterval;
 
   return (
     <DashboardShell
@@ -52,7 +72,9 @@ export default async function ScreenshotIntervalPage({
     >
       <div className="space-y-6">
         <header className="space-y-2">
-          <h1 className="text-3xl font-bold text-foreground">Screenshot Settings</h1>
+          <h1 className="text-3xl font-bold text-foreground">
+            Screenshot Settings
+          </h1>
           <p className="text-sm text-muted-foreground">
             Control screenshot capture intervals and manage old screenshots
           </p>
@@ -69,7 +91,8 @@ export default async function ScreenshotIntervalPage({
         {selectedFreelancerEmail && (
           <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
             <p className="text-sm font-medium text-primary">
-              Managing settings for: <strong>{selectedFreelancerEmail}</strong>
+              Managing settings for:{' '}
+              <strong>{selectedFreelancerEmail}</strong>
             </p>
           </div>
         )}
@@ -85,7 +108,8 @@ export default async function ScreenshotIntervalPage({
         ) : (
           <section className="rounded-2xl border border-yellow-200 bg-yellow-50 p-6">
             <p className="text-sm text-yellow-800">
-             Please select a freelancer from the dropdown above to manage their screenshot settings.
+              Please select a freelancer from the dropdown above to manage their
+              screenshot settings.
             </p>
           </section>
         )}
