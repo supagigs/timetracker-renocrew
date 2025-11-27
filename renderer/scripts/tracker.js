@@ -1478,17 +1478,25 @@ document.addEventListener('DOMContentLoaded', () => {
           const screenshot = screenshots[i];
           // Use original ISO timestamp - modification for filename happens in main process
           
+          // Use the screenshot's display index if available, otherwise use array index
+          // The capture-all-screens function returns screenshots in display order,
+          // so screenshots[i] should be display i+1, but use the index property if available
+          const screenIndex = (screenshot.screenIndex !== undefined) ? screenshot.screenIndex : 
+                              (screenshot.index !== undefined) ? screenshot.index + 1 : 
+                              (screenshot.displayIndex !== undefined) ? screenshot.displayIndex + 1 :
+                              i + 1;
+          
           window.electronAPI.queueScreenshotUpload({
             userEmail: email,
             sessionId: currentSessionId || 'temp-session',
             screenshotData: screenshot.dataURL,
             timestamp: baseTimestamp, // Keep original ISO format
             isIdle,
-            screenIndex: i + 1,
+            screenIndex: screenIndex,
             screenName: screenshot.name,
           }).then(res => {
             if (!res?.ok) {
-              console.error(`queueScreenshotUpload failed for screen ${i + 1}:`, res?.error);
+              console.error(`queueScreenshotUpload failed for screen ${screenIndex}:`, res?.error);
             } else {
               showScreenshotNotification({
                 timestamp: baseTimestamp,
@@ -1499,7 +1507,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 isIdle: res.capturedIdle || false,
               });
             }
-          }).catch(err => console.error(`queueScreenshotUpload error for screen ${i + 1}:`, err));
+          }).catch(err => console.error(`queueScreenshotUpload error for screen ${screenIndex}:`, err));
         }
       }
   

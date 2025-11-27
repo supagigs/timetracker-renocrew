@@ -683,6 +683,10 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
 
 function showToastNotification(filePath, base64Data, screenIndex = null) {
   try {
+    const fileName = path.basename(filePath);
+    const dataPreview = base64Data ? base64Data.substring(0, 50) + '...' : 'null';
+    logInfo('Toast', `showToastNotification called - File: ${fileName}, ScreenIndex: ${screenIndex}, DataPreview: ${dataPreview}`);
+    
     // If screenIndex is provided, show toast only on that specific display
     // Otherwise, show on all displays (for backward compatibility)
     if (screenIndex !== null && screenIndex !== undefined) {
@@ -691,12 +695,12 @@ function showToastNotification(filePath, base64Data, screenIndex = null) {
       
       if (targetDisplayIndex >= 0 && targetDisplayIndex < allDisplays.length) {
         const targetDisplay = allDisplays[targetDisplayIndex];
-        logInfo('Toast', `Showing toast for screen ${screenIndex} on display ${targetDisplay.id}`);
+        logInfo('Toast', `Showing toast for screen ${screenIndex} (display index ${targetDisplayIndex}) on display ${targetDisplay.id}, file: ${fileName}`);
         
         // Close any existing toast on this specific display
         closeToastOnDisplay(targetDisplay.id);
         
-        // Create toast only on the target display
+        // Create toast only on the target display with the correct screenshot data
         createToastWindow(filePath, base64Data, targetDisplay, targetDisplayIndex);
       } else {
         logWarn('Toast', `Invalid screenIndex ${screenIndex}, showing on primary display`);
@@ -850,10 +854,13 @@ function createToastWindow(filePath, base64Data, targetDisplay = null, displayIn
       
       try {
         toastWin.showInactive();
-        logInfo('Toast', `Toast notification displayed for: ${path.basename(filePath)}`);
+        const fileName = path.basename(filePath);
+        logInfo('Toast', `Toast notification displayed - Display: ${targetDisplay.id}, ScreenIndex: ${displayIndex + 1}, File: ${fileName}, DataLength: ${base64Data ? base64Data.length : 0}`);
         
         if (toastWin.webContents && !toastWin.webContents.isDestroyed()) {
+          // Send the correct filePath and base64Data for this specific screenshot
           toastWin.webContents.send('toast-init', { filePath, base64Data });
+          logInfo('Toast', `Sent toast-init for file: ${fileName} on display ${targetDisplay.id}`);
         } else {
           logWarn('Toast', 'Toast webContents was destroyed before sending init message');
         }
@@ -930,6 +937,8 @@ async function addScreenshotToBatch(uploadData) {
   // Show toast notification immediately when screenshot is received
   // This ensures user sees feedback for every screenshot, even if processing fails
   // Pass screenIndex so toast is shown only on the corresponding display
+  // Log to verify correct data is being passed
+  logInfo(contextLabel, `Showing toast for screen ${screenIndex || 'unknown'}, filePath: ${path.basename(filePath)}, screenshotData length: ${screenshotData ? screenshotData.length : 0}`);
   try {
     showToastNotification(filePath, screenshotData, screenIndex);
   } catch (toastError) {
@@ -1373,7 +1382,7 @@ ipcMain.handle('get-system-idle-state', (event, thresholdSeconds) => {
   }
 });
 
-ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle, appName }) => {
+ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle, appName, screenIndex, screenName }) => {
   return handleScreenshotUpload({
     userEmail,
     sessionId,
@@ -1381,6 +1390,8 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
     timestamp,
     isIdle,
     appName, // Optional: if provided, will be used; otherwise captured automatically
+    screenIndex, // Pass through screenIndex from renderer
+    screenName, // Pass through screenName from renderer
     contextLabel: 'UPLOAD'
   });
 });
@@ -1461,10 +1472,63 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
         if (sources && sources.length > 0) {
           const timestamp = new Date().toISOString();
           
+          // Match sources to displays by trying to identify which display each source represents
+          // This is important because sources array order may not match display order
+          const allDisplays = screen.getAllDisplays();
+          
+          // Match sources to displays by size to ensure correct mapping
+          // This is important because source order may not match display order
+          const sourceDisplayMap = new Map(); // Maps source index to display index
+          
+          for (let sourceIdx = 0; sourceIdx < sources.length; sourceIdx++) {
+            const source = sources[sourceIdx];
+            const sourceSize = source.thumbnail.getSize();
+            
+            // Try to match source to display by size
+            let matchedDisplayIndex = -1;
+            for (let displayIdx = 0; displayIdx < allDisplays.length; displayIdx++) {
+              const display = allDisplays[displayIdx];
+              // Match by size (allowing for small differences due to scaling)
+              if (Math.abs(sourceSize.width - display.size.width) < 10 && 
+                  Math.abs(sourceSize.height - display.size.height) < 10) {
+                // Check if this display is already matched
+                const alreadyMatched = Array.from(sourceDisplayMap.values()).includes(displayIdx);
+                if (!alreadyMatched) {
+                  matchedDisplayIndex = displayIdx;
+                  sourceDisplayMap.set(sourceIdx, displayIdx);
+                  logInfo('BG-UPLOAD', `Matched source ${sourceIdx + 1} (${sourceSize.width}x${sourceSize.height}) to display ${displayIdx + 1} (${display.size.width}x${display.size.height})`);
+                  break;
+                }
+              }
+            }
+            
+            // If no match found, use source index as fallback (but try to avoid conflicts)
+            if (matchedDisplayIndex === -1) {
+              // Find first unmatched display
+              for (let displayIdx = 0; displayIdx < allDisplays.length; displayIdx++) {
+                if (!Array.from(sourceDisplayMap.values()).includes(displayIdx)) {
+                  matchedDisplayIndex = displayIdx;
+                  sourceDisplayMap.set(sourceIdx, displayIdx);
+                  logWarn('BG-UPLOAD', `Could not match source ${sourceIdx + 1} by size, using display ${displayIdx + 1} as fallback`);
+                  break;
+                }
+              }
+            }
+          }
+          
           // Capture and upload screenshots from all displays
-          const uploadPromises = sources.map(async (source, index) => {
+          const uploadPromises = sources.map(async (source, sourceIndex) => {
             try {
               const screenshotData = source.thumbnail.toDataURL('image/png');
+              
+              // Get the matched display index for this source
+              const matchedDisplayIndex = sourceDisplayMap.get(sourceIndex) ?? sourceIndex;
+              const screenIndex = matchedDisplayIndex + 1; // screenIndex is 1-based
+              const matchedDisplay = allDisplays[matchedDisplayIndex];
+              const screenName = matchedDisplay?.label || source.name || `Screen ${screenIndex}`;
+              
+              logInfo('BG-UPLOAD', `Processing source ${sourceIndex + 1} as screen ${screenIndex} (display ${matchedDisplayIndex + 1}): ${screenName}`);
+              
               await handleScreenshotUpload({
                 userEmail: currentUserEmail,
                 sessionId: currentSessionId,
@@ -1472,11 +1536,11 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
                 timestamp,
                 isIdle: isUserIdle,
                 contextLabel: 'BG-UPLOAD',
-                screenIndex: index + 1,
-                screenName: source.name || `Screen ${index + 1}`
+                screenIndex: screenIndex,
+                screenName: screenName
               });
             } catch (error) {
-              logError('BG-UPLOAD', `Error uploading screenshot for screen ${index + 1}:`, error);
+              logError('BG-UPLOAD', `Error uploading screenshot for source ${sourceIndex + 1}:`, error);
             }
           });
           
@@ -1565,16 +1629,12 @@ ipcMain.handle('capture-screen', async () => {
 // capture-all-screens (returns array of screenshots from all displays)
 ipcMain.handle('capture-all-screens', async () => {
   try {
-    const displays = screen.getAllDisplays();
-    const screenshots = [];
+    const allDisplays = screen.getAllDisplays();
     
-    logInfo('IPC', `[capture-all-screens] Detected ${displays.length} display(s)`);
-    displays.forEach((display, idx) => {
+    logInfo('IPC', `[capture-all-screens] Detected ${allDisplays.length} display(s)`);
+    allDisplays.forEach((display, idx) => {
       logInfo('IPC', `[capture-all-screens] Display ${idx + 1}: ${display.size.width}x${display.size.height}`);
     });
-    
-    // Get all screen sources
-    const allDisplays = screen.getAllDisplays();
     const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
     const maxHeight = Math.max(...allDisplays.map(d => d.size.height));
     
@@ -1599,14 +1659,79 @@ ipcMain.handle('capture-all-screens', async () => {
     }
     
     // Map each source to a screenshot object with dataURL and name
-    for (const source of sources) {
-      screenshots.push({
+    // Match sources to displays by size to ensure correct mapping
+    // This is important because source order may not match display order
+    const matchedScreenshots = [];
+    const usedDisplayIndices = new Set(); // Track which displays have been matched
+    
+    for (let i = 0; i < sources.length; i++) {
+      const source = sources[i];
+      const sourceSize = source.thumbnail.getSize();
+      
+      logInfo('IPC', `[capture-all-screens] Processing source ${i + 1}: ${sourceSize.width}x${sourceSize.height}, name: "${source.name}"`);
+      
+      // Try to match source to display by size
+      let matchedDisplayIndex = -1;
+      for (let j = 0; j < allDisplays.length; j++) {
+        const display = allDisplays[j];
+        // Match by size (allowing for small differences due to scaling)
+        const widthDiff = Math.abs(sourceSize.width - display.size.width);
+        const heightDiff = Math.abs(sourceSize.height - display.size.height);
+        
+        if (widthDiff < 10 && heightDiff < 10) {
+          // Check if this display is already matched
+          if (!usedDisplayIndices.has(j)) {
+            matchedDisplayIndex = j;
+            usedDisplayIndices.add(j);
+            logInfo('IPC', `[capture-all-screens] ✓ Matched source ${i + 1} (${sourceSize.width}x${sourceSize.height}) to display ${j + 1} (${display.size.width}x${display.size.height})`);
+            break;
+          } else {
+            logWarn('IPC', `[capture-all-screens] Display ${j + 1} already matched, skipping`);
+          }
+        }
+      }
+      
+      // If no match found, find first unmatched display
+      if (matchedDisplayIndex === -1) {
+        for (let j = 0; j < allDisplays.length; j++) {
+          if (!usedDisplayIndices.has(j)) {
+            matchedDisplayIndex = j;
+            usedDisplayIndices.add(j);
+            logWarn('IPC', `[capture-all-screens] Could not match source ${i + 1} by size, assigning to display ${j + 1} as fallback`);
+            break;
+          }
+        }
+        
+        // If still no match (shouldn't happen), use source index
+        if (matchedDisplayIndex === -1) {
+          matchedDisplayIndex = i;
+          logWarn('IPC', `[capture-all-screens] No unmatched displays found, using source index ${i} as last resort`);
+        }
+      }
+      
+      matchedScreenshots[matchedDisplayIndex] = {
         dataURL: source.thumbnail.toDataURL('image/png'),
-        name: source.name || `Screen ${screenshots.length + 1}`
-      });
+        name: source.name || `Screen ${matchedDisplayIndex + 1}`,
+        index: matchedDisplayIndex, // Use matched display index, not source index
+        displayIndex: matchedDisplayIndex, // Store for reference
+        screenIndex: matchedDisplayIndex + 1 // 1-based screen index for consistency
+      };
+      
+      logInfo('IPC', `[capture-all-screens] Created screenshot for display ${matchedDisplayIndex + 1} (screenIndex: ${matchedDisplayIndex + 1})`);
     }
     
-    logInfo('IPC', `Captured ${screenshots.length} screen(s)`);
+    // Fill in any gaps and return in display order
+    const screenshots = [];
+    for (let i = 0; i < allDisplays.length; i++) {
+      if (matchedScreenshots[i]) {
+        screenshots.push(matchedScreenshots[i]);
+        logInfo('IPC', `[capture-all-screens] Added screenshot for display ${i + 1} to results array`);
+      } else {
+        logWarn('IPC', `[capture-all-screens] No screenshot found for display ${i + 1}`);
+      }
+    }
+    
+    logInfo('IPC', `Captured ${screenshots.length} screen(s) in display order`);
     return screenshots;
   } catch (e) {
     logError('IPC', 'capture-all-screens failed', e);
