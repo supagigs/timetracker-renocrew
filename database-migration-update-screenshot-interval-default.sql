@@ -1,6 +1,9 @@
 -- Migration: Update default screenshot interval from 20 seconds to 5 minutes (300 seconds)
 -- Run this in your Supabase SQL editor
 -- This updates the existing table's default value and existing records
+--
+-- DEPRECATED: This migration is historical. The screenshot_interval_seconds column
+-- has been removed. Use freelancer_intervals JSON map instead.
 
 -- Step 1: Update the default value for the column
 ALTER TABLE client_settings 

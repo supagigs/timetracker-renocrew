@@ -52,9 +52,6 @@ export default async function ScreenshotIntervalPage({
 
   const existingSettings = await getClientSettings(decodedEmail);
 
-  const globalInterval =
-    existingSettings?.screenshot_interval_seconds ?? DEFAULT_INTERVAL_SECONDS;
-
   const perFreelancerInterval =
     selectedFreelancerEmail && existingSettings?.freelancer_intervals
       ? existingSettings.freelancer_intervals[
@@ -62,7 +59,7 @@ export default async function ScreenshotIntervalPage({
         ]
       : undefined;
 
-  const intervalSeconds = perFreelancerInterval ?? globalInterval;
+  const intervalSeconds = perFreelancerInterval ?? DEFAULT_INTERVAL_SECONDS;
 
   return (
     <DashboardShell

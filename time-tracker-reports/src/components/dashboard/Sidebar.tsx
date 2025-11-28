@@ -88,13 +88,12 @@ export function Sidebar({
   return (
     <aside className="hidden h-screen w-64 flex-col border-r border-border bg-sidebar px-6 pb-6 pt-6 md:flex">
       <div className="mb-8 flex items-center gap-3">
-        <Image
+        <img
           src="/SupagigsIcon.ico"
           alt="Supagigs logo"
           width={36}
           height={36}
           className="h-9 w-9 rounded-xl object-contain"
-          priority
         />
         <span className="text-xl font-bold tracking-tight text-sidebar-foreground">Supagigs</span>
       </div>

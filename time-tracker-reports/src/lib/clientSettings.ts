@@ -2,7 +2,6 @@ import { createServerSupabaseClient } from './supabaseServer';
 
 export type ClientSettings = {
   client_email: string;
-  screenshot_interval_seconds: number;
   freelancer_intervals: Record<string, number>;
   updated_at: string | null;
 };
@@ -16,7 +15,7 @@ export async function getClientSettings(
   const { data, error } = await supabase
     .from('client_settings')
     .select(
-      'client_email, screenshot_interval_seconds, freelancer_intervals, updated_at',
+      'client_email, freelancer_intervals, updated_at',
     )
     .eq('client_email', normalizedEmail)
     .maybeSingle();
@@ -30,7 +29,6 @@ export async function getClientSettings(
 
   return {
     client_email: data.client_email,
-    screenshot_interval_seconds: data.screenshot_interval_seconds ?? 300,
     freelancer_intervals: (data.freelancer_intervals ??
       {}) as Record<string, number>,
     updated_at: data.updated_at ?? null,
@@ -49,7 +47,7 @@ export async function upsertClientFreelancerInterval(
   // 1) Load current JSON map only
   const { data: existing, error: fetchError } = await supabase
     .from('client_settings')
-    .select('client_email, screenshot_interval_seconds, freelancer_intervals, updated_at')
+    .select('client_email, freelancer_intervals, updated_at')
     .eq('client_email', normalizedClient)
     .maybeSingle();
 
@@ -69,20 +67,19 @@ export async function upsertClientFreelancerInterval(
     [normalizedFreelancer]: intervalSeconds,
   };
 
-  // 2) IMPORTANT: do NOT overwrite screenshot_interval_seconds here
+  // 2) Upsert the freelancer intervals map
   const { data, error } = await supabase
     .from('client_settings')
     .upsert(
       {
         client_email: normalizedClient,
         freelancer_intervals: newMap,
-        // leave screenshot_interval_seconds as it is in DB
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'client_email' },
     )
     .select(
-      'client_email, screenshot_interval_seconds, freelancer_intervals, updated_at',
+      'client_email, freelancer_intervals, updated_at',
     )
     .maybeSingle();
 
@@ -96,9 +93,9 @@ export async function upsertClientFreelancerInterval(
 
   return {
     client_email: data!.client_email,
-    screenshot_interval_seconds: data!.screenshot_interval_seconds ?? 300,
     freelancer_intervals: (data!.freelancer_intervals ??
       {}) as Record<string, number>,
     updated_at: data!.updated_at ?? null,
   };
 }
+

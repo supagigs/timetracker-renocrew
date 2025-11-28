@@ -1,10 +1,13 @@
 -- Migration: Add client_settings for per-client screenshot interval
 -- Run this in your Supabase SQL editor
+-- 
+-- DEPRECATED: This migration is historical. The screenshot_interval_seconds column
+-- has been removed. Use freelancer_intervals JSON map instead.
 
 CREATE TABLE IF NOT EXISTS client_settings (
   id SERIAL PRIMARY KEY,
   client_email TEXT NOT NULL UNIQUE,
-  screenshot_interval_seconds INTEGER NOT NULL DEFAULT 300,
+  screenshot_interval_seconds INTEGER NOT NULL DEFAULT 300, -- DEPRECATED: This column should be removed
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

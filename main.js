@@ -1048,81 +1048,119 @@ async function getScreenshotInterval(userEmail, sessionId) {
     }
 
     const normalizedFreelancer = userEmail.trim().toLowerCase();
+    const DEFAULT_INTERVAL_SECONDS = 300; // 5 minutes default
     let clientEmail = null;
 
-    // 1) Try to resolve client from client_freelancer_assignments
-    try {
-      const { data: assignment, error: assignmentError } = await supabase
-        .from('client_freelancer_assignments')
-        .select('client_email')
-        .eq('freelancer_email', normalizedFreelancer)
-        .eq('is_active', true)
-        .maybeSingle();
-
-      if (assignmentError) {
-        logWarn(
-          'ScreenshotInterval',
-          `Error fetching client_freelancer_assignments for ${normalizedFreelancer}: ${assignmentError.message}`,
-        );
-      } else if (assignment?.client_email) {
-        clientEmail = assignment.client_email.trim().toLowerCase();
-      }
-    } catch (e) {
-      logWarn(
-        'ScreenshotInterval',
-        `Failed to resolve client from assignments for ${normalizedFreelancer}: ${e.message}`,
-      );
+    // 1) Get project_id from time_sessions using sessionId
+    if (!sessionId) {
+      logWarn('ScreenshotInterval', 'No sessionId provided, using default interval');
+      return DEFAULT_INTERVAL_SECONDS * 1000;
     }
 
-    // 2) Fallback: assume logged-in user is the client
+    const { data: sessionData, error: sessionError } = await supabase
+      .from('time_sessions')
+      .select('project_id')
+      .eq('id', sessionId)
+      .maybeSingle();
+
+    if (sessionError) {
+      logWarn(
+        'ScreenshotInterval',
+        `Error fetching session ${sessionId}: ${sessionError.message}, using default`,
+      );
+      return DEFAULT_INTERVAL_SECONDS * 1000;
+    }
+
+    if (!sessionData || !sessionData.project_id) {
+      logInfo(
+        'ScreenshotInterval',
+        `Session ${sessionId} has no project_id, using default interval`,
+      );
+      return DEFAULT_INTERVAL_SECONDS * 1000;
+    }
+
+    const projectId = sessionData.project_id;
+
+    // 2) Get client email from project_assignments (assigned_by) or projects (user_email)
+    // Try project_assignments first (most reliable - shows who assigned the project)
+    const { data: projectAssignment, error: assignmentError } = await supabase
+      .from('project_assignments')
+      .select('assigned_by')
+      .eq('project_id', projectId)
+      .eq('freelancer_email', normalizedFreelancer)
+      .maybeSingle();
+
+    if (!assignmentError && projectAssignment && projectAssignment.assigned_by) {
+      // Use assigned_by (the client who assigned the project)
+      clientEmail = projectAssignment.assigned_by.trim().toLowerCase();
+    }
+
+    // 3) If project_assignments lookup failed or has no assigned_by, try getting client from projects table directly
     if (!clientEmail) {
+      const { data: projectData, error: projectError } = await supabase
+        .from('projects')
+        .select('user_email')
+        .eq('id', projectId)
+        .maybeSingle();
+
+      if (!projectError && projectData && projectData.user_email) {
+        clientEmail = projectData.user_email.trim().toLowerCase();
+      }
+    }
+
+    // 4) Final fallback: assume logged-in user is the client
+    if (!clientEmail) {
+      logInfo(
+        'ScreenshotInterval',
+        `Could not resolve client for project ${projectId}, assuming user is client`,
+      );
       clientEmail = normalizedFreelancer;
     }
 
-    // 3) Load client settings (global + per-freelancer map)
-    const { data, error } = await supabase
+    // 5) Load client settings (per-freelancer map) for the resolved client
+    const { data: clientSettings, error: settingsError } = await supabase
       .from('client_settings')
-      .select('screenshot_interval_seconds, freelancer_intervals')
+      .select('freelancer_intervals')
       .eq('client_email', clientEmail)
       .maybeSingle();
 
-    if (error) {
+    if (settingsError) {
       logWarn(
         'ScreenshotInterval',
-        `Error fetching interval for client ${clientEmail}: ${error.message}, using default`,
+        `Error fetching client_settings for client ${clientEmail}: ${settingsError.message}, using default`,
       );
-      return 300000;
+      return DEFAULT_INTERVAL_SECONDS * 1000;
     }
 
-    if (!data) {
+    if (!clientSettings) {
       logInfo(
         'ScreenshotInterval',
-        `No settings row for client ${clientEmail}, using default`,
+        `No client_settings found for client ${clientEmail}, using default interval`,
       );
-      return 300000;
+      return DEFAULT_INTERVAL_SECONDS * 1000;
     }
 
-    const fallbackSeconds = Number(data.screenshot_interval_seconds) || 300;
-    const map = data.freelancer_intervals || {};
+    // 6) Get the interval from freelancer_intervals map using freelancer email as key
+    const map = clientSettings.freelancer_intervals || {};
     const perFreelancerSeconds = Number(map[normalizedFreelancer]);
 
     const intervalSeconds =
       Number.isFinite(perFreelancerSeconds) && perFreelancerSeconds > 0
         ? perFreelancerSeconds
-        : fallbackSeconds;
+        : DEFAULT_INTERVAL_SECONDS;
 
     if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
       logWarn(
         'ScreenshotInterval',
         `Invalid interval value: ${intervalSeconds}, using default`,
       );
-      return 300000;
+      return DEFAULT_INTERVAL_SECONDS * 1000;
     }
 
     const intervalMs = intervalSeconds * 1000;
     logInfo(
       'ScreenshotInterval',
-      `Using interval for client ${clientEmail}, freelancer ${normalizedFreelancer}: ${intervalSeconds} seconds (${intervalMs}ms)`,
+      `Using interval for client ${clientEmail}, freelancer ${normalizedFreelancer}, project ${projectId}: ${intervalSeconds} seconds (${intervalMs}ms)`,
     );
     return intervalMs;
   } catch (e) {
@@ -1283,10 +1321,10 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   const scheduleNextScreenshot = () => {
     if (!isBackgroundCaptureActive) return;
 
-    // Generate random delay between 50% and 100% of the interval
+    // Generate random delay between 70% and 120% of the interval
     // This ensures screenshots are captured randomly within the specified range
-    const minDelay = Math.floor(intervalMs * 0.5);
-    const maxDelay = intervalMs;
+    const minDelay = Math.floor(intervalMs * 0.7);
+    const maxDelay = Math.floor(intervalMs * 1.2);
     const randomDelay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
 
     backgroundScreenshotInterval = setTimeout(async () => {
@@ -1380,7 +1418,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   // Then schedule subsequent screenshots with random intervals
   scheduleNextScreenshot();
   
-  logInfo('IPC', `Background screenshots started with random intervals between ${Math.floor(intervalMs * 0.5)}ms and ${intervalMs}ms`);
+  logInfo('IPC', `Background screenshots started with random intervals between ${Math.floor(intervalMs * 0.7)}ms and ${Math.floor(intervalMs * 1.2)}ms`);
   return true;
 });
 
