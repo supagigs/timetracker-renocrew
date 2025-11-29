@@ -1197,8 +1197,16 @@ async function processScreenshotBatch() {
 
   } catch (error) {
     logError('BATCH-UPLOAD', `Batch processing error: ${error.message}`, error);
-    screenshotBatchQueue.unshift(...validScreenshots);
-  } finally {
+    const stillPending = validScreenshots.filter(item => {
+    const isCancelled = pendingScreenshots.get(item.filePath) === true;
+    const exists = fs.existsSync(item.filePath);
+    return !isCancelled && exists;
+    });
+    if (stillPending.length > 0) {
+    // Only re-queue items that are still valid for retry
+    screenshotBatchQueue.unshift(...stillPending);
+    }
+    } finally {
     isBatchUploading = false;
   }
 }
