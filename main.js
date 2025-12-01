@@ -150,6 +150,16 @@ let isBackgroundTickRunning = false;
 let supabaseClientInstance = null;
 let currentUserEmail = null;
 let currentSessionId = null;
+
+// Simple in-memory time tracking state for IPC handlers used by preload.js
+let timeTrackingState = {
+  active: false,
+  paused: false,
+  userEmail: null,
+  startedAt: null,
+  pausedAt: null,
+  totalActiveMs: 0,
+};
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'screenshots';
 
 // Track pending uploads that can be cancelled
@@ -164,6 +174,34 @@ const SCREENSHOT_BATCH_FLUSH_INTERVAL = 5 * 60 * 1000; // Flush every 5 minutes 
 const screenshotBatchQueue = [];
 let isBatchUploading = false;
 let batchFlushInterval = null;
+
+function scheduleBatchFlush() {
+  // If a flush timer is already scheduled or there is nothing to process, do nothing.
+  if (batchFlushInterval || screenshotBatchQueue.length === 0) {
+    return;
+  }
+
+  batchFlushInterval = setTimeout(async () => {
+    batchFlushInterval = null;
+
+    if (screenshotBatchQueue.length > 0 && !isBatchUploading) {
+      logInfo(
+        'BATCH-UPLOAD',
+        `Periodic flush: processing ${screenshotBatchQueue.length} screenshot(s) after timeout`,
+      );
+      await processScreenshotBatch();
+    }
+
+    if (screenshotBatchQueue.length > 0) {
+      // Queue still has items (e.g. re-queued after failures) – schedule another flush.
+      scheduleBatchFlush();
+    } else {
+      logInfo('BATCH-UPLOAD', 'Flush timer finished (queue empty)');
+    }
+  }, SCREENSHOT_BATCH_FLUSH_INTERVAL);
+
+  logInfo('BATCH-UPLOAD', `Scheduled flush timer (${SCREENSHOT_BATCH_FLUSH_INTERVAL}ms)`);
+}
 
 // ============ MAIN WINDOW CREATION ============
 function createWindow() {
@@ -249,9 +287,16 @@ function createWindow() {
   }
 
   const broadcastIdleState = (isIdle) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      window.webContents.send('system-idle-state', { idle: isIdle, timestamp: Date.now() });
-    });
+    try {
+      const payload = { idle: isIdle, timestamp: Date.now() };
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('system-idle-state', payload);
+        }
+      });
+    } catch (e) {
+      logWarn('IdleState', `Failed to broadcast system-idle-state: ${e?.message || e}`);
+    }
   };
 
   if (powerMonitor.listenerCount('user-did-become-idle') === 0) {
@@ -290,15 +335,34 @@ function createWindow() {
     }, 2000);
   }
 
+  // Graceful close handler: warn when timer is active or user is logged in,
+  // but still allow the user to force-close the app.
+  let isForceClosing = false;
+
   mainWindow.on('close', (event) => {
+    // If we've already decided to force close, do not block again.
+    if (isForceClosing) {
+      return;
+    }
+
     if (isTimerActive) {
       event.preventDefault();
       dialog.showMessageBox(mainWindow, {
         type: 'warning',
         title: 'Timer is Active',
         message: 'Please clock out first before closing the application.',
-        detail: 'Your timer is still running. You must clock out to end your session before closing the app.',
-        buttons: ['OK']
+        detail:
+          'Your timer is still running. You must clock out to end your session before closing the app.\n\n' +
+          'If you close anyway, your current session may remain open on the server.',
+        buttons: ['Cancel', 'Close Anyway'],
+        defaultId: 0,
+        cancelId: 0,
+      }).then(({ response }) => {
+        if (response === 1 && mainWindow && !mainWindow.isDestroyed()) {
+          // User chose "Close Anyway" – allow the window to close.
+          isForceClosing = true;
+          mainWindow.close();
+        }
       });
     } else if (isUserLoggedIn) {
       event.preventDefault();
@@ -306,8 +370,18 @@ function createWindow() {
         type: 'info',
         title: 'Please Log Out',
         message: 'Log out before closing the application.',
-        detail: 'To keep your data safe, please log out from the app before closing the window.',
-        buttons: ['OK']
+        detail:
+          'To keep your data safe, please log out from the app before closing the window.\n\n' +
+          'If you close anyway, your session may remain active.',
+        buttons: ['Cancel', 'Close Anyway'],
+        defaultId: 0,
+        cancelId: 0,
+      }).then(({ response }) => {
+        if (response === 1 && mainWindow && !mainWindow.isDestroyed()) {
+          // User chose "Close Anyway" – allow the window to close.
+          isForceClosing = true;
+          mainWindow.close();
+        }
       });
     }
   });
@@ -632,16 +706,6 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
     try {
       sharp = require('sharp');
       logInfo('Compress', 'Sharp module loaded successfully');
-
-      // OPTIMIZATION: to avoid re-compression if already jpeg
-      const isAlreadyJpeg = dataUrl.includes('data:image/jpeg');
-      if (isAlreadyJpeg) {
-        const base64 = dataUrl.split(',')[1];
-        const jpegBuffer = Buffer.from(base64, 'base64');
-        logInfo('Compress', `JPEG (pre-compressed): ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
-        return jpegBuffer;
-      }
-
     } catch (error) {
       const platform = process.platform;
       const arch = process.arch;
@@ -683,7 +747,32 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
     }
   }
 
-  const base64 = dataUrl.split(',')[1];
+  // OPTIMIZATION: avoid re-compression if the input is already a JPEG data URL.
+  // This logic is intentionally kept outside the sharp loading try/catch so
+  // it runs on every call (not just the first one) and is not swallowed by
+  // sharp loading errors.
+  const extractBase64FromDataUrl = (dataUrlValue) => {
+    if (typeof dataUrlValue !== 'string' || dataUrlValue.length === 0) {
+      throw new Error('Invalid data URL: value is empty or not a string');
+    }
+
+    const parts = dataUrlValue.split(',');
+    if (!parts[1]) {
+      throw new Error('Invalid data URL: missing base64 payload after comma');
+    }
+
+    return parts[1];
+  };
+
+  const isAlreadyJpeg = dataUrl.includes('data:image/jpeg');
+  if (isAlreadyJpeg) {
+    const base64 = extractBase64FromDataUrl(dataUrl);
+    const jpegBuffer = Buffer.from(base64, 'base64');
+    logInfo('Compress', `JPEG (pre-compressed): ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
+    return jpegBuffer;
+  }
+
+  const base64 = extractBase64FromDataUrl(dataUrl);
   const inputBuffer = Buffer.from(base64, 'base64');
   const UPLOAD_WIDTH = 800;
   const JPEG_QUALITY = 70;
@@ -696,7 +785,7 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
     .toBuffer();
 
   // Keep compressing if needed
-  // Keep compressing if needed
+
 let attempts = 0;
 
 while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5 && quality > 30) {
@@ -999,27 +1088,21 @@ async function addScreenshotToBatch(uploadData) {
     screenshotBatchQueue.push(batchItem);
     pendingScreenshots.set(filePath, false);
 
-    if (!batchFlushInterval && screenshotBatchQueue.length > 0) {
-      batchFlushInterval = setInterval(async () => {
-        if (screenshotBatchQueue.length > 0 && !isBatchUploading) {
-          logInfo('BATCH-UPLOAD', `Periodic flush: processing ${screenshotBatchQueue.length} screenshot(s) after timeout`);
-          await processScreenshotBatch();
-        }
-        if (screenshotBatchQueue.length === 0) {
-          clearInterval(batchFlushInterval);
-          batchFlushInterval = null;
-          logInfo('BATCH-UPLOAD', `Flush interval cleared (queue empty)`);
-        }
-      }, SCREENSHOT_BATCH_FLUSH_INTERVAL);
-      logInfo('BATCH-UPLOAD', `Created flush interval (${SCREENSHOT_BATCH_FLUSH_INTERVAL}ms)`);
-    }
+    // Ensure a single flush timer exists while there are items queued.
+    scheduleBatchFlush();
 
     if (screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
       logInfo(contextLabel, `Batch full (${SCREENSHOT_BATCH_SIZE} screenshots), starting upload...`);
       await processScreenshotBatch();
-      if (batchFlushInterval) {
-        clearInterval(batchFlushInterval);
+      
+      // If the queue is now empty, cancel any pending flush timer.
+      if (screenshotBatchQueue.length === 0 && batchFlushInterval) {
+        clearTimeout(batchFlushInterval);
         batchFlushInterval = null;
+        logInfo('BATCH-UPLOAD', 'Flush timer cleared after successful batch (queue empty)');
+      } else {
+        // Otherwise, make sure a flush is scheduled for remaining items.
+        scheduleBatchFlush();
       }
     }
 
@@ -1077,6 +1160,8 @@ async function processScreenshotBatch() {
       try {
         if (pendingScreenshots.get(item.filePath) === true) {
           logInfo('BATCH-UPLOAD', `[PRE-UPLOAD-CHECK] Skipping cancelled: ${item.jpegFilename}`);
+          // Mark for deletion so cancelled screenshots don't linger on disk
+          filesToDelete.push(item.filePath);
           pendingScreenshots.delete(item.filePath);
           return { ok: false, skipped: true, reason: 'cancelled', filePath: item.filePath };
         }
@@ -1156,32 +1241,58 @@ async function processScreenshotBatch() {
 
     const failedUploads = results.filter(r => !r.ok && r.item);
     if (failedUploads.length > 0) {
-      logWarn('BATCH-UPLOAD', `Re-queuing ${failedUploads.length} failed upload(s)`);
+      const MAX_RETRIES_WITH_PREVIEW = 3;
+      const MAX_TOTAL_RETRIES = 5;
 
-      const itemsToRequeue = failedUploads.map(f => {
-        const original = f.item;
-        const retryCount = (original.retryCount || 0) + 1;
-        const MAX_RETRIES_WITH_PREVIEW = 3;
+      logWarn('BATCH-UPLOAD', `Handling ${failedUploads.length} failed upload(s)`);
 
-        return {
-          userEmail: original.userEmail,
-          sessionId: original.sessionId,
-          screenshotData: retryCount < MAX_RETRIES_WITH_PREVIEW ? original.screenshotData : null,
-          timestamp: original.timestamp,
-          isIdle: original.isIdle,
-          contextLabel: original.contextLabel,
-          screenIndex: original.screenIndex,
-          screenName: original.screenName,
-          appName: original.appName,
-          filePath: original.filePath,
-          jpegBuffer: original.jpegBuffer,
-          jpegFilename: original.jpegFilename,
-          addedAt: Date.now(),
-          retryCount: retryCount
-        };
-      });
+      const itemsToRequeue = failedUploads
+        .map(f => {
+          const original = f.item;
+          const retryCount = (original.retryCount || 0) + 1;
 
-      screenshotBatchQueue.push(...itemsToRequeue);
+          if (retryCount > MAX_TOTAL_RETRIES) {
+            logError(
+              'BATCH-UPLOAD',
+              `Dropping screenshot ${original.jpegFilename} after ${retryCount} failed upload attempts`,
+            );
+            try {
+              if (fs.existsSync(original.filePath)) {
+                fs.unlinkSync(original.filePath);
+                pendingScreenshots.delete(original.filePath);
+              }
+            } catch (cleanupErr) {
+              logWarn(
+                'BATCH-UPLOAD',
+                `Failed to delete dropped screenshot file ${original.filePath}: ${cleanupErr.message}`,
+              );
+            }
+            return null;
+          }
+
+          return {
+            userEmail: original.userEmail,
+            sessionId: original.sessionId,
+            screenshotData: retryCount < MAX_RETRIES_WITH_PREVIEW ? original.screenshotData : null,
+            timestamp: original.timestamp,
+            isIdle: original.isIdle,
+            contextLabel: original.contextLabel,
+            screenIndex: original.screenIndex,
+            screenName: original.screenName,
+            appName: original.appName,
+            filePath: original.filePath,
+            jpegBuffer: original.jpegBuffer,
+            jpegFilename: original.jpegFilename,
+            addedAt: Date.now(),
+            retryCount: retryCount
+          };
+        })
+        .filter(Boolean);
+
+      if (itemsToRequeue.length > 0) {
+        logWarn('BATCH-UPLOAD', `Re-queuing ${itemsToRequeue.length} failed upload(s) for retry`);
+        screenshotBatchQueue.push(...itemsToRequeue);
+      }
     }
 
     const successCount = results.filter(r => r.ok).length;
@@ -1193,15 +1304,42 @@ async function processScreenshotBatch() {
   } catch (error) {
     logError('BATCH-UPLOAD', `Batch processing error: ${error.message}`, error);
     const MAX_RETRIES_WITH_PREVIEW = 3;
-    const itemsToRequeue = validScreenshots.map(item => {
-      const retryCount = (item.retryCount || 0) + 1;
-      return {
-        ...item,
-        retryCount: retryCount,
-        screenshotData: retryCount < MAX_RETRIES_WITH_PREVIEW ? item.screenshotData : null
-      };
-    });
-    screenshotBatchQueue.unshift(...itemsToRequeue);
+    const MAX_TOTAL_RETRIES = 5;
+    const itemsToRequeue = validScreenshots
+      .map(item => {
+        const retryCount = (item.retryCount || 0) + 1;
+
+        if (retryCount > MAX_TOTAL_RETRIES) {
+          logError(
+            'BATCH-UPLOAD',
+            `Dropping screenshot ${item.jpegFilename} after ${retryCount} failed batch attempts`,
+          );
+          try {
+            if (fs.existsSync(item.filePath)) {
+              fs.unlinkSync(item.filePath);
+              pendingScreenshots.delete(item.filePath);
+            }
+          } catch (cleanupErr) {
+            logWarn(
+              'BATCH-UPLOAD',
+              `Failed to delete dropped screenshot file ${item.filePath}: ${cleanupErr.message}`,
+            );
+          }
+          return null;
+        }
+
+        return {
+          ...item,
+          retryCount: retryCount,
+          screenshotData: retryCount < MAX_RETRIES_WITH_PREVIEW ? item.screenshotData : null
+        };
+      })
+      .filter(Boolean);
+
+    if (itemsToRequeue.length > 0) {
+      screenshotBatchQueue.unshift(...itemsToRequeue);
+      logWarn('BATCH-UPLOAD', `Re-queued ${itemsToRequeue.length} item(s) after batch error`);
+    }
   } finally {
     isBatchUploading = false;
   }
@@ -1210,7 +1348,7 @@ async function processScreenshotBatch() {
 // Flush remaining screenshots in queue (called on app close or session end)
 async function flushScreenshotBatch() {
   if (batchFlushInterval) {
-    clearInterval(batchFlushInterval);
+    clearTimeout(batchFlushInterval);
     batchFlushInterval = null;
   }
 
@@ -1286,36 +1424,28 @@ async function getScreenshotInterval(userEmail, sessionId) {
     // 3) If project_assignments lookup failed or has no assigned_by, try getting client from projects table directly
     if (!clientEmail) {
       const { data: projectData, error: projectError } = await supabase
-    .from('projects')
-    .select('screenshot_interval, user_id')
-    .eq('id', projectId)
-    .maybeSingle();
-
-    if (!projectError && projectData && projectData.user_id) {
-      // Declare variables OUTSIDE the if block to avoid scope issues
-      let userData = null;
-      let userError = null;
-    
-      // Fetch email from users table using userid foreign key
-      const result = await supabase
-        .from('users')
-        .select('email')
-        .eq('id', projectData.user_id)
+        .from('projects')
+        .select('user_id')
+        .eq('id', projectId)
         .maybeSingle();
-      
-      userData = result.data;
-      userError = result.error;
-    
-      // Now can safely use userData and userError here
-      if (!userError && userData && userData.email) {
-        clientEmail = userData.email.trim().toLowerCase();
-        logInfo('ScreenshotInterval', `Using project owner email: ${clientEmail}`);
-      } else if (userError) {
-        logError('ScreenshotInterval', `Error fetching user email: ${userError.message}`);
+
+      if (!projectError && projectData && projectData.user_id) {
+        // Fetch email from users table using user_id foreign key
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('email')
+          .eq('id', projectData.user_id)
+          .maybeSingle();
+
+        if (!userError && userData && userData.email) {
+          clientEmail = userData.email.trim().toLowerCase();
+          logInfo('ScreenshotInterval', `Using project owner email: ${clientEmail}`);
+        } else if (userError) {
+          logError('ScreenshotInterval', `Error fetching user email: ${userError.message}`);
+        }
       }
     }
-  }
-    
+
     // 4) Final fallback: assume logged-in user is the client
     if (!clientEmail) {
       logInfo(
@@ -1464,6 +1594,118 @@ ipcMain.handle('get-system-idle-state', (event, thresholdSeconds) => {
     logError('IPC', 'Error getting idle state', e);
     return 'unknown';
   }
+});
+
+// ============ Time tracking IPC handlers (used by preload.js) ============
+
+function broadcastTimeTrackingUpdate() {
+  try {
+    const payload = {
+      ...timeTrackingState,
+      isTimerActive: !!isTimerActive,
+      isUserLoggedIn: !!isUserLoggedIn,
+    };
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('time-tracking-update', payload);
+      }
+    });
+  } catch (e) {
+    logWarn('TimeTracking', `Failed to broadcast time-tracking-update: ${e?.message || e}`);
+  }
+}
+
+ipcMain.handle('start-time-tracking', async (event, userEmail) => {
+  const now = Date.now();
+
+  // If already active, reset state for a new run
+  timeTrackingState = {
+    active: true,
+    paused: false,
+    userEmail: (userEmail || currentUserEmail || '').trim().toLowerCase() || null,
+    startedAt: now,
+    pausedAt: null,
+    totalActiveMs: 0,
+  };
+
+  isTimerActive = true;
+  if (timeTrackingState.userEmail) {
+    currentUserEmail = timeTrackingState.userEmail;
+  }
+
+  logInfo('TimeTracking', `start-time-tracking for ${timeTrackingState.userEmail || 'unknown user'}`);
+  broadcastTimeTrackingUpdate();
+
+  return { ok: true, state: timeTrackingState };
+});
+
+ipcMain.handle('stop-time-tracking', async () => {
+  if (timeTrackingState.active && !timeTrackingState.paused && timeTrackingState.startedAt) {
+    timeTrackingState.totalActiveMs += Date.now() - timeTrackingState.startedAt;
+  }
+
+  timeTrackingState.active = false;
+  timeTrackingState.paused = false;
+  timeTrackingState.startedAt = null;
+  timeTrackingState.pausedAt = null;
+
+  isTimerActive = false;
+
+  logInfo('TimeTracking', 'stop-time-tracking called');
+  broadcastTimeTrackingUpdate();
+
+  return { ok: true, state: timeTrackingState };
+});
+
+ipcMain.handle('pause-time-tracking', async () => {
+  if (!timeTrackingState.active || timeTrackingState.paused) {
+    return { ok: true, state: timeTrackingState };
+  }
+
+  if (timeTrackingState.startedAt) {
+    timeTrackingState.totalActiveMs += Date.now() - timeTrackingState.startedAt;
+  }
+
+  timeTrackingState.paused = true;
+  timeTrackingState.startedAt = null;
+  timeTrackingState.pausedAt = Date.now();
+
+  logInfo('TimeTracking', 'pause-time-tracking called');
+  broadcastTimeTrackingUpdate();
+
+  return { ok: true, state: timeTrackingState };
+});
+
+ipcMain.handle('resume-time-tracking', async () => {
+  if (!timeTrackingState.active || !timeTrackingState.paused) {
+    return { ok: true, state: timeTrackingState };
+  }
+
+  timeTrackingState.paused = false;
+  timeTrackingState.startedAt = Date.now();
+  timeTrackingState.pausedAt = null;
+
+  logInfo('TimeTracking', 'resume-time-tracking called');
+  broadcastTimeTrackingUpdate();
+
+  return { ok: true, state: timeTrackingState };
+});
+
+ipcMain.handle('get-time-tracking-status', async () => {
+  // Compute an up-to-date totalActiveMs snapshot without mutating state
+  let effectiveTotalMs = timeTrackingState.totalActiveMs;
+  if (timeTrackingState.active && !timeTrackingState.paused && timeTrackingState.startedAt) {
+    effectiveTotalMs += Date.now() - timeTrackingState.startedAt;
+  }
+
+  const snapshot = {
+    ...timeTrackingState,
+    totalActiveMs: effectiveTotalMs,
+    isTimerActive: !!isTimerActive,
+    isUserLoggedIn: !!isUserLoggedIn,
+  };
+
+  return { ok: true, state: snapshot };
 });
 
 ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle, appName }) => {
@@ -1926,10 +2168,23 @@ process.on('uncaughtException', (error) => {
 let isQuitting = false;
 
 async function flushScreenshotBatchOnShutdown() {
-  // wait for any running batch
-  while (isBatchUploading) {
-    await new Promise(resolve => setTimeout(resolve, 100));
+  // Wait for any running batch, but enforce a hard timeout so shutdown
+  // can't hang indefinitely if something goes wrong.
+  const MAX_WAIT_MS = 30000; // 30 seconds
+  const POLL_INTERVAL_MS = 100;
+  const start = Date.now();
+
+  while (isBatchUploading && Date.now() - start < MAX_WAIT_MS) {
+    await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
   }
+
+  if (isBatchUploading) {
+    logWarn(
+      'Shutdown',
+      `Batch upload still running after ${MAX_WAIT_MS}ms timeout. Proceeding with flush attempt anyway.`,
+    );
+  }
+
   await flushScreenshotBatch();
 }
 
@@ -1940,7 +2195,9 @@ app.on('before-quit', (event) => {
 
     (async () => {
       try {
-        await flushScreenshotBatch();
+        // Ensure we wait for any in-progress batch upload before flushing
+        // remaining screenshots to avoid data loss on shutdown.
+        await flushScreenshotBatchOnShutdown();
       } catch (err) {
         logWarn('Shutdown', `Error flushing screenshot batch on quit: ${err?.message || err}`);
       } finally {
