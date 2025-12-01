@@ -809,8 +809,12 @@ function showToastNotification(filePath, base64Data) {
 
 function createToastWindow(filePath, base64Data) {
   try {
-    const TOAST_WIDTH = process.platform === 'darwin' ? 300:520;
-    const TOAST_HEIGHT = process.platform === 'darwin' ? 200:340;
+    // Use a consistent, sufficiently large size on all platforms so that
+    // the preview image + side column (delete button + timer) are fully visible.
+    // On macOS the previous smaller size (300x200) caused the side column
+    // to be clipped, which made the delete button and 5s timer invisible.
+    const TOAST_WIDTH = 520;
+    const TOAST_HEIGHT = 340;
     toastWin = new BrowserWindow({
       width: TOAST_WIDTH,
       height: TOAST_HEIGHT,
