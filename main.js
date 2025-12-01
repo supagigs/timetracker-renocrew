@@ -63,28 +63,47 @@ function getActiveAppNameViaAppleScript() {
       return resolve(null);
     }
 
-    // AppleScript command to get both the app name and window title
+    // Enhanced AppleScript command to get both the app name and window title
     // This gets the frontmost application name and its frontmost window title
-    // The window title often contains tab/page names for browsers
+    // The window title often contains tab/page names for browsers, file names for editors, etc.
     const command = `osascript -e 'tell application "System Events"
       set frontApp to first application process whose frontmost is true
       set appName to name of frontApp
       set windowTitle to ""
       try
-        set windowTitle to name of first window of frontApp
-      on error
+        -- Try to get the frontmost window's title
+        set frontWindow to first window of frontApp whose visible is true
         try
-          -- Some apps use different window properties
-          set windowTitle to title of first window of frontApp
+          set windowTitle to name of frontWindow
         on error
-          set windowTitle to ""
+          try
+            set windowTitle to title of frontWindow
+          on error
+            -- For some apps, try getting the value property
+            try
+              set windowTitle to value of attribute "AXTitle" of frontWindow
+            on error
+              set windowTitle to ""
+            end try
+          end try
+        end try
+      on error
+        -- If no visible window, try getting any window
+        try
+          set windowTitle to name of first window of frontApp
+        on error
+          try
+            set windowTitle to title of first window of frontApp
+          on error
+            set windowTitle to ""
+          end try
         end try
       end try
       return appName & "|" & windowTitle
     end tell'`;
 
     const { exec } = require('child_process');
-    exec(command, (error, stdout, stderr) => {
+    exec(command, { timeout: 2000 }, (error, stdout, stderr) => {
       if (error) {
         logWarn('ActiveWindow', `AppleScript error: ${error.message}`);
         // This error often means Accessibility is blocked
@@ -136,6 +155,8 @@ const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'screenshots';
 // Track pending uploads that can be cancelled
 const pendingScreenshots = new Map();
 let toastWin = null;
+let toastQueue = []; // Queue for toast notifications when multiple screenshots are captured
+let isProcessingToastQueue = false;
 
 // ============ SCREENSHOT BATCH QUEUE ============
 const SCREENSHOT_BATCH_SIZE = 5;
@@ -447,6 +468,17 @@ async function getActiveAppName() {
           result = await fn();
           if (result) {
             logInfo('ActiveWindow', 'active-win returned result successfully');
+            
+            // On Mac, if active-win succeeded but didn't return a window title, try AppleScript to get it
+            if (process.platform === 'darwin' && (!result.title || result.title.trim() === '')) {
+              logInfo('ActiveWindow', 'active-win returned no window title, trying AppleScript to get title');
+              const appleScriptResult = await getActiveAppNameViaAppleScript();
+              if (appleScriptResult && appleScriptResult.title && appleScriptResult.title.trim() !== '') {
+                // Merge the window title from AppleScript with the result from active-win
+                result.title = appleScriptResult.title;
+                logInfo('ActiveWindow', `Merged window title from AppleScript: ${result.title}`);
+              }
+            }
           } else {
             logWarn('ActiveWindow', 'active-win returned no result, will try AppleScript fallback');
             useAppleScriptFallback = true;
@@ -534,10 +566,25 @@ async function getActiveAppName() {
       if (ownerName) {
         // If we have both, combine them for more context: "App Name - Window Title"
         // This matches the Windows format for consistency
-        if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
+        if (windowTitle && windowTitle.length > 0) {
           // For browsers, the window title often contains the tab/page name
-          // Format: "App Name - Window Title" (e.g., "Google Chrome - YouTube - Google Chrome")
-          finalAppName = `${ownerName} - ${windowTitle}`;
+          // Even if windowTitle contains the app name, include it for context
+          // Format: "App Name - Window Title" (e.g., "Google Chrome - YouTube")
+          // Check if window title already contains app name to avoid duplication
+          const windowTitleLower = windowTitle.toLowerCase();
+          const ownerNameLower = ownerName.toLowerCase();
+          
+          if (windowTitleLower.includes(ownerNameLower) && windowTitleLower.length > ownerNameLower.length) {
+            // Window title already contains app name with additional info (e.g., "Google Chrome - YouTube")
+            // Use the full window title as it has more context
+            finalAppName = windowTitle;
+          } else if (windowTitle !== ownerName) {
+            // Window title is different from app name, combine them
+            finalAppName = `${ownerName} - ${windowTitle}`;
+          } else {
+            // Window title is same as app name, just use app name
+            finalAppName = ownerName;
+          }
         } else {
           finalAppName = ownerName;
         }
@@ -686,36 +733,74 @@ while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5 && quality > 30) {
   return jpegBuffer;
 }
 
-function showToastNotification(filePath, base64Data) {
-  try {
-    // Close existing toast if it exists, but wait a moment if it was just shown
-    if (toastWin && !toastWin.isDestroyed()) {
-      // If the toast was just created (less than 1 second ago), wait a bit before closing
-      const existingToastAge = Date.now() - (toastWin._createdAt || 0);
-      if (existingToastAge < 1000) {
-        // Wait a moment before closing the old toast
-        setTimeout(() => {
-          if (toastWin && !toastWin.isDestroyed()) {
-            toastWin.close();
-            toastWin = null;
-            // Create new toast after closing the old one
-            createToastWindow(filePath, base64Data);
-          }
-        }, 500);
-        return;
-      } else {
+// Process toast queue - ensures only one toast is shown at a time
+function processToastQueue() {
+  if (isProcessingToastQueue || toastQueue.length === 0) {
+    return;
+  }
+  
+  isProcessingToastQueue = true;
+  
+  // Get the most recent toast from queue (last item)
+  // This ensures we show the latest screenshot when multiple are captured
+  const toastItem = toastQueue.pop();
+  toastQueue = []; // Clear queue, we only show the most recent
+  
+  if (!toastItem) {
+    isProcessingToastQueue = false;
+    return;
+  }
+  
+  const { filePath, base64Data } = toastItem;
+  
+  // If there's an existing toast, close it first
+  if (toastWin && !toastWin.isDestroyed()) {
+    const existingToastAge = Date.now() - (toastWin._createdAt || 0);
+    const delay = existingToastAge < 1000 ? (process.platform === 'darwin' ? 600 : 500) : 0;
+    
+    setTimeout(() => {
+      if (toastWin && !toastWin.isDestroyed()) {
         toastWin.close();
         toastWin = null;
       }
+      // Create new toast after closing the old one
+      setTimeout(() => {
+        createToastWindow(filePath, base64Data);
+        isProcessingToastQueue = false;
+      }, process.platform === 'darwin' ? 100 : 50);
+    }, delay);
+  } else {
+    // No existing toast, create immediately
+    createToastWindow(filePath, base64Data);
+    isProcessingToastQueue = false;
+  }
+}
+
+function showToastNotification(filePath, base64Data) {
+  try {
+    // Validate inputs
+    if (!filePath || !base64Data) {
+      logWarn('Toast', 'Invalid toast notification data - missing filePath or base64Data');
+      return;
     }
     
-    // Create new toast immediately
-    createToastWindow(filePath, base64Data);
+    // Add to queue instead of showing immediately
+    // This prevents conflicts when multiple screenshots are captured rapidly
+    toastQueue.push({ filePath, base64Data, timestamp: Date.now() });
+    
+    // Process queue with a small delay to batch rapid captures
+    // This ensures we only show the most recent screenshot
+    setTimeout(() => {
+      processToastQueue();
+    }, 100);
   } catch (error) {
-    logError('Toast', `Error showing toast notification: ${error.message}`, error);
+    logError('Toast', `Error queuing toast notification: ${error.message}`, error);
     // Try to create toast anyway, even if there was an error
     try {
-      createToastWindow(filePath, base64Data);
+      const retryDelay = process.platform === 'darwin' ? 200 : 0;
+      setTimeout(() => {
+        createToastWindow(filePath, base64Data);
+      }, retryDelay);
     } catch (e) {
       logError('Toast', `Failed to create toast window: ${e.message}`, e);
     }
@@ -761,14 +846,56 @@ function createToastWindow(filePath, base64Data) {
       }
       
       try {
-        toastWin.showInactive();
-        logInfo('Toast', `Toast notification displayed for: ${path.basename(filePath)}`);
-        
-        if (toastWin.webContents && !toastWin.webContents.isDestroyed()) {
-          toastWin.webContents.send('toast-init', { filePath, base64Data });
-        } else {
-          logWarn('Toast', 'Toast webContents was destroyed before sending init message');
-        }
+        // On Mac, use show() instead of showInactive() for better reliability
+        // Add a small delay to ensure the window is properly initialized
+        setTimeout(() => {
+          if (!toastWin || toastWin.isDestroyed()) {
+            logWarn('Toast', 'Toast window was destroyed before showing');
+            return;
+          }
+          
+          // On Mac, ensure the window is properly shown and visible
+          if (process.platform === 'darwin') {
+            toastWin.show();
+            // Ensure window is on top and visible
+            toastWin.setAlwaysOnTop(true, 'screen-saver');
+            toastWin.moveTop();
+          } else {
+            toastWin.showInactive();
+          }
+          
+          logInfo('Toast', `Toast notification displayed for: ${path.basename(filePath)}`);
+          
+          // Send init message after a brief delay to ensure window is ready
+          // Validate base64Data before sending
+          setTimeout(() => {
+            if (toastWin && !toastWin.isDestroyed() && toastWin.webContents && !toastWin.webContents.isDestroyed()) {
+              // Validate base64Data format
+              let validBase64Data = base64Data;
+              if (base64Data && typeof base64Data === 'string') {
+                // Ensure it's a valid data URL
+                if (!base64Data.startsWith('data:image/')) {
+                  // If it's just base64 without data URL prefix, add it
+                  if (base64Data.startsWith('iVBORw0KGgo') || base64Data.includes('/9j/')) {
+                    // PNG or JPEG base64
+                    const mimeType = base64Data.startsWith('iVBORw0KGgo') ? 'image/png' : 'image/jpeg';
+                    validBase64Data = `data:${mimeType};base64,${base64Data}`;
+                  } else {
+                    logWarn('Toast', 'Invalid base64Data format, attempting to use as-is');
+                  }
+                }
+              } else {
+                logWarn('Toast', 'base64Data is not a string, cannot display preview');
+                validBase64Data = null;
+              }
+              
+              toastWin.webContents.send('toast-init', { filePath, base64Data: validBase64Data });
+              logInfo('Toast', `Sent init message with preview data (length: ${validBase64Data ? validBase64Data.length : 0})`);
+            } else {
+              logWarn('Toast', 'Toast webContents was destroyed before sending init message');
+            }
+          }, 50);
+        }, process.platform === 'darwin' ? 100 : 0);
       } catch (error) {
         logError('Toast', `Error showing toast window: ${error.message}`, error);
       }
@@ -1387,6 +1514,15 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
       }
       
       isBackgroundTickRunning = true;
+      
+      // Set a timeout to ensure we don't block indefinitely
+      const captureTimeout = setTimeout(() => {
+        if (isBackgroundTickRunning) {
+          logWarn('BG-UPLOAD', 'Screenshot capture timeout (30s) - resetting flag to allow next capture');
+          isBackgroundTickRunning = false;
+        }
+      }, 30000); // 30 second timeout
+      
       try {
         // Get all displays to calculate proper thumbnail size
         const allDisplays = screen.getAllDisplays();
@@ -1431,10 +1567,32 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           const timestamp = new Date().toISOString();
           
           // Capture and upload screenshots from all displays
+          // Use Promise.allSettled to ensure all screenshots are attempted even if some fail
           const uploadPromises = sources.map(async (source, index) => {
             try {
+              // Validate thumbnail exists and is valid
+              if (!source || !source.thumbnail) {
+                logWarn('BG-UPLOAD', `No thumbnail available for screen ${index + 1} (${source?.name || 'Unknown'})`);
+                return { success: false, screenIndex: index + 1, error: 'No thumbnail available' };
+              }
+              
+              // Get thumbnail size for validation
+              const thumbnailSize = source.thumbnail.getSize();
+              if (!thumbnailSize || thumbnailSize.width === 0 || thumbnailSize.height === 0) {
+                logWarn('BG-UPLOAD', `Invalid thumbnail size for screen ${index + 1}: ${thumbnailSize?.width || 0}x${thumbnailSize?.height || 0}`);
+                return { success: false, screenIndex: index + 1, error: 'Invalid thumbnail size' };
+              }
+              
+              // Convert thumbnail to data URL
               const screenshotData = source.thumbnail.toDataURL('image/png');
-              await handleScreenshotUpload({
+              if (!screenshotData || screenshotData.length === 0 || !screenshotData.startsWith('data:image/')) {
+                logWarn('BG-UPLOAD', `Invalid screenshot data format for screen ${index + 1}`);
+                return { success: false, screenIndex: index + 1, error: 'Invalid screenshot data format' };
+              }
+              
+              logInfo('BG-UPLOAD', `Screen ${index + 1} (${source.name || `Screen ${index + 1}`}): thumbnail ${thumbnailSize.width}x${thumbnailSize.height}, data length: ${screenshotData.length}`);
+              
+              const result = await handleScreenshotUpload({
                 userEmail: currentUserEmail,
                 sessionId: currentSessionId,
                 screenshotData,
@@ -1444,20 +1602,43 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
                 screenIndex: index + 1,
                 screenName: source.name || `Screen ${index + 1}`
               });
+              
+              if (result && result.ok) {
+                logInfo('BG-UPLOAD', `Successfully queued screenshot for screen ${index + 1} (${source.name || `Screen ${index + 1}`})`);
+                return { success: true, screenIndex: index + 1 };
+              } else {
+                logWarn('BG-UPLOAD', `Failed to queue screenshot for screen ${index + 1}: ${result?.error || 'Unknown error'}`);
+                return { success: false, screenIndex: index + 1, error: result?.error || 'Unknown error' };
+              }
             } catch (error) {
-              logError('BG-UPLOAD', `Error uploading screenshot for screen ${index + 1}:`, error);
+              logError('BG-UPLOAD', `Error capturing screenshot for screen ${index + 1}:`, error);
+              return { success: false, screenIndex: index + 1, error: error.message };
             }
           });
           
-          // Wait for all screenshots to be uploaded
-          await Promise.all(uploadPromises);
-          logInfo('BG-UPLOAD', `Captured and uploaded ${sources.length} screen(s)`);
+          // Wait for all screenshots to complete (using allSettled so failures don't stop others)
+          const results = await Promise.allSettled(uploadPromises);
+          const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+          const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value?.success)).length;
+          
+          logInfo('BG-UPLOAD', `Screenshot capture complete: ${successful} successful, ${failed} failed out of ${sources.length} screen(s)`);
+          
+          // Log any failures for debugging
+          results.forEach((result, index) => {
+            if (result.status === 'rejected') {
+              logError('BG-UPLOAD', `Screen ${index + 1} capture rejected:`, result.reason);
+            } else if (result.value && !result.value.success) {
+              logWarn('BG-UPLOAD', `Screen ${index + 1} capture failed: ${result.value.error}`);
+            }
+          });
         } else {
           logWarn('BG-UPLOAD', 'No screen sources found');
         }
       } catch (error) {
         logError('BG-UPLOAD', 'Error capturing screenshot', error);
       } finally {
+        // Clear timeout
+        clearTimeout(captureTimeout);
         isBackgroundTickRunning = false;
         // Schedule the next screenshot with a new random delay
         scheduleNextScreenshot();

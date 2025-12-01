@@ -223,10 +223,35 @@
             currentFilePath = filePath;
             const previewImg = document.getElementById('preview-img');
             if (previewImg) {
-              previewImg.src = base64Data;
-              previewImg.onerror = () => {
-                console.error('[TOAST] Failed to load preview image');
-              };
+              // Validate base64Data before setting src
+              if (base64Data && typeof base64Data === 'string' && base64Data.length > 0) {
+                // Clear any previous error state
+                previewImg.style.display = 'block';
+                previewImg.style.opacity = '1';
+                
+                // Set up error handler before setting src
+                previewImg.onerror = () => {
+                  console.error('[TOAST] Failed to load preview image');
+                  previewImg.style.opacity = '0.5';
+                  previewImg.alt = 'Preview unavailable';
+                };
+                
+                // Set up load handler
+                previewImg.onload = () => {
+                  console.log('[TOAST] Preview image loaded successfully');
+                  previewImg.style.opacity = '1';
+                };
+                
+                // Set the image source
+                previewImg.src = base64Data;
+                console.log('[TOAST] Setting preview image src (length:', base64Data.length, ')');
+              } else {
+                console.warn('[TOAST] Invalid or empty base64Data, cannot display preview');
+                previewImg.style.opacity = '0.5';
+                previewImg.alt = 'Preview unavailable';
+              }
+            } else {
+              console.error('[TOAST] Preview image element not found');
             }
             
             // Ensure delete button is still visible after init
