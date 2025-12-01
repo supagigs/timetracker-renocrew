@@ -222,25 +222,18 @@ function createWindow() {
     }
   })
 
-  // Check screen recording and accessibility permissions on macOS after window is ready
+  // Check accessibility permissions on macOS after window is ready.
+  // NOTE: We intentionally do NOT proactively call screen-recording checks here,
+  // because those rely on `desktopCapturer.getSources`, which can trigger the
+  // macOS system permission prompt. We only want that prompt when the user
+  // actually starts tracking (when we try to capture the screen).
   if (process.platform === 'darwin') {
     mainWindow.webContents.once('did-finish-load', () => {
       // Delay permission check slightly to ensure window is fully ready
       setTimeout(() => {
-        // Check screen recording permission
-        checkScreenRecordingPermission()
-        .then((hasPermission) => {
-          if (!hasPermission) {
-            setTimeout(() => {
-              requestScreenRecordingPermission();
-            }, 1000);
-          }
-        })
-        .catch((error) => {
-          logWarn('Permissions', `Screen recording check failed: ${error?.message || error}`);
-        });
-      
-      checkAccessibilityPermission()
+        // Only check Accessibility here; screen recording will be handled
+        // lazily when screenshots are actually requested.
+        checkAccessibilityPermission()
         .then((hasPermission) => {
           if (!hasPermission) {
             setTimeout(() => {
