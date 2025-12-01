@@ -63,25 +63,24 @@ function getActiveAppNameViaAppleScript() {
       return resolve(null);
     }
 
-    // Enhanced AppleScript to get app name, window title, and app-specific details
-    // Try to get browser URLs or file paths for better context
+    // AppleScript command to get both the app name and window title
+    // This gets the frontmost application name and its frontmost window title
+    // The window title often contains tab/page names for browsers
     const command = `osascript -e 'tell application "System Events"
       set frontApp to first application process whose frontmost is true
       set appName to name of frontApp
       set windowTitle to ""
-      set additionalInfo to ""
-      
       try
         set windowTitle to name of first window of frontApp
       on error
         try
+          -- Some apps use different window properties
           set windowTitle to title of first window of frontApp
         on error
           set windowTitle to ""
         end try
       end try
-      
-      return appName & "|" & windowTitle & "|" & additionalInfo
+      return appName & "|" & windowTitle
     end tell'`;
 
     const { exec } = require('child_process');
@@ -95,42 +94,21 @@ function getActiveAppNameViaAppleScript() {
         logWarn('ActiveWindow', `AppleScript stderr: ${stderr}`);
       }
       
-      // Parse the result: "AppName|WindowTitle|AdditionalInfo"
+      // Parse the result: "AppName|WindowTitle"
       const result = stdout.trim();
       
       if (result && result.length > 0) {
         const parts = result.split('|');
         const appName = parts[0] ? parts[0].trim() : null;
         const windowTitle = parts[1] ? parts[1].trim() : null;
-        const additionalInfo = parts[2] ? parts[2].trim() : null;
         
-        logInfo('ActiveWindow', `AppleScript Success - App: ${appName || 'null'}, Title: ${windowTitle || 'null'}, Additional: ${additionalInfo || 'null'}`);
-        
-        // Extract URL or file path from additional info if available
-        let url = null;
-        if (additionalInfo) {
-          // Check if it's a URL
-          if (additionalInfo.startsWith('http://') || additionalInfo.startsWith('https://')) {
-            url = additionalInfo;
-          }
-          // Check if it's a file path
-          else if (additionalInfo.startsWith('/') || additionalInfo.startsWith('file://')) {
-            url = additionalInfo.startsWith('file://') ? additionalInfo : `file://${additionalInfo}`;
-          }
-        }
+        logInfo('ActiveWindow', `AppleScript Success - App: ${appName || 'null'}, Title: ${windowTitle || 'null'}`);
         
         // Return an object similar to active-win format for consistency
-        const resultObj = {
+        resolve({
           owner: { name: appName },
           title: windowTitle
-        };
-        
-        // Add URL if we found one
-        if (url) {
-          resultObj.url = url;
-        }
-        
-        resolve(resultObj);
+        });
       } else {
         logWarn('ActiveWindow', 'AppleScript returned empty result');
         resolve(null);
@@ -158,9 +136,6 @@ const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'screenshots';
 // Track pending uploads that can be cancelled
 const pendingScreenshots = new Map();
 let toastWin = null;
-
-// Guard flag to prevent recursive quit loops
-let isQuitting = false;
 
 // ============ SCREENSHOT BATCH QUEUE ============
 const SCREENSHOT_BATCH_SIZE = 5;
@@ -232,23 +207,28 @@ function createWindow() {
       // Delay permission check slightly to ensure window is fully ready
       setTimeout(() => {
         // Check screen recording permission
-        checkScreenRecordingPermission().then((hasPermission) => {
+        checkScreenRecordingPermission()
+        .then((hasPermission) => {
           if (!hasPermission) {
-            // Show permission dialog after a short delay
             setTimeout(() => {
               requestScreenRecordingPermission();
             }, 1000);
           }
+        })
+        .catch((error) => {
+          logWarn('Permissions', `Screen recording check failed: ${error?.message || error}`);
         });
-        
-        // Check accessibility permission (needed for app name detection)
-        checkAccessibilityPermission().then((hasPermission) => {
+      
+      checkAccessibilityPermission()
+        .then((hasPermission) => {
           if (!hasPermission) {
-            // Show permission dialog after a short delay
             setTimeout(() => {
               requestAccessibilityPermission();
-            }, 2000); // Show after screen recording dialog
+            }, 2000);
           }
+        })
+        .catch((error) => {
+          logWarn('Permissions', `Accessibility check failed: ${error?.message || error}`);
         });
       }, 500);
     });
@@ -457,44 +437,22 @@ async function getActiveAppName() {
         // handle different exports across versions:
         //  - newer: activeWindow()
         //  - older: default()
-        //  - some bundles export the function itself (module itself is the function)
-        // FIX: Only assign function exports, never the entire module object unless it IS a function
-        let fn = null;
-        
-        // Try activeWindow export first (most common in newer versions)
-        if (activeWindowModule && typeof activeWindowModule.activeWindow === 'function') {
-          fn = activeWindowModule.activeWindow;
-        }
-        // Try default export (common in older versions)
-        else if (activeWindowModule && typeof activeWindowModule.default === 'function') {
-          fn = activeWindowModule.default;
-        }
-        // Only use the module itself if it IS a function (some bundles export this way)
-        else if (activeWindowModule && typeof activeWindowModule === 'function') {
-          fn = activeWindowModule;
-        }
+        //  - some bundles export the function itself
+        const fn =
+          (activeWindowModule && activeWindowModule.activeWindow) ||
+          (activeWindowModule && activeWindowModule.default) ||
+          activeWindowModule;
 
         if (typeof fn === 'function') {
           result = await fn();
           if (result) {
             logInfo('ActiveWindow', 'active-win returned result successfully');
-            // Log all available fields for debugging
-            logInfo('ActiveWindow', `active-win result: owner=${result.owner?.name || 'null'}, title=${result.title || 'null'}, url=${result.url || 'null'}, platform=${result.platform || 'null'}`);
           } else {
             logWarn('ActiveWindow', 'active-win returned no result, will try AppleScript fallback');
             useAppleScriptFallback = true;
           }
         } else {
-          // FIX: Improved error message that reflects the actual resolution failure
-          const hasModule = activeWindowModule !== null && activeWindowModule !== undefined;
-          const hasActiveWindow = hasModule && 'activeWindow' in activeWindowModule;
-          const hasDefault = hasModule && 'default' in activeWindowModule;
-          
-          if (hasModule && (!hasActiveWindow && !hasDefault)) {
-            logWarn('ActiveWindow', 'active-win module loaded but export resolution failed (activeWindow/default missing or not functions), will try AppleScript fallback');
-          } else {
-            logWarn('ActiveWindow', 'active-win export failed resolution (not a function), will try AppleScript fallback');
-          }
+          logWarn('ActiveWindow', 'active-win export not a function, will try AppleScript fallback');
           useAppleScriptFallback = true;
         }
       } catch (error) {
@@ -529,10 +487,9 @@ async function getActiveAppName() {
     // active-win returns: { owner: { name, processId }, title, url, bounds, etc. }
     let ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
     let windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
-    let url = typeof result.url === 'string' ? result.url.trim() : null;
     
     // Log detected information for debugging on both platforms
-    logInfo('ActiveWindow', `[${process.platform}] Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, url: ${url || 'null'}, app: ${appName}`);
+    logInfo('ActiveWindow', `[${process.platform}] Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, app: ${appName}`);
     
     // Check if this is our own app - if so, we still want to return it, but use a consistent name
     const isOwnApp = (ownerName && ownerName.toLowerCase() === appNameLower) || 
@@ -568,101 +525,37 @@ async function getActiveAppName() {
       }
     }
     
-    // Extract file name or URL details for better context
-    let fileOrUrlInfo = null;
-    
-    if (url) {
-      // For file paths (editors like VS Code, Xcode, etc.)
-      if (url.startsWith('file://')) {
-        try {
-          const filePath = url.replace('file://', '');
-          const pathParts = filePath.split('/');
-          const fileName = pathParts[pathParts.length - 1];
-          if (fileName) {
-            fileOrUrlInfo = fileName;
-            logInfo('ActiveWindow', `Extracted file name from URL: ${fileName}`);
-          }
-        } catch (e) {
-          logWarn('ActiveWindow', `Failed to parse file path from URL: ${e.message}`);
-        }
-      } 
-      // For browser URLs, extract domain or page name
-      else if (url.startsWith('http://') || url.startsWith('https://')) {
-        try {
-          const urlObj = new URL(url);
-          const hostname = urlObj.hostname.replace('www.', '');
-          // Use hostname as context (e.g., "youtube.com", "github.com")
-          fileOrUrlInfo = hostname;
-          logInfo('ActiveWindow', `Extracted hostname from URL: ${hostname}`);
-        } catch (e) {
-          logWarn('ActiveWindow', `Failed to parse URL: ${e.message}`);
-        }
-      }
-    }
-    
     // Build the app name with better logic for both platforms
     let finalAppName = null;
     
     if (process.platform === 'darwin') {
       // macOS: prefer owner.name (application name) as it's more reliable
-      // Use window title, URL, or file path for additional context
+      // Use window title as fallback or to add context (similar to Windows)
       if (ownerName) {
-        let contextParts = [];
-        
-        // Priority 1: File name or URL (most specific)
-        if (fileOrUrlInfo) {
-          contextParts.push(fileOrUrlInfo);
-        }
-        // Priority 2: Window title (contains tab/page names for browsers)
-        else if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
-          // Clean up window title - remove app name if it's duplicated
-          let cleanTitle = windowTitle;
-          if (cleanTitle.includes(ownerName)) {
-            cleanTitle = cleanTitle.replace(ownerName, '').replace(/\s*-\s*/g, '').trim();
-          }
-          if (cleanTitle && cleanTitle.length > 0) {
-            contextParts.push(cleanTitle);
-          }
-        }
-        
-        // Build final name: "App Name - Context" or just "App Name"
-        if (contextParts.length > 0) {
-          finalAppName = `${ownerName} - ${contextParts.join(' - ')}`;
+        // If we have both, combine them for more context: "App Name - Window Title"
+        // This matches the Windows format for consistency
+        if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
+          // For browsers, the window title often contains the tab/page name
+          // Format: "App Name - Window Title" (e.g., "Google Chrome - YouTube - Google Chrome")
+          finalAppName = `${ownerName} - ${windowTitle}`;
         } else {
           finalAppName = ownerName;
         }
       } else if (windowTitle) {
-        // Fallback to window title if no owner name
         finalAppName = windowTitle;
-      } else if (fileOrUrlInfo) {
-        // Fallback to file/URL info
-        finalAppName = fileOrUrlInfo;
       }
     } else {
       // Windows: prefer owner.name (application name) as it's more useful than window title
       // Window titles on Windows can be very generic or change frequently
       if (ownerName) {
-        let contextParts = [];
-        
-        // Priority 1: File name or URL (most specific)
-        if (fileOrUrlInfo) {
-          contextParts.push(fileOrUrlInfo);
-        }
-        // Priority 2: Window title
-        else if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
-          contextParts.push(windowTitle);
-        }
-        
-        // Build final name
-        if (contextParts.length > 0) {
-          finalAppName = `${ownerName} - ${contextParts.join(' - ')}`;
+        // If we have both, combine them: "App Name - Window Title"
+        if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
+          finalAppName = `${ownerName} - ${windowTitle}`;
         } else {
           finalAppName = ownerName;
         }
       } else if (windowTitle) {
         finalAppName = windowTitle;
-      } else if (fileOrUrlInfo) {
-        finalAppName = fileOrUrlInfo;
       }
     }
     
@@ -694,38 +587,28 @@ function getSupabaseClient() {
 }
 
 async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
-  // OPTIMIZATION: Check if already JPEG first - avoid re-compression and sharp loading
-  const isAlreadyJpeg = dataUrl.includes('data:image/jpeg') || dataUrl.includes('data:image/jpg');
-  if (isAlreadyJpeg) {
-    try {
-      const base64 = dataUrl.split(',')[1];
-      if (!base64) {
-        logWarn('Compress', 'Invalid data URL format for JPEG');
-        // Fall through to compression path
-      } else {
-        const jpegBuffer = Buffer.from(base64, 'base64');
-        const sizeKB = (jpegBuffer.length / 1024).toFixed(2);
-        logInfo('Compress', `JPEG (pre-compressed, skipping re-compression): ${sizeKB} KB`);
-        return jpegBuffer;
-      }
-    } catch (error) {
-      logWarn('Compress', `Failed to extract JPEG buffer: ${error.message}, falling back to compression`);
-      // Fall through to compression path
-    }
-  }
-  
-  // Lazy load sharp only when we actually need to compress
+  //Lazy load sharp for first screen shot as it loads on the startup
   if (!sharp) {
     try {
       sharp = require('sharp');
       logInfo('Compress', 'Sharp module loaded successfully');
+
+      // OPTIMIZATION: to avoid re-compression if already jpeg
+      const isAlreadyJpeg = dataUrl.includes('data:image/jpeg');
+      if (isAlreadyJpeg) {
+        const base64 = dataUrl.split(',')[1];
+        const jpegBuffer = Buffer.from(base64, 'base64');
+        logInfo('Compress', `JPEG (pre-compressed): ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
+        return jpegBuffer;
+      }
+
     } catch (error) {
       const platform = process.platform;
       const arch = process.arch;
       const errorMsg = error.message || String(error);
-      
+
       logError('Compress', `Failed to load sharp module: ${errorMsg}`);
-      
+
       // Provide platform-specific installation instructions
       let installCommand = 'npm install --include=optional sharp';
       if (platform === 'darwin') {
@@ -739,7 +622,7 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
       } else if (platform === 'win32') {
         installCommand = 'npm install --include=optional sharp';
       }
-      
+
       const detailedError = new Error(
         `Sharp module could not be loaded (${platform}-${arch}).\n\n` +
         `To fix this issue, run the following command in your project directory:\n\n` +
@@ -749,88 +632,85 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
         `After running the command, restart the application.\n\n` +
         `Original error: ${errorMsg}`
       );
-      
-      // Also log to console for visibility
+
       console.error('\n========================================');
       console.error('SHARP MODULE ERROR - ACTION REQUIRED');
       console.error('========================================');
       console.error(detailedError.message);
       console.error('========================================\n');
-      
+
       throw detailedError;
     }
   }
-  
-  // Extract base64 and convert to buffer for compression
+
   const base64 = dataUrl.split(',')[1];
-  if (!base64) {
-    throw new Error('Invalid data URL format');
-  }
-  
   const inputBuffer = Buffer.from(base64, 'base64');
   const UPLOAD_WIDTH = 800;
   const JPEG_QUALITY = 70;
   const TARGET_SIZE_BYTES = targetSizeKB * 1024;
-  
+
   let quality = JPEG_QUALITY;
   let jpegBuffer = await sharp(inputBuffer)
     .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
     .jpeg({ quality: quality, mozjpeg: true })
     .toBuffer();
-  
-  // Keep compressing if needed to reach target size
-  let attempts = 0;
-  while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5) {
-    attempts++;
-    quality -= (jpegBuffer.length > TARGET_SIZE_BYTES * 1.5) ? 15 : 5;
-    
-    if (quality < 30) {
-      quality = 30;
-      const scaleFactor = Math.sqrt(TARGET_SIZE_BYTES / jpegBuffer.length);
-      const newWidth = Math.floor(UPLOAD_WIDTH * scaleFactor);
-      
-      jpegBuffer = await sharp(inputBuffer)
-        .resize(newWidth, null, { withoutEnlargement: true, fit: 'inside' })
-        .jpeg({ quality: 30, mozjpeg: true })
-        .toBuffer();
-      break;
-    }
-    
+
+  // Keep compressing if needed
+  // Keep compressing if needed
+let attempts = 0;
+
+while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5 && quality > 30) {
+  attempts++;
+  quality -= (jpegBuffer.length > TARGET_SIZE_BYTES * 1.5) ? 15 : 5;
+
+  if (quality <= 30) {
+    quality = 30;
+    const scaleFactor = Math.sqrt(TARGET_SIZE_BYTES / jpegBuffer.length);
+    const newWidth = Math.floor(UPLOAD_WIDTH * scaleFactor);
+
     jpegBuffer = await sharp(inputBuffer)
-      .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
-      .jpeg({ quality: quality, mozjpeg: true })
+      .resize(newWidth, null, { withoutEnlargement: true, fit: 'inside' })
+      .jpeg({ quality: 30, mozjpeg: true })
       .toBuffer();
+    break;
   }
-  
+
+  jpegBuffer = await sharp(inputBuffer)
+    .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
+    .jpeg({ quality: quality, mozjpeg: true })
+    .toBuffer();
+}
+
+
   logInfo('Compress', `JPEG size: ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
   return jpegBuffer;
 }
 
-
 function showToastNotification(filePath, base64Data) {
   try {
-    // Close existing toast if it exists
+    // Close existing toast if it exists, but wait a moment if it was just shown
     if (toastWin && !toastWin.isDestroyed()) {
+      // If the toast was just created (less than 1 second ago), wait a bit before closing
       const existingToastAge = Date.now() - (toastWin._createdAt || 0);
-      // If the toast is very new (less than 500ms), queue the new one instead
-      if (existingToastAge < 500) {
-        // Queue the new toast to show after a short delay
+      if (existingToastAge < 1000) {
+        // Wait a moment before closing the old toast
         setTimeout(() => {
-          showToastNotification(filePath, base64Data);
-        }, 600);
+          if (toastWin && !toastWin.isDestroyed()) {
+            toastWin.close();
+            toastWin = null;
+            // Create new toast after closing the old one
+            createToastWindow(filePath, base64Data);
+          }
+        }, 500);
         return;
+      } else {
+        toastWin.close();
+        toastWin = null;
       }
-      // Otherwise, close the existing toast immediately
-      toastWin.close();
-      toastWin = null;
     }
     
-    // Small delay to ensure previous toast is fully closed
-    setTimeout(() => {
-      if (!toastWin || toastWin.isDestroyed()) {
-        createToastWindow(filePath, base64Data);
-      }
-    }, 100);
+    // Create new toast immediately
+    createToastWindow(filePath, base64Data);
   } catch (error) {
     logError('Toast', `Error showing toast notification: ${error.message}`, error);
     // Try to create toast anyway, even if there was an error
@@ -844,26 +724,18 @@ function showToastNotification(filePath, base64Data) {
 
 function createToastWindow(filePath, base64Data) {
   try {
-    // Don't create a new window if one already exists and is valid
-    if (toastWin && !toastWin.isDestroyed()) {
-      logWarn('Toast', 'Toast window already exists, skipping creation');
-      return;
-    }
-
-    const TOAST_WIDTH = process.platform === 'darwin' ? 520 : 520;
-    const TOAST_HEIGHT = process.platform === 'darwin' ? 340 : 340;
-    
+    const TOAST_WIDTH = process.platform === 'darwin' ? 300:520;
+    const TOAST_HEIGHT = process.platform === 'darwin' ? 200:340;
     toastWin = new BrowserWindow({
       width: TOAST_WIDTH,
       height: TOAST_HEIGHT,
       frame: false,
       alwaysOnTop: true,
       skipTaskbar: true,
-      transparent: false, // Changed to false for better macOS compatibility
+      transparent: true,
       resizable: false,
-      hasShadow: true, // Enable shadow for better visibility on macOS
+      hasShadow: false,
       show: false,
-      acceptFirstMouse: true, // macOS: allow clicking before window is focused
       webPreferences: {
         preload: path.join(__dirname, "preload.js"),
         contextIsolation: true,
@@ -873,67 +745,30 @@ function createToastWindow(filePath, base64Data) {
 
     // Track when this toast was created
     toastWin._createdAt = Date.now();
-    
-    // Store the initialization data for when the window is ready
-    toastWin._initData = { filePath, base64Data };
 
     const { workArea } = screen.getPrimaryDisplay();
     const x = workArea.x + workArea.width - TOAST_WIDTH - 20;
     const y = workArea.y + workArea.height - TOAST_HEIGHT - 20;
     toastWin.setPosition(x, y);
 
-    // Load the HTML file
     toastWin.loadFile(path.join(__dirname, 'toast.html'));
 
-    // Wait for DOM to be fully ready before sending init data
-    toastWin.webContents.once('dom-ready', () => {
-      if (!toastWin || toastWin.isDestroyed()) {
-        logWarn('Toast', 'Toast window was destroyed before dom-ready');
-        return;
-      }
-      
-      // Small delay to ensure DOM elements are accessible
-      setTimeout(() => {
-        if (!toastWin || toastWin.isDestroyed()) {
-          return;
-        }
-        
-        try {
-          const initData = toastWin._initData;
-          if (initData && toastWin.webContents && !toastWin.webContents.isDestroyed()) {
-            toastWin.webContents.send('toast-init', initData);
-            logInfo('Toast', `Toast init data sent for: ${path.basename(initData.filePath)}`);
-          }
-        } catch (error) {
-          logError('Toast', `Error sending init data: ${error.message}`, error);
-        }
-      }, 50);
-    });
-
-    // Show window after it's ready
     toastWin.once('ready-to-show', () => {
+      // Check if window still exists (might have been closed)
       if (!toastWin || toastWin.isDestroyed()) {
         logWarn('Toast', 'Toast window was destroyed before ready-to-show');
         return;
       }
       
       try {
-        if (process.platform === 'darwin') {
-          // On macOS, use show() instead of showInactive() for better reliability
-          toastWin.show();
-          // Focus the window briefly to ensure it's visible, then remove focus
-          toastWin.focus();
-          setTimeout(() => {
-            if (toastWin && !toastWin.isDestroyed()) {
-              toastWin.blur();
-            }
-          }, 100);
-        } else {
-          toastWin.showInactive();
-        }
+        toastWin.showInactive();
+        logInfo('Toast', `Toast notification displayed for: ${path.basename(filePath)}`);
         
-        const initData = toastWin._initData;
-        logInfo('Toast', `Toast notification displayed for: ${path.basename(initData?.filePath || filePath)}`);
+        if (toastWin.webContents && !toastWin.webContents.isDestroyed()) {
+          toastWin.webContents.send('toast-init', { filePath, base64Data });
+        } else {
+          logWarn('Toast', 'Toast webContents was destroyed before sending init message');
+        }
       } catch (error) {
         logError('Toast', `Error showing toast window: ${error.message}`, error);
       }
@@ -942,20 +777,14 @@ function createToastWindow(filePath, base64Data) {
     // Handle errors during load
     toastWin.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
       logError('Toast', `Failed to load toast.html: ${errorCode} - ${errorDescription}`);
-      if (toastWin && !toastWin.isDestroyed()) {
-        toastWin.close();
-        toastWin = null;
-      }
     });
 
-    // Auto-close fallback after 6 seconds (5 second timer + 1 second buffer)
-    // The HTML timer should handle closing, but this is a safety net
+    // Auto-close after 9 seconds
     setTimeout(() => { 
       if (toastWin && !toastWin.isDestroyed()) {
-        logWarn('Toast', 'Fallback auto-close triggered after 6 seconds');
         toastWin.close(); 
       }
-    }, 6000);
+    }, 9000);
     
     toastWin.on('closed', () => { 
       toastWin = null; 
@@ -993,98 +822,83 @@ async function insertScreenshotToDatabase(supabase, userEmail, sessionId, public
 
 // Add screenshot to batch queue and process if batch is full
 async function addScreenshotToBatch(uploadData) {
-  const { userEmail, sessionId, screenshotData, timestamp, isIdle, contextLabel, screenIndex, screenName, appName } = uploadData;
-  
-  // FIX: Validate required context to prevent null reference errors
-  // This provides defense in depth in case null values are passed despite upstream checks
-  if (!userEmail || !sessionId) {
-    const errorMsg = `Cannot queue screenshot: Missing required context (userEmail: ${userEmail ? 'set' : 'null'}, sessionId: ${sessionId ? 'set' : 'null'})`;
-    logError(contextLabel || 'BATCH', errorMsg);
-    throw new Error(errorMsg);
-  }
-  
-  // Generate filename for screenshot
+  const {
+    userEmail,
+    sessionId,
+    screenshotData,
+    timestamp,
+    isIdle,
+    contextLabel,
+    screenIndex,
+    screenName,
+    appName
+  } = uploadData;
+
   const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
   const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}${screenSuffix}.jpg`;
   const screenshotsDir = resolveScreenshotsDir(true);
   const filePath = path.join(screenshotsDir, jpegFilename);
-  
+
   try {
-    // Capture app name at screenshot time if not already provided
+    showToastNotification(filePath, screenshotData);
+  } catch {}
+
+  try {
     let capturedAppName = appName;
     if (!capturedAppName) {
       try {
         capturedAppName = await getActiveAppName() || 'Unknown';
-        logInfo(contextLabel, `Captured app name at screenshot time: ${capturedAppName}`);
-      } catch (error) {
-        logWarn(contextLabel, `Failed to capture app name: ${error.message}`);
+      } catch {
         capturedAppName = 'Unknown';
       }
     }
-    
-    // Compress screenshot
+
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
-    
-    // Save to disk
     fs.writeFileSync(filePath, jpegBuffer);
-    
-    // Create batch queue entry
+
     const batchItem = {
       userEmail,
       sessionId,
-      screenshotData,
+      screenshotData, // kept for preview; cleared later
       timestamp,
       isIdle,
       contextLabel,
       screenIndex,
       screenName,
-      appName: capturedAppName, // Store the app name captured at screenshot time
+      appName: capturedAppName,
       filePath,
       jpegBuffer,
       jpegFilename,
       addedAt: Date.now()
     };
-    
-    // Add to queue
+
     screenshotBatchQueue.push(batchItem);
     pendingScreenshots.set(filePath, false);
-    
-    logInfo(contextLabel, `Screenshot queued (${screenshotBatchQueue.length}/${SCREENSHOT_BATCH_SIZE}): ${filePath}`);
-    
-    // Show toast notification ONLY AFTER all processing steps succeed
-    try {
-      showToastNotification(filePath, screenshotData);
-    } catch (toastError) {
-      logWarn(contextLabel, `Failed to show toast notification: ${toastError.message}`);
-      // Toast failure shouldn't cancel queue success
-    }
-    
-    // Start periodic flush timer if not already running
+
     if (!batchFlushInterval && screenshotBatchQueue.length > 0) {
       batchFlushInterval = setInterval(async () => {
         if (screenshotBatchQueue.length > 0 && !isBatchUploading) {
           logInfo('BATCH-UPLOAD', `Periodic flush: processing ${screenshotBatchQueue.length} screenshot(s) after timeout`);
           await processScreenshotBatch();
         }
-        // Clear interval if queue is empty
-        if (screenshotBatchQueue.length === 0 && batchFlushInterval) {
+        if (screenshotBatchQueue.length === 0) {
           clearInterval(batchFlushInterval);
           batchFlushInterval = null;
+          logInfo('BATCH-UPLOAD', `Flush interval cleared (queue empty)`);
         }
       }, SCREENSHOT_BATCH_FLUSH_INTERVAL);
+      logInfo('BATCH-UPLOAD', `Created flush interval (${SCREENSHOT_BATCH_FLUSH_INTERVAL}ms)`);
     }
-    
-    // If batch is full, process it immediately
+
     if (screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
       logInfo(contextLabel, `Batch full (${SCREENSHOT_BATCH_SIZE} screenshots), starting upload...`);
       await processScreenshotBatch();
-      // Clear flush interval since we just processed
       if (batchFlushInterval) {
         clearInterval(batchFlushInterval);
         batchFlushInterval = null;
       }
     }
-    
+
     return { ok: true, queued: true, batchSize: screenshotBatchQueue.length };
   } catch (e) {
     logError(contextLabel, `Error adding to batch: ${e?.message || 'queue error'}`, e);
@@ -1099,25 +913,34 @@ async function processScreenshotBatch() {
   }
 
   isBatchUploading = true;
-  const batchToUpload = [...screenshotBatchQueue]; // Copy the batch
-  screenshotBatchQueue.length = 0; // Clear the queue
+
+  const batchToUpload = [...screenshotBatchQueue];
+  screenshotBatchQueue.length = 0;
 
   logInfo('BATCH-UPLOAD', `Processing batch of ${batchToUpload.length} screenshot(s)`);
 
-  // --- CRITICAL FILTER STEP ---
-  // Only upload screenshots that are NOT cancelled and that DO exist.
   const validScreenshots = batchToUpload.filter(item => {
     const isCancelled = pendingScreenshots.get(item.filePath) === true;
     const exists = fs.existsSync(item.filePath);
-    if (isCancelled) logInfo('BATCH-UPLOAD', `Skipping CANCELLED: ${item.filePath}`);
-    if (!exists) logInfo('BATCH-UPLOAD', `Skipping MISSING: ${item.filePath}`);
-    return !isCancelled && exists;
+    
+    if (isCancelled) {
+      logInfo('BATCH-UPLOAD', `[FILTERED] CANCELLED: ${item.jpegFilename}`);
+      pendingScreenshots.delete(item.filePath);
+      return false;
+    }
+    if (!exists) {
+      logInfo('BATCH-UPLOAD', `[FILTERED] MISSING: ${item.jpegFilename}`);
+      pendingScreenshots.delete(item.filePath);
+      return false;
+    }
+    
+    return true;
   });
 
   const supabase = getSupabaseClient();
   if (!supabase) {
     logError('BATCH-UPLOAD', 'Supabase client unavailable, re-queuing batch');
-    screenshotBatchQueue.unshift(...validScreenshots); // Only re-queue valid ones
+    screenshotBatchQueue.unshift(...validScreenshots);
     isBatchUploading = false;
     return;
   }
@@ -1126,10 +949,14 @@ async function processScreenshotBatch() {
   const filesToDelete = [];
 
   try {
-    // Upload all valid screenshots in parallel
     const uploadPromises = validScreenshots.map(async (item) => {
       try {
-        // Upload logic (unchanged)
+        if (pendingScreenshots.get(item.filePath) === true) {
+          logInfo('BATCH-UPLOAD', `[PRE-UPLOAD-CHECK] Skipping cancelled: ${item.jpegFilename}`);
+          pendingScreenshots.delete(item.filePath);
+          return { ok: false, skipped: true, reason: 'cancelled', filePath: item.filePath };
+        }
+
         const storagePath = `${item.userEmail}/${item.sessionId}/${item.jpegFilename}`;
         const { error: storageError } = await supabase.storage
           .from(STORAGE_BUCKET)
@@ -1144,9 +971,16 @@ async function processScreenshotBatch() {
         const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
         if (!publicUrl) throw new Error('Unable to get storage public URL');
 
-        // Use the app name captured at screenshot time (stored in batch item)
         const appName = item.appName || 'Unknown';
-        await insertScreenshotToDatabase(supabase, item.userEmail, item.sessionId, publicUrl, item.timestamp, appName, item.isIdle);
+        await insertScreenshotToDatabase(
+          supabase,
+          item.userEmail,
+          item.sessionId,
+          publicUrl,
+          item.timestamp,
+          appName,
+          item.isIdle
+        );
 
         broadcastScreenshotCaptured({
           timestamp: item.timestamp,
@@ -1157,6 +991,18 @@ async function processScreenshotBatch() {
           appName,
           isIdle: Boolean(item.isIdle)
         });
+
+        // safe to clear preview only on successful upload
+        item.screenshotData = null;
+
+        try {
+          if (toastWin && !toastWin.isDestroyed()) {
+            toastWin.webContents.send('toast-file-uploaded', {
+              oldFilePath: item.filePath,
+              remoteUrl: publicUrl
+            });
+          }
+        } catch {}
 
         filesToDelete.push(item.filePath);
         pendingScreenshots.delete(item.filePath);
@@ -1172,7 +1018,6 @@ async function processScreenshotBatch() {
     const results = await Promise.all(uploadPromises);
     uploadResults.push(...results);
 
-    // Delete files
     let deletedCount = 0;
     for (const filePath of filesToDelete) {
       try {
@@ -1185,41 +1030,66 @@ async function processScreenshotBatch() {
       }
     }
 
-    // Re-queue failed uploads
     const failedUploads = results.filter(r => !r.ok && r.item);
     if (failedUploads.length > 0) {
       logWarn('BATCH-UPLOAD', `Re-queuing ${failedUploads.length} failed upload(s)`);
-      screenshotBatchQueue.push(...failedUploads.map(f => f.item));
+
+      const itemsToRequeue = failedUploads.map(f => {
+        const original = f.item;
+        const retryCount = (original.retryCount || 0) + 1;
+        const MAX_RETRIES_WITH_PREVIEW = 3;
+
+        return {
+          userEmail: original.userEmail,
+          sessionId: original.sessionId,
+          screenshotData: retryCount < MAX_RETRIES_WITH_PREVIEW ? original.screenshotData : null,
+          timestamp: original.timestamp,
+          isIdle: original.isIdle,
+          contextLabel: original.contextLabel,
+          screenIndex: original.screenIndex,
+          screenName: original.screenName,
+          appName: original.appName,
+          filePath: original.filePath,
+          jpegBuffer: original.jpegBuffer,
+          jpegFilename: original.jpegFilename,
+          addedAt: Date.now(),
+          retryCount: retryCount
+        };
+      });
+
+      screenshotBatchQueue.push(...itemsToRequeue);
     }
 
     const successCount = results.filter(r => r.ok).length;
-    logInfo('BATCH-UPLOAD', `Batch complete: ${successCount}/${validScreenshots.length} uploaded, ${deletedCount} files deleted`);
+    logInfo(
+      'BATCH-UPLOAD',
+      `Batch complete: ${successCount}/${validScreenshots.length} uploaded, ${deletedCount} files deleted`
+    );
 
   } catch (error) {
     logError('BATCH-UPLOAD', `Batch processing error: ${error.message}`, error);
-    const stillPending = validScreenshots.filter(item => {
-    const isCancelled = pendingScreenshots.get(item.filePath) === true;
-    const exists = fs.existsSync(item.filePath);
-    return !isCancelled && exists;
+    const MAX_RETRIES_WITH_PREVIEW = 3;
+    const itemsToRequeue = validScreenshots.map(item => {
+      const retryCount = (item.retryCount || 0) + 1;
+      return {
+        ...item,
+        retryCount: retryCount,
+        screenshotData: retryCount < MAX_RETRIES_WITH_PREVIEW ? item.screenshotData : null
+      };
     });
-    if (stillPending.length > 0) {
-    // Only re-queue items that are still valid for retry
-    screenshotBatchQueue.unshift(...stillPending);
-    }
-    } finally {
+    screenshotBatchQueue.unshift(...itemsToRequeue);
+  } finally {
     isBatchUploading = false;
   }
 }
 
-
 // Flush remaining screenshots in queue (called on app close or session end)
 async function flushScreenshotBatch() {
-  // Clear periodic flush interval
   if (batchFlushInterval) {
     clearInterval(batchFlushInterval);
     batchFlushInterval = null;
   }
-  
+
   if (screenshotBatchQueue.length > 0) {
     logInfo('BATCH-UPLOAD', `Flushing ${screenshotBatchQueue.length} remaining screenshot(s) in queue`);
     await processScreenshotBatch();
@@ -1292,16 +1162,36 @@ async function getScreenshotInterval(userEmail, sessionId) {
     // 3) If project_assignments lookup failed or has no assigned_by, try getting client from projects table directly
     if (!clientEmail) {
       const { data: projectData, error: projectError } = await supabase
-        .from('projects')
-        .select('user_email')
-        .eq('id', projectId)
-        .maybeSingle();
+    .from('projects')
+    .select('screenshot_interval, user_id')
+    .eq('id', projectId)
+    .maybeSingle();
 
-      if (!projectError && projectData && projectData.user_email) {
-        clientEmail = projectData.user_email.trim().toLowerCase();
+    if (!projectError && projectData && projectData.user_id) {
+      // Declare variables OUTSIDE the if block to avoid scope issues
+      let userData = null;
+      let userError = null;
+    
+      // Fetch email from users table using userid foreign key
+      const result = await supabase
+        .from('users')
+        .select('email')
+        .eq('id', projectData.user_id)
+        .maybeSingle();
+      
+      userData = result.data;
+      userError = result.error;
+    
+      // Now can safely use userData and userError here
+      if (!userError && userData && userData.email) {
+        clientEmail = userData.email.trim().toLowerCase();
+        logInfo('ScreenshotInterval', `Using project owner email: ${clientEmail}`);
+      } else if (userError) {
+        logError('ScreenshotInterval', `Error fetching user email: ${userError.message}`);
       }
     }
-
+  }
+    
     // 4) Final fallback: assume logged-in user is the client
     if (!clientEmail) {
       logInfo(
@@ -1373,176 +1263,66 @@ ipcMain.handle('set-user-logged-in', async (event, flag) => {
   return true;
 });
 
-// ============ SECURE DELETE HANDLER ============
-// This handler prevents cross-user deletion by filtering queries by user_email and session_id
-// Security features:
-// 1. Uses global currentUserEmail and currentSessionId (set when session starts)
-// 2. Filters database query by user_email and session_id (prevents cross-user access)
-// 3. Uses strict filename matching (endsWith) instead of substring matching
-// 4. Double-verifies user_email and session_id before deletion
 
+// ============ COMPLETE CORRECTED main.js DELETE HANDLER ============
 ipcMain.handle('toast-delete-file', async (event, filePath) => {
   logInfo('DELETE', `Handler called with filePath: ${filePath}`);
 
   try {
-    // Step 1: Mark as cancelled immediately
-    // This ensures processScreenshotBatch() will skip this file if it's processing concurrently
+    // ✅ STEP 1: ATOMIC - Set cancellation flag FIRST (BEFORE anything else)
     pendingScreenshots.set(filePath, true);
+    logInfo('DELETE', `[ATOMIC] Marked for cancellation: ${filePath}`);
 
-    // --- FIX: Step 2 (NEW): Extract filename and validate security context BEFORE deleting local file ---
-    // This prevents orphaned records if remote deletion cannot be attempted securely
-    const filename = path.basename(filePath);
-    
-    // --- SECURITY FIX: CONTEXT EXTRACTION ---
-    // Use global variables (set when session starts) as primary source for security
-    // These are set in the 'start-background-screenshots' handler when a session begins
-    let userEmail = currentUserEmail;
-    let sessionId = currentSessionId;
-    
-    // If global variables are not available, we cannot securely proceed with deletion
-    // Abort early to prevent local file deletion without remote cleanup
-    if (!userEmail || !sessionId) {
-      logError('DELETE', 'ABORTING: Cannot delete file. User context (email/session) missing for secure deletion.', { 
-        filename,
-        currentUserEmail: currentUserEmail ? 'set' : 'not set',
-        currentSessionId: currentSessionId ? 'set' : 'not set'
-      });
-      
-      // Clear the cancellation flag since the deletion was aborted
-      pendingScreenshots.delete(filePath);
-      
-      return { 
-        success: false, 
-        message: 'Security context missing. Deletion aborted to prevent orphaned records.',
-        filename
-      };
+    // ✅ STEP 2: Remove from batch queue IMMEDIATELY
+    const indexInQueue = screenshotBatchQueue.findIndex(item => item.filePath === filePath);
+    if (indexInQueue !== -1) {
+      screenshotBatchQueue.splice(indexInQueue, 1);
+      logInfo('DELETE', `[QUEUE] Removed from batch queue at index ${indexInQueue}`);
     }
-    
-    // Normalize email to match database format (lowercase)
-    userEmail = userEmail.trim().toLowerCase();
-    
-    logInfo('DELETE', `Security context valid - User: ${userEmail}, Session: ${sessionId}, Filename: ${filename}`);
-    // ----------------------------------------------------------------------------------
 
-    // --- FIX: Step 3 (OLD Step 2): Delete from local disk (NOW runs only with valid context) ---
+    // ✅ STEP 3: Delete from local disk
     if (filePath && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
-      logInfo('DELETE', `File deleted successfully from disk: ${filePath}`);
-      // NOTE: Do NOT delete the cancellation flag here - keep it until all operations complete
+      logInfo('DELETE', `[DISK] File deleted: ${filePath}`);
     } else {
-      logWarn('DELETE', `File does not exist on disk: ${filePath}`);
-    }
-    // ----------------------------------------------------------------------------------
-
-    const supabase = getSupabaseClient();
-    
-    // Attempt database/storage deletion (context is guaranteed to be valid at this point)
-    if (supabase) {
-      // --- SECURITY FIX: FILTERED QUERY ---
-      // Filter by current user's email and session ID to prevent cross-user deletion
-      // This ensures we only query screenshots belonging to the current user's session
-      const { data: screenshots, error: queryError } = await supabase
-        .from('screenshots')
-        .select('id, screenshot_data, user_email, session_id')
-        .eq('user_email', userEmail)        // SECURITY: Filter by current user
-        .eq('session_id', sessionId)        // SECURITY: Filter by current session
-        .order('captured_at', { ascending: false })
-        .limit(10);                         // Reduced limit since filtering is much tighter now
-
-      if (!queryError && screenshots) {
-        // --- SECURITY FIX: STRICT FILENAME MATCH ---
-        // Use endsWith() instead of includes() for stricter matching
-        // The URL should end with the filename to ensure exact match
-        const screenshot = screenshots.find(s => {
-          if (!s.screenshot_data) return false;
-          // Check if the URL ends with the filename (stricter than includes)
-          return s.screenshot_data.endsWith(filename) || s.screenshot_data.includes(`/${filename}`);
-        });
-
-        if (screenshot) {
-          // Verify additional security: double-check user_email and session_id match
-          if (screenshot.user_email?.toLowerCase() === userEmail && 
-              screenshot.session_id === sessionId) {
-            
-            // Delete from S3 storage
-            if (screenshot.screenshot_data) {
-              try {
-                const urlParts = screenshot.screenshot_data.split('/');
-                const bucketIndex = urlParts.indexOf(STORAGE_BUCKET);
-                if (bucketIndex !== -1 && bucketIndex < urlParts.length - 1) {
-                  const storagePath = urlParts.slice(bucketIndex + 1).join('/');
-                  await supabase.storage
-                    .from(STORAGE_BUCKET)
-                    .remove([storagePath]);
-                  logInfo('DELETE', `Deleted from S3 storage: ${storagePath}`);
-                }
-              } catch (e) {
-                logError('DELETE', `Error parsing storage path: ${e.message}`, e);
-              }
-            }
-            
-            // Delete from database
-            await supabase
-              .from('screenshots')
-              .delete()
-              .eq('id', screenshot.id);
-            logInfo('DELETE', `Deleted database record ID: ${screenshot.id} (User: ${userEmail}, Session: ${sessionId})`);
-          } else {
-            logError('DELETE', `Security check failed: Screenshot context mismatch`, {
-              expectedUser: userEmail,
-              expectedSession: sessionId,
-              actualUser: screenshot.user_email,
-              actualSession: screenshot.session_id,
-              filename
-            });
-          }
-        } else {
-          logWarn('DELETE', `No database record found for: ${filename} (User: ${userEmail}, Session: ${sessionId})`);
-        }
-      } else if (queryError) {
-        logError('DELETE', `Database query error: ${queryError.message}`, queryError);
-      }
-    } else {
-      // Supabase client not available - log but continue with local deletion cleanup
-      logWarn('DELETE', `Supabase client not available, skipping remote deletion`);
+      logWarn('DELETE', `[DISK] File does not exist: ${filePath}`);
     }
 
-    // Step 4: Broadcast deletion event to all renderer windows
-    BrowserWindow.getAllWindows().forEach(window => {
-      if (!window.isDestroyed()) {
-        window.webContents.send('screenshot-deleted', { filePath, filename });
-      }
-    });
+    // ✅ STEP 4: Clean up pending map with 1000ms delay
+    setTimeout(() => {
+      pendingScreenshots.delete(filePath);
+      logInfo('DELETE', `[CLEANUP] Removed from pending map: ${filePath}`);
+    }, 1000);
 
-    // Step 5: Close toast window if open
+    // ✅ STEP 5: Close toast window
     if (toastWin && !toastWin.isDestroyed()) {
-      toastWin.close();
+      try {
+        toastWin.close();
+      } catch (e) {
+        logWarn('DELETE', `Error closing toast: ${e.message}`);
+      }
       toastWin = null;
     }
 
-    // Step 6: Cleanup cancellation flag AFTER all operations complete
-    // This ensures any concurrent processScreenshotBatch() sees the cancellation until we're done
-    pendingScreenshots.delete(filePath);
+    // ✅ STEP 6: Broadcast deletion
+    BrowserWindow.getAllWindows().forEach(window => {
+      if (!window.isDestroyed()) {
+        try {
+          window.webContents.send('screenshot-deleted', { filePath });
+        } catch (e) {
+          logWarn('DELETE', `Error broadcasting: ${e.message}`);
+        }
+      }
+    });
 
-    return {
-      success: true,
-      message: 'Screenshot deleted from disk/storage/database',
-      filename
-    };
+    logInfo('DELETE', `✓ COMPLETED: ${path.basename(filePath)}`);
+    return { success: true, message: 'Screenshot deleted' };
 
   } catch (error) {
     logError('DELETE', `Error: ${error.message}`, error);
-    
-    // Cleanup cancellation flag on error as well
-    pendingScreenshots.delete(filePath);
-    
-    return {
-      success: false,
-      message: error.message || 'Delete failed'
-    };
+    return { success: false, message: error.message };
   }
 });
-
 
 ipcMain.handle('get-system-idle-time', () => {
   try {
@@ -1610,15 +1390,8 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
       try {
         // Get all displays to calculate proper thumbnail size
         const allDisplays = screen.getAllDisplays();
-        
-        // Check if displays exist to prevent Math.max on empty array returning -Infinity
-        const hasDisplays = allDisplays.length > 0;
-        const maxWidth = hasDisplays
-          ? Math.max(...allDisplays.map(d => d.size.width))
-          : 1920; // Default width
-        const maxHeight = hasDisplays
-          ? Math.max(...allDisplays.map(d => d.size.height))
-          : 1080; // Default height
+        const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
+        const maxHeight = Math.max(...allDisplays.map(d => d.size.height));
         
         logInfo('BG-UPLOAD', `Detected ${allDisplays.length} display(s), requesting screenshots with size ${maxWidth}x${maxHeight}`);
         
@@ -1656,15 +1429,6 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
         
         if (sources && sources.length > 0) {
           const timestamp = new Date().toISOString();
-          
-          // FIX: Validate context before processing and queuing screenshots
-          // If session context was cleared (e.g., by stop-background-screenshots),
-          // abort this tick cleanly to prevent null reference errors in addScreenshotToBatch
-          if (!currentUserEmail || !currentSessionId) {
-            logWarn('BG-UPLOAD', 'Aborting screenshot queueing: User session context was cleared. Skipping this tick.');
-            // Exit this background tick cleanly without queuing any screenshots
-            return;
-          }
           
           // Capture and upload screenshots from all displays
           const uploadPromises = sources.map(async (source, index) => {
@@ -1712,40 +1476,15 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
 });
 
 ipcMain.handle('stop-background-screenshots', async () => {
-  logInfo('BG', 'Stopping background screenshot capture…');
-
   isBackgroundCaptureActive = false;
-
   if (backgroundScreenshotInterval) {
     clearTimeout(backgroundScreenshotInterval);
     backgroundScreenshotInterval = null;
   }
-
-  // Clear batch flush interval if it's running
-  if (batchFlushInterval) {
-    clearInterval(batchFlushInterval);
-    batchFlushInterval = null;
-  }
-
-  // Flush remaining screenshots BEFORE clearing user context
-  // This ensures toast-delete-file still works until everything is processed or dismissed
-  try {
-    if (screenshotBatchQueue.length > 0) {
-      logInfo('BG', `Flushing ${screenshotBatchQueue.length} queued screenshots…`);
-      await processScreenshotBatch();
-    }
-  } catch (flushError) {
-    logError('BG', `Error flushing screenshot batch: ${flushError.message}`);
-  }
-
-  // --- FIX: Clear user context AFTER flushing ---
-  // This ensures toast-delete-file still works until everything is processed or dismissed.
-  currentUserEmail = null;
-  currentSessionId = null;
-
-  logInfo('BG', 'Background screenshots stopped and user context cleared.');
-
-  return { success: true };
+  // Flush any remaining screenshots in the batch queue
+  await flushScreenshotBatch();
+  logInfo('IPC', 'Background screenshots stopped');
+  return true;
 });
 
 // Get batch queue status
@@ -1805,17 +1544,8 @@ ipcMain.handle('capture-all-screens', async () => {
     
     // Get all screen sources
     const allDisplays = screen.getAllDisplays();
-    
-    // Check if displays exist to prevent Math.max on empty array returning -Infinity
-    const hasDisplays = allDisplays.length > 0;
-    const maxWidth = hasDisplays
-      ? Math.max(...allDisplays.map(d => d.size.width))
-      : 1920; // Default width
-    const maxHeight = hasDisplays
-      ? Math.max(...allDisplays.map(d => d.size.height))
-      : 1080; // Default height
-    
-    logInfo('IPC', `[capture-all-screens] Calculated max thumbnail size: ${maxWidth}x${maxHeight}`);
+    const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
+    const maxHeight = Math.max(...allDisplays.map(d => d.size.height));
     
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
@@ -1853,6 +1583,17 @@ ipcMain.handle('capture-all-screens', async () => {
   }
 });
 
+// Check screen recording permission (used by preload.js -> checkScreenPermission)
+ipcMain.handle('check-screen-permission', async () => {
+  try {
+    const hasPermission = await checkScreenRecordingPermission();
+    return { ok: true, hasPermission };
+  } catch (error) {
+    logWarn('Permissions', `check-screen-permission failed: ${error?.message || error}`);
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
 // Diagnostic handler to check screen capture capabilities
 ipcMain.handle('diagnose-screen-capture', async () => {
   const diagnostics = {
@@ -1875,14 +1616,8 @@ ipcMain.handle('diagnose-screen-capture', async () => {
     }));
     
     // Try to get screen sources
-    // FIX: Check if displays exist to prevent Math.max on empty array resulting in -Infinity
-    const hasDisplays = displays.length > 0;
-    const maxWidth = hasDisplays
-      ? Math.max(...displays.map(d => d.size.width))
-      : 1920; // Default width
-    const maxHeight = hasDisplays
-      ? Math.max(...displays.map(d => d.size.height))
-      : 1080; // Default height
+    const maxWidth = Math.max(...displays.map(d => d.size.width));
+    const maxHeight = Math.max(...displays.map(d => d.size.height));
     
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
@@ -2005,66 +1740,58 @@ app.whenReady().then(() => {
   createWindow();
 });
 
-app.on('window-all-closed', () => {
-  // FIX: Remove async flush from here to prevent race condition
-  // The flush will happen in 'before-quit' which can properly block termination
-  if (backgroundScreenshotInterval) {
-    clearTimeout(backgroundScreenshotInterval);
-    backgroundScreenshotInterval = null;
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+});
+
+let isQuitting = false;
+
+async function flushScreenshotBatchOnShutdown() {
+  // wait for any running batch
+  while (isBatchUploading) {
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
-  isBackgroundCaptureActive = false;
-  
-  // On non-macOS platforms, quit the app (this will trigger 'before-quit' event)
-  // On macOS, keep the app running even when all windows are closed
+  await flushScreenshotBatch();
+}
+
+app.on('before-quit', (event) => {
+  if (!isQuitting) {
+    event.preventDefault();
+    isQuitting = true;
+
+    (async () => {
+      try {
+        await flushScreenshotBatch();
+      } catch (err) {
+        logWarn('Shutdown', `Error flushing screenshot batch on quit: ${err?.message || err}`);
+      } finally {
+        app.quit();
+      }
+    })();
+
+    return;
+  }
+});
+
+app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
-// 🎯 SECURE CLEANUP: Use 'before-quit' to block termination until flush completes
-// Electron will wait for all promise-returning listeners of 'before-quit' to resolve
-app.on('before-quit', async (event) => {
-  // FIX: Add guard flag to prevent recursive re-entry
-  // When app.quit() is called inside this handler, it can re-trigger before-quit
-  if (isQuitting) {
-    logInfo('LIFECYCLE', 'before-quit re-entry detected, exiting immediately.');
-    return;
+app.on('activate', () => {
+  logInfo('App', 'Activate event triggered - checking if window needs restoration');
+  
+  if (mainWindow === null || mainWindow.isDestroyed()) {
+    logInfo('App', 'Main window is null or destroyed, creating new window');
+    createWindow();
+  } else {
+    if (!mainWindow.isVisible()) {
+      logInfo('App', 'Main window exists but hidden, showing it');
+      mainWindow.show();
+    }
+    mainWindow.focus();
+    logInfo('App', 'Main window focused');
   }
-  
-  isQuitting = true;
-  logInfo('LIFECYCLE', 'Executing before-quit cleanup: Flushing screenshot batch...');
-  
-  // Use preventDefault() to explicitly block the quit until we're done
-  event.preventDefault();
-  
-  // Stop background screenshot capture
-  if (backgroundScreenshotInterval) {
-    clearTimeout(backgroundScreenshotInterval);
-    backgroundScreenshotInterval = null;
-  }
-  isBackgroundCaptureActive = false;
-  
-  // Stop idle polling if active
-  if (global.__idlePollInterval) {
-    clearInterval(global.__idlePollInterval);
-    global.__idlePollInterval = null;
-  }
-  
-  try {
-    // Await the flush to ensure all uploads complete before we proceed
-    await flushScreenshotBatch();
-    logInfo('LIFECYCLE', 'Screenshot batch successfully flushed.');
-  } catch (error) {
-    logError('LIFECYCLE', 'Error during final batch flush:', error);
-    // Log error but still allow quitting
-  }
-  
-  // Now that clean-up is done, explicitly allow the app to quit
-  logInfo('LIFECYCLE', 'Application shutting down');
-  
-  // Use setImmediate to release the current tick before calling app.quit()
-  // This helps avoid nested execution contexts, though the guard flag is the primary fix
-  setImmediate(() => {
-    app.quit();
-  });
 });
