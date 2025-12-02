@@ -193,7 +193,7 @@ function scheduleBatchFlush() {
     }
 
     if (screenshotBatchQueue.length > 0) {
-      // Queue still has items (e.g. re-queued after failures) – schedule another flush.
+      // Queue still has items (e.g. re-queued after failures) â€“ schedule another flush.
       scheduleBatchFlush();
     } else {
       logInfo('BATCH-UPLOAD', 'Flush timer finished (queue empty)');
@@ -359,7 +359,7 @@ function createWindow() {
         cancelId: 0,
       }).then(({ response }) => {
         if (response === 1 && mainWindow && !mainWindow.isDestroyed()) {
-          // User chose "Close Anyway" – allow the window to close.
+          // User chose "Close Anyway" â€“ allow the window to close.
           isForceClosing = true;
           mainWindow.close();
         }
@@ -378,7 +378,7 @@ function createWindow() {
         cancelId: 0,
       }).then(({ response }) => {
         if (response === 1 && mainWindow && !mainWindow.isDestroyed()) {
-          // User chose "Close Anyway" – allow the window to close.
+          // User chose "Close Anyway" â€“ allow the window to close.
           isForceClosing = true;
           mainWindow.close();
         }
@@ -430,7 +430,7 @@ async function requestScreenRecordingPermission() {
       message: 'Screen Recording Permission Required',
       detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
               'Please grant permission:\n' +
-              '1. Go to System Settings → Privacy & Security → Screen Recording\n' +
+              '1. Go to System Settings â†’ Privacy & Security â†’ Screen Recording\n' +
               '2. Find "Time Tracker" in the list\n' +
               '3. Enable the toggle\n' +
               '4. Restart the app\n\n' +
@@ -479,7 +479,7 @@ async function requestAccessibilityPermission() {
       detail: 'This app needs Accessibility permission to detect which application you are using.\n\n' +
               'Without this permission, app names will show as "Unknown".\n\n' +
               'Please grant permission:\n' +
-              '1. Go to System Settings → Privacy & Security → Accessibility\n' +
+              '1. Go to System Settings â†’ Privacy & Security â†’ Accessibility\n' +
               '2. Find "Time Tracker" in the list\n' +
               '3. Enable the toggle\n' +
               '4. Restart the app\n\n' +
@@ -1523,18 +1523,18 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
   logInfo('DELETE', `Handler called with filePath: ${filePath}`);
 
   try {
-    // ✅ STEP 1: ATOMIC - Set cancellation flag FIRST (BEFORE anything else)
+    // âœ… STEP 1: ATOMIC - Set cancellation flag FIRST (BEFORE anything else)
     pendingScreenshots.set(filePath, true);
     logInfo('DELETE', `[ATOMIC] Marked for cancellation: ${filePath}`);
 
-    // ✅ STEP 2: Remove from batch queue IMMEDIATELY
+    // âœ… STEP 2: Remove from batch queue IMMEDIATELY
     const indexInQueue = screenshotBatchQueue.findIndex(item => item.filePath === filePath);
     if (indexInQueue !== -1) {
       screenshotBatchQueue.splice(indexInQueue, 1);
       logInfo('DELETE', `[QUEUE] Removed from batch queue at index ${indexInQueue}`);
     }
 
-    // ✅ STEP 3: Delete from local disk
+    // âœ… STEP 3: Delete from local disk
     if (filePath && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
       logInfo('DELETE', `[DISK] File deleted: ${filePath}`);
@@ -1542,13 +1542,13 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
       logWarn('DELETE', `[DISK] File does not exist: ${filePath}`);
     }
 
-    // ✅ STEP 4: Clean up pending map with 1000ms delay
+    // âœ… STEP 4: Clean up pending map with 1000ms delay
     setTimeout(() => {
       pendingScreenshots.delete(filePath);
       logInfo('DELETE', `[CLEANUP] Removed from pending map: ${filePath}`);
     }, 1000);
 
-    // ✅ STEP 5: Close toast window
+    // âœ… STEP 5: Close toast window
     if (toastWin && !toastWin.isDestroyed()) {
       try {
         toastWin.close();
@@ -1558,7 +1558,7 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
       toastWin = null;
     }
 
-    // ✅ STEP 6: Broadcast deletion
+    // âœ… STEP 6: Broadcast deletion
     BrowserWindow.getAllWindows().forEach(window => {
       if (!window.isDestroyed()) {
         try {
@@ -1569,7 +1569,7 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
       }
     });
 
-    logInfo('DELETE', `✓ COMPLETED: ${path.basename(filePath)}`);
+    logInfo('DELETE', `âœ“ COMPLETED: ${path.basename(filePath)}`);
     return { success: true, message: 'Screenshot deleted' };
 
   } catch (error) {
@@ -1788,7 +1788,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
             logInfo('BG-UPLOAD', `Source ${idx + 1}: id="${source.id}", name="${source.name}", thumbnail size: ${source.thumbnail?.getSize()?.width || 'N/A'}x${source.thumbnail?.getSize()?.height || 'N/A'}`);
           });
         } else {
-          logWarn('BG-UPLOAD', '⚠️ No screen sources returned! This may indicate:');
+          logWarn('BG-UPLOAD', 'âš ï¸ No screen sources returned! This may indicate:');
           logWarn('BG-UPLOAD', '  1. Missing screen recording permissions (macOS)');
           logWarn('BG-UPLOAD', '  2. No displays connected');
           logWarn('BG-UPLOAD', '  3. Platform-specific limitation');
@@ -1979,7 +1979,7 @@ ipcMain.handle('capture-all-screens', async () => {
         logInfo('IPC', `[capture-all-screens] Source ${idx + 1}: id="${source.id}", name="${source.name}"`);
       });
     } else {
-      logWarn('IPC', '[capture-all-screens] ⚠️ No screen sources found! Check macOS screen recording permissions.');
+      logWarn('IPC', '[capture-all-screens] âš ï¸ No screen sources found! Check macOS screen recording permissions.');
     }
     
     if (!sources || sources.length === 0) {

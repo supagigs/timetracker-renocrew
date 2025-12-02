@@ -167,7 +167,8 @@ document.addEventListener('DOMContentLoaded', () => {
         window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state during logout:', err));
       }
 
-      window.location.href = 'login.html';
+      window.location.href = "login.html";
+
     } catch (error) {
       console.error('Error during logout from home:', error);
       if (!remote) {

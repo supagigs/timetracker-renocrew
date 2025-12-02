@@ -40,8 +40,8 @@ function initializeLoginPage() {
   // Clear any stored email to ensure fresh login
   StorageService.removeItem('userEmail');
   
-  // Force reset email field immediately
-  forceResetEmailField();
+  // // Force reset email field immediately
+  // forceResetEmailField();
   
   // Ensure email field is editable
   const emailInput = document.getElementById('email');
@@ -187,7 +187,7 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('focus', () => {
   console.log('Window focused, ensuring login form is ready');
   setTimeout(initializeLoginPage, 100);
-});
+ });
 
 // Handle category change - show/hide projects section
 function handleCategoryChange() {
