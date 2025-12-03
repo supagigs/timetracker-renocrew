@@ -182,6 +182,10 @@ function scheduleBatchFlush() {
   }
 
   batchFlushInterval = setTimeout(async () => {
+    // Clear the interval reference immediately to allow new timers to be scheduled
+    // if needed by concurrent code (e.g., addScreenshotToBatch). This prevents
+    // the timer variable from blocking new timer creation, but we check queue state
+    // and isBatchUploading flag to ensure proper coordination.
     batchFlushInterval = null;
 
     if (screenshotBatchQueue.length > 0 && !isBatchUploading) {
@@ -192,9 +196,14 @@ function scheduleBatchFlush() {
       await processScreenshotBatch();
     }
 
+    // Only reschedule if this timer is still the active one (not cleared by concurrent code)
+    // and there are still items in the queue
     if (screenshotBatchQueue.length > 0) {
-      // Queue still has items (e.g. re-queued after failures) â€“ schedule another flush.
-      scheduleBatchFlush();
+      // Queue still has items (e.g. re-queued after failures) â€" schedule another flush.
+      // Only schedule if no other timer was set in the meantime
+      if (!batchFlushInterval) {
+        scheduleBatchFlush();
+      }
     } else {
       logInfo('BATCH-UPLOAD', 'Flush timer finished (queue empty)');
     }
@@ -785,30 +794,29 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
     .toBuffer();
 
   // Keep compressing if needed
+  let attempts = 0;
 
-let attempts = 0;
+  while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5 && quality > 30) {
+    attempts++;
+    quality -= (jpegBuffer.length > TARGET_SIZE_BYTES * 1.5) ? 15 : 5;
 
-while (jpegBuffer.length > TARGET_SIZE_BYTES && attempts < 5 && quality > 30) {
-  attempts++;
-  quality -= (jpegBuffer.length > TARGET_SIZE_BYTES * 1.5) ? 15 : 5;
+    if (quality <= 30) {
+      quality = 30;
+      const scaleFactor = Math.sqrt(TARGET_SIZE_BYTES / jpegBuffer.length);
+      const newWidth = Math.floor(UPLOAD_WIDTH * scaleFactor);
 
-  if (quality <= 30) {
-    quality = 30;
-    const scaleFactor = Math.sqrt(TARGET_SIZE_BYTES / jpegBuffer.length);
-    const newWidth = Math.floor(UPLOAD_WIDTH * scaleFactor);
+      jpegBuffer = await sharp(inputBuffer)
+        .resize(newWidth, null, { withoutEnlargement: true, fit: 'inside' })
+        .jpeg({ quality: 30, mozjpeg: true })
+        .toBuffer();
+      break;
+    }
 
     jpegBuffer = await sharp(inputBuffer)
-      .resize(newWidth, null, { withoutEnlargement: true, fit: 'inside' })
-      .jpeg({ quality: 30, mozjpeg: true })
+      .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
+      .jpeg({ quality: quality, mozjpeg: true })
       .toBuffer();
-    break;
   }
-
-  jpegBuffer = await sharp(inputBuffer)
-    .resize(UPLOAD_WIDTH, null, { withoutEnlargement: true, fit: 'inside' })
-    .jpeg({ quality: quality, mozjpeg: true })
-    .toBuffer();
-}
 
 
   logInfo('Compress', `JPEG size: ${(jpegBuffer.length / 1024).toFixed(2)} KB`);
@@ -1049,14 +1057,17 @@ async function addScreenshotToBatch(uploadData) {
 
   const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
   const jpegFilename = `${userEmail.replace(/@/g, '_at_').replace(/\./g, '_')}_${sessionId}_${timestamp.replace(/[:.]/g, '-')}${screenSuffix}.jpg`;
-  const screenshotsDir = resolveScreenshotsDir(true);
-  const filePath = path.join(screenshotsDir, jpegFilename);
 
   try {
-    showToastNotification(filePath, screenshotData);
-  } catch {}
+    // Resolve screenshots directory inside try-catch to handle potential errors
+    // (e.g., permission denied, disk full, etc.)
+    const screenshotsDir = resolveScreenshotsDir(true);
+    const filePath = path.join(screenshotsDir, jpegFilename);
 
-  try {
+    try {
+      showToastNotification(filePath, screenshotData);
+    } catch {}
+
     let capturedAppName = appName;
     if (!capturedAppName) {
       try {
@@ -1096,12 +1107,30 @@ async function addScreenshotToBatch(uploadData) {
       await processScreenshotBatch();
       
       // If the queue is now empty, cancel any pending flush timer.
-      if (screenshotBatchQueue.length === 0 && batchFlushInterval) {
-        clearTimeout(batchFlushInterval);
-        batchFlushInterval = null;
-        logInfo('BATCH-UPLOAD', 'Flush timer cleared after successful batch (queue empty)');
+      // Note: We check batchFlushInterval here, but it might be null if a timer callback
+      // is currently executing. That's okay - the timer callback will handle cleanup.
+      if (screenshotBatchQueue.length === 0) {
+        if (batchFlushInterval) {
+          clearTimeout(batchFlushInterval);
+          batchFlushInterval = null;
+          logInfo('BATCH-UPLOAD', 'Flush timer cleared after successful batch (queue empty)');
+        }
       } else {
-        // Otherwise, make sure a flush is scheduled for remaining items.
+        // Queue has items (possibly re-queued from failures)
+        // If queue is still full, process immediately to maintain FIFO and avoid delays
+        if (screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
+          logInfo('BATCH-UPLOAD', `Queue still full after batch (${screenshotBatchQueue.length} items), processing immediately...`);
+          await processScreenshotBatch();
+        }
+        
+        // Ensure flush timer is scheduled for remaining items
+        // Clear any existing timer first to ensure re-queued items get processed promptly
+        // Note: If batchFlushInterval is null, it might be because a timer callback is executing,
+        // but scheduleBatchFlush() will handle that case (it checks isBatchUploading and queue length)
+        if (batchFlushInterval) {
+          clearTimeout(batchFlushInterval);
+          batchFlushInterval = null;
+        }
         scheduleBatchFlush();
       }
     }
@@ -1147,7 +1176,10 @@ async function processScreenshotBatch() {
   const supabase = getSupabaseClient();
   if (!supabase) {
     logError('BATCH-UPLOAD', 'Supabase client unavailable, re-queuing batch');
-    screenshotBatchQueue.unshift(...validScreenshots);
+    // Use push() to maintain FIFO order - re-queued items should go to the end
+    screenshotBatchQueue.push(...validScreenshots);
+    // Note: scheduleBatchFlush() will be called in finally block after isBatchUploading is set to false
+    // to avoid race condition where timer callback executes before flag is cleared
     isBatchUploading = false;
     return;
   }
@@ -1292,6 +1324,8 @@ async function processScreenshotBatch() {
       if (itemsToRequeue.length > 0) {
         logWarn('BATCH-UPLOAD', `Re-queuing ${itemsToRequeue.length} failed upload(s) for retry`);
         screenshotBatchQueue.push(...itemsToRequeue);
+        // Note: scheduleBatchFlush() will be called in finally block after isBatchUploading is set to false
+        // to avoid race condition where timer callback executes before flag is cleared
       }
     }
 
@@ -1337,11 +1371,19 @@ async function processScreenshotBatch() {
       .filter(Boolean);
 
     if (itemsToRequeue.length > 0) {
-      screenshotBatchQueue.unshift(...itemsToRequeue);
+      // Use push() to maintain FIFO order - re-queued items should go to the end
+      screenshotBatchQueue.push(...itemsToRequeue);
       logWarn('BATCH-UPLOAD', `Re-queued ${itemsToRequeue.length} item(s) after batch error`);
+      // Note: scheduleBatchFlush() will be called in finally block after isBatchUploading is set to false
+      // to avoid race condition where timer callback executes before flag is cleared
     }
   } finally {
     isBatchUploading = false;
+    // Schedule flush timer for any re-queued items after isBatchUploading is cleared
+    // This ensures timer callback will see isBatchUploading = false and process items correctly
+    if (screenshotBatchQueue.length > 0) {
+      scheduleBatchFlush();
+    }
   }
 }
 
@@ -2166,6 +2208,7 @@ process.on('uncaughtException', (error) => {
 });
 
 let isQuitting = false;
+let isFlushingOnShutdown = false;
 
 async function flushScreenshotBatchOnShutdown() {
   // Wait for any running batch, but enforce a hard timeout so shutdown
@@ -2189,9 +2232,16 @@ async function flushScreenshotBatchOnShutdown() {
 }
 
 app.on('before-quit', (event) => {
+  // If we're already flushing, prevent quit until flush completes
+  if (isFlushingOnShutdown) {
+    event.preventDefault();
+    return;
+  }
+
   if (!isQuitting) {
     event.preventDefault();
     isQuitting = true;
+    isFlushingOnShutdown = true;
 
     (async () => {
       try {
@@ -2201,6 +2251,7 @@ app.on('before-quit', (event) => {
       } catch (err) {
         logWarn('Shutdown', `Error flushing screenshot batch on quit: ${err?.message || err}`);
       } finally {
+        isFlushingOnShutdown = false;
         app.quit();
       }
     })();
