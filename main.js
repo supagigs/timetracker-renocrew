@@ -956,8 +956,21 @@ function getSupabaseClient() {
   try {
     if (!supabaseClientInstance) {
       const { createClient } = require('@supabase/supabase-js');
+      const supabaseUrl = process.env.SUPABASE_URL;
       const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-      supabaseClientInstance = createClient(process.env.SUPABASE_URL, serviceRoleKey);
+      
+      if (!supabaseUrl) {
+        logError('Supabase', 'SUPABASE_URL environment variable is not set');
+        return null;
+      }
+      
+      if (!serviceRoleKey) {
+        logError('Supabase', 'Neither SUPABASE_SERVICE_ROLE_KEY nor SUPABASE_ANON_KEY is set');
+        return null;
+      }
+      
+      supabaseClientInstance = createClient(supabaseUrl, serviceRoleKey);
+      logInfo('Supabase', 'Supabase client initialized successfully');
     }
     return supabaseClientInstance;
   } catch (e) {
@@ -1490,7 +1503,19 @@ async function addScreenshotToBatch(uploadData) {
 
     if (screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
       logInfo(contextLabel, `Batch full (${SCREENSHOT_BATCH_SIZE} screenshots), starting upload...`);
+      const queueSizeBeforeProcessing = screenshotBatchQueue.length;
       await processScreenshotBatch();
+      
+      // Check if batch was actually processed or if it returned early
+      const queueSizeAfterProcessing = screenshotBatchQueue.length;
+      const wasProcessed = queueSizeAfterProcessing < queueSizeBeforeProcessing;
+      
+      if (!wasProcessed && isBatchUploading) {
+        // Batch processing is in progress by another call, wait a bit and check again
+        logInfo('BATCH-UPLOAD', 'Batch processing already in progress, will be handled by that process');
+        // The flush timer will handle any remaining items
+        return { ok: true, queued: true, batchSize: screenshotBatchQueue.length, processing: true };
+      }
       
       // If the queue is now empty, cancel any pending flush timer.
       // Note: We check batchFlushInterval here, but it might be null if a timer callback
@@ -1531,7 +1556,12 @@ async function addScreenshotToBatch(uploadData) {
 
 // Process batch of screenshots: upload all and delete local files
 async function processScreenshotBatch() {
-  if (isBatchUploading || screenshotBatchQueue.length === 0) {
+  if (isBatchUploading) {
+    logInfo('BATCH-UPLOAD', `Batch upload already in progress, skipping (queue size: ${screenshotBatchQueue.length})`);
+    return;
+  }
+  if (screenshotBatchQueue.length === 0) {
+    logInfo('BATCH-UPLOAD', 'Queue is empty, nothing to process');
     return;
   }
 
@@ -1562,7 +1592,7 @@ async function processScreenshotBatch() {
 
   const supabase = getSupabaseClient();
   if (!supabase) {
-    logError('BATCH-UPLOAD', 'Supabase client unavailable, re-queuing batch');
+    logError('BATCH-UPLOAD', `Supabase client unavailable, re-queuing ${validScreenshots.length} screenshot(s)`);
     // Use push() to maintain FIFO order - re-queued items should go to the end
     screenshotBatchQueue.push(...validScreenshots);
     // Explicitly schedule a flush for re-queued items. We cannot rely on the
@@ -1570,8 +1600,11 @@ async function processScreenshotBatch() {
     // before exiting to avoid leaving items stuck in the queue.
     scheduleBatchFlush();
     isBatchUploading = false;
+    logWarn('BATCH-UPLOAD', `Re-queued batch. Queue size is now: ${screenshotBatchQueue.length}. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables.`);
     return;
   }
+  
+  logInfo('BATCH-UPLOAD', `Supabase client available, proceeding with upload of ${validScreenshots.length} screenshot(s)`);
 
   const uploadResults = [];
   const filesToDelete = [];
@@ -1733,10 +1766,15 @@ async function processScreenshotBatch() {
     }
 
     const successCount = results.filter(r => r.ok).length;
+    const failedCount = results.filter(r => !r.ok && !r.skipped).length;
     logInfo(
       'BATCH-UPLOAD',
-      `Batch complete: ${successCount}/${validScreenshots.length} uploaded, ${deletedCount} files deleted`
+      `Batch complete: ${successCount}/${validScreenshots.length} uploaded successfully, ${failedCount} failed, ${deletedCount} files deleted`
     );
+    
+    if (successCount === 0 && validScreenshots.length > 0) {
+      logError('BATCH-UPLOAD', `WARNING: All ${validScreenshots.length} screenshot(s) in batch failed to upload. Check Supabase connection and storage bucket configuration.`);
+    }
 
   } catch (error) {
     logError('BATCH-UPLOAD', `Batch processing error: ${error.message}`, error);
