@@ -30,28 +30,73 @@ function logWarn(context, message, ...args) { log('warn', context, message, ...a
 function logError(context, message, ...args) { log('error', context, message, ...args); }
 
 // ============ macOS PERMISSIONS HELPER ============
-// Check Accessibility permission on macOS using native API
+// Check Accessibility permission on macOS using native API without triggering prompts
 function checkMacOSAccessibilityPermission() {
   if (process.platform !== 'darwin') {
     return 'not_applicable';
   }
   
   try {
-    // Use AppleScript to check if we have accessibility permissions
+    // Try to use node-mac-permissions if available (doesn't trigger prompts)
+    try {
+      const permissions = require('node-mac-permissions');
+      const status = permissions.getStatus('accessibility');
+      logInfo('Permissions', `Accessibility permission status (via node-mac-permissions): ${status}`);
+      return status; // Returns: 'authorized', 'denied', 'not-determined', or 'restricted'
+    } catch (moduleError) {
+      // Module not available, fall back to checking via AppleScript (but this is silent check)
+      logInfo('Permissions', 'node-mac-permissions not available, using fallback method');
+    }
+    
+    // Fallback: Use a silent check that doesn't trigger permission prompts
+    // We check if we can query System Events without actually triggering a prompt
     const { execSync } = require('child_process');
     try {
-      // Try to get the frontmost application - this will fail if we don't have permission
-      execSync('osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true"', { 
+      // This command checks permission status without triggering a new prompt
+      // It will only work if permission is already granted
+      execSync('osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true" 2>&1', { 
         encoding: 'utf8',
-        timeout: 1000 
+        timeout: 1000,
+        stdio: 'pipe'
       });
       return 'authorized';
     } catch (e) {
-      // If it fails, we likely don't have permission
-      return 'denied';
+      const errorMsg = String(e.message || e.stdout || e.stderr || '');
+      // Check if error is due to permission denial
+      if (errorMsg.includes('not allowed assistive') || 
+          errorMsg.includes('(-1719)') || 
+          errorMsg.includes('accessibility')) {
+        return 'denied';
+      }
+      // If it's a different error, we can't determine status
+      return 'unknown';
     }
   } catch (error) {
     logWarn('Permissions', 'Error checking Accessibility permission:', error);
+    return 'unknown';
+  }
+}
+
+// Check Screen Recording permission on macOS without triggering prompts
+function checkMacOSScreenRecordingPermission() {
+  if (process.platform !== 'darwin') {
+    return 'not_applicable';
+  }
+  
+  try {
+    // Try to use node-mac-permissions if available (doesn't trigger prompts)
+    try {
+      const permissions = require('node-mac-permissions');
+      const status = permissions.getStatus('screenCapture');
+      logInfo('Permissions', `Screen recording permission status (via node-mac-permissions): ${status}`);
+      return status; // Returns: 'authorized', 'denied', 'not-determined', or 'restricted'
+    } catch (moduleError) {
+      // Module not available, we'll need to check via desktopCapturer (but only if not already checked)
+      logInfo('Permissions', 'node-mac-permissions not available, will check via desktopCapturer when needed');
+      return 'unknown';
+    }
+  } catch (error) {
+    logWarn('Permissions', 'Error checking Screen Recording permission:', error);
     return 'unknown';
   }
 }
@@ -296,11 +341,14 @@ function createWindow() {
     mainWindow.webContents.once('did-finish-load', () => {
       // Delay permission checks slightly to ensure window is fully ready
       setTimeout(() => {
-        // Accessibility permission is required for active app detection.
+        // Check Accessibility permission - only show dialog if NOT already granted
         checkAccessibilityPermission()
           .then((hasPermission) => {
-            if (!hasPermission) {
-              // Only show our Accessibility dialog once, shortly after launch.
+            if (hasPermission) {
+              logInfo('Permissions', 'Accessibility permission already granted - no dialog needed');
+            } else {
+              logInfo('Permissions', 'Accessibility permission not granted - showing dialog');
+              // Only show our Accessibility dialog if permission is not granted
               setTimeout(() => {
                 requestAccessibilityPermission();
               }, 2000);
@@ -310,15 +358,16 @@ function createWindow() {
             logWarn('Permissions', `Accessibility check failed: ${error?.message || error}`);
           });
 
-        // Screen recording permission: trigger the macOS system prompt once
-        // at app launch if permission has not yet been granted. We do this
-        // here so the system dialog appears on first launch, rather than
-        // later when the user clicks "Start".
+        // Screen recording permission: Check status first, only trigger prompt if needed
+        // We check permission status WITHOUT triggering prompts if already granted
         checkScreenRecordingPermission()
           .then((hasScreenPermission) => {
             logInfo('Permissions', `Initial screen recording permission: ${hasScreenPermission ? 'granted' : 'missing/denied'}`);
-            if (!hasScreenPermission) {
-              // Show our guidance dialog once so the user knows how to grant it.
+            if (hasScreenPermission) {
+              logInfo('Permissions', 'Screen recording permission already granted - no dialog needed');
+            } else {
+              logInfo('Permissions', 'Screen recording permission not granted - showing dialog');
+              // Only show our guidance dialog if permission is not granted
               requestScreenRecordingPermission();
             }
           })
@@ -433,23 +482,46 @@ function createWindow() {
 // ============ HELPER FUNCTIONS ============
 
 // Check and request screen recording permissions on macOS
+// This function checks permission status WITHOUT triggering prompts if already granted
 async function checkScreenRecordingPermission() {
   if (process.platform !== 'darwin') {
     return true; // Not macOS, no permission needed
   }
 
   try {
-    // Try to get screen sources - this will trigger permission request if not granted
-    const sources = await desktopCapturer.getSources({
-      types: ['screen'],
-      thumbnailSize: { width: 1, height: 1 }
-    });
+    // First, try to check permission status without triggering a prompt
+    const permissionStatus = checkMacOSScreenRecordingPermission();
     
-    if (sources && sources.length > 0) {
-      logInfo('Permissions', 'Screen recording permission granted');
+    // If we got a definitive status from node-mac-permissions, use it
+    if (permissionStatus === 'authorized') {
+      logInfo('Permissions', 'Screen recording permission already granted (checked via native API)');
       return true;
-    } else {
-      logWarn('Permissions', 'Screen recording permission denied or not granted');
+    }
+    
+    if (permissionStatus === 'denied') {
+      logWarn('Permissions', 'Screen recording permission denied (checked via native API)');
+      return false;
+    }
+    
+    // If status is unknown or not-determined, we need to check via desktopCapturer
+    // This will trigger a prompt ONLY if permission hasn't been determined yet
+    // If permission is already granted, this won't show a prompt
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 1, height: 1 }
+      });
+      
+      if (sources && sources.length > 0) {
+        logInfo('Permissions', 'Screen recording permission granted (checked via desktopCapturer)');
+        return true;
+      } else {
+        logWarn('Permissions', 'Screen recording permission denied or not granted');
+        return false;
+      }
+    } catch (capturerError) {
+      // If desktopCapturer fails, permission is likely denied
+      logWarn('Permissions', 'Error checking screen recording via desktopCapturer:', capturerError.message);
       return false;
     }
   } catch (error) {
@@ -491,6 +563,7 @@ async function requestScreenRecordingPermission() {
 }
 
 // Check and request Accessibility permission on macOS
+// This function checks permission status WITHOUT triggering prompts if already granted
 async function checkAccessibilityPermission() {
   if (process.platform !== 'darwin') {
     return true; // Not macOS, no permission needed
@@ -499,6 +572,9 @@ async function checkAccessibilityPermission() {
   try {
     const status = checkMacOSAccessibilityPermission();
     logInfo('Permissions', `Accessibility permission status: ${status}`);
+    
+    // Return true only if explicitly authorized
+    // 'denied', 'unknown', or 'not-determined' all return false
     return status === 'authorized';
   } catch (error) {
     logWarn('Permissions', 'Error checking Accessibility permission:', error);
