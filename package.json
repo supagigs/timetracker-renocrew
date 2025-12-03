@@ -56,11 +56,15 @@
       "SupagigsIcon.ico",
       "renderer/**/*",
       "node_modules/**/*",
-      "package.json"
+      "package.json",
+      "!**/node_modules/active-win/build-tmp*/**",
+      "!**/node_modules/active-win/**/*.make",
+      "!**/node_modules/active-win/**/Makefile"
     ],
     "asarUnpack": [
       "node_modules/sharp/**/*",
-      "node_modules/@img/**/*"
+      "node_modules/@img/**/*",
+      "node_modules/active-win/**/*"
     ],
     "extraResources": [
       ".env"
