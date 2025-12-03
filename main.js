@@ -164,7 +164,8 @@ const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'screenshots';
 
 // Track pending uploads that can be cancelled
 const pendingScreenshots = new Map();
-let toastWin = null;
+let toastWin = null; // Keep for backward compatibility, but prefer toastWindows Map
+const toastWindows = new Map(); // Map of screenIndex -> BrowserWindow for multi-screen support
 let toastQueue = []; // Queue for toast notifications when multiple screenshots are captured
 let isProcessingToastQueue = false;
 
@@ -516,6 +517,251 @@ async function requestAccessibilityPermission() {
   }
 }
 
+// Get app name for a specific display by finding the frontmost window on that display
+async function getActiveAppNameForDisplay(displayIndex = 0) {
+  if (process.platform !== 'darwin') {
+    // On non-macOS, just return the frontmost app
+    return await getActiveAppName();
+  }
+  
+  try {
+    const allDisplays = screen.getAllDisplays();
+    if (displayIndex < 0 || displayIndex >= allDisplays.length) {
+      logWarn('ActiveWindow', `Invalid display index ${displayIndex}, using primary display`);
+      return await getActiveAppName();
+    }
+    
+    const targetDisplay = allDisplays[displayIndex];
+    const displayCenterX = targetDisplay.bounds.x + (targetDisplay.bounds.width / 2);
+    const displayCenterY = targetDisplay.bounds.y + (targetDisplay.bounds.height / 2);
+    
+    logInfo('ActiveWindow', `Getting app name for display ${displayIndex + 1} at center (${displayCenterX}, ${displayCenterY})`);
+    
+    // Try to use active-win first if available
+    const accessibilityStatus = checkMacOSAccessibilityPermission();
+    if (accessibilityStatus === 'authorized') {
+      try {
+        if (!activeWindowModule) {
+          activeWindowModule = await import('active-win');
+        }
+        
+        const fn =
+          (activeWindowModule && activeWindowModule.activeWindow) ||
+          (activeWindowModule && activeWindowModule.default) ||
+          activeWindowModule;
+        
+        if (typeof fn === 'function') {
+          const result = await fn();
+          if (result && result.bounds) {
+            // Check if the window is on the target display
+            const windowCenterX = result.bounds.x + (result.bounds.width / 2);
+            const windowCenterY = result.bounds.y + (result.bounds.height / 2);
+            
+            // Check if window center is within the target display bounds
+            if (windowCenterX >= targetDisplay.bounds.x &&
+                windowCenterX < targetDisplay.bounds.x + targetDisplay.bounds.width &&
+                windowCenterY >= targetDisplay.bounds.y &&
+                windowCenterY < targetDisplay.bounds.y + targetDisplay.bounds.height) {
+              // Window is on target display, process it
+              return processActiveWindowResult(result);
+            } else {
+              // Window is on a different display, try AppleScript to get windows on target display
+              logInfo('ActiveWindow', `active-win window is on different display, using AppleScript for display ${displayIndex + 1}`);
+            }
+          }
+        }
+      } catch (error) {
+        logWarn('ActiveWindow', `active-win failed for display ${displayIndex + 1}, using AppleScript: ${error.message}`);
+      }
+    }
+    
+    // Fallback to AppleScript to get windows on the target display
+    return await getActiveAppNameForDisplayViaAppleScript(displayIndex, targetDisplay);
+  } catch (error) {
+    logWarn('ActiveWindow', `Error getting app name for display ${displayIndex + 1}: ${error.message}`);
+    // Fallback to regular getActiveAppName
+    return await getActiveAppName();
+  }
+}
+
+// Get app name for a specific display using AppleScript
+async function getActiveAppNameForDisplayViaAppleScript(displayIndex, targetDisplay) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'darwin') {
+      return resolve(null);
+    }
+    
+    // AppleScript to get the frontmost window on a specific display
+    // We'll get all windows and find the one whose center is on the target display
+    const displayCenterX = targetDisplay.bounds.x + (targetDisplay.bounds.width / 2);
+    const displayCenterY = targetDisplay.bounds.y + (targetDisplay.bounds.height / 2);
+    
+    const command = `osascript -e 'tell application "System Events"
+      set targetX to ${displayCenterX}
+      set targetY to ${displayCenterY}
+      set foundApp to ""
+      set foundTitle to ""
+      
+      -- Try to find a window near the center of the target display
+      try
+        set allApps to every application process whose visible is true
+        repeat with appProc in allApps
+          try
+            set appWindows to every window of appProc whose visible is true
+            repeat with appWindow in appWindows
+              try
+                set winPos to position of appWindow
+                set winSize to size of appWindow
+                set winCenterX to (item 1 of winPos) + (item 1 of winSize) / 2
+                set winCenterY to (item 2 of winPos) + (item 2 of winSize) / 2
+                
+                -- Check if window center is within display bounds (with some tolerance)
+                if winCenterX >= ${targetDisplay.bounds.x} and winCenterX < ${targetDisplay.bounds.x + targetDisplay.bounds.width} and
+                   winCenterY >= ${targetDisplay.bounds.y} and winCenterY < ${targetDisplay.bounds.y + targetDisplay.bounds.height} then
+                  set foundApp to name of appProc
+                  try
+                    set foundTitle to name of appWindow
+                  on error
+                    try
+                      set foundTitle to title of appWindow
+                    on error
+                      set foundTitle to ""
+                    end try
+                  end try
+                  exit repeat
+                end if
+              end try
+            end repeat
+            if foundApp is not "" then exit repeat
+          end try
+        end repeat
+      end try
+      
+      -- Fallback: if no window found, get the frontmost app
+      if foundApp is "" then
+        try
+          set frontApp to first application process whose frontmost is true
+          set foundApp to name of frontApp
+          try
+            set frontWindow to first window of frontApp whose visible is true
+            try
+              set foundTitle to name of frontWindow
+            on error
+              try
+                set foundTitle to title of frontWindow
+              on error
+                set foundTitle to ""
+              end try
+            end try
+          end try
+        end try
+      end if
+      
+      return foundApp & "|" & foundTitle
+    end tell'`;
+
+    const { exec } = require('child_process');
+    exec(command, { timeout: 3000 }, (error, stdout, stderr) => {
+      if (error) {
+        logWarn('ActiveWindow', `AppleScript error for display ${displayIndex + 1}: ${error.message}`);
+        return resolve(null);
+      }
+      if (stderr) {
+        logWarn('ActiveWindow', `AppleScript stderr for display ${displayIndex + 1}: ${stderr}`);
+      }
+      
+      const result = stdout.trim();
+      if (result && result.length > 0) {
+        const parts = result.split('|');
+        const appName = parts[0] ? parts[0].trim() : null;
+        const windowTitle = parts[1] ? parts[1].trim() : null;
+        
+        logInfo('ActiveWindow', `AppleScript for display ${displayIndex + 1} - App: ${appName || 'null'}, Title: ${windowTitle || 'null'}`);
+        
+        // Process the result similar to getActiveAppName
+        const processed = processActiveWindowResult({
+          owner: { name: appName },
+          title: windowTitle
+        });
+        
+        resolve(processed);
+      } else {
+        logWarn('ActiveWindow', `AppleScript returned empty result for display ${displayIndex + 1}`);
+        resolve(null);
+      }
+    });
+  });
+}
+
+// Helper function to process active window result (extracted from getActiveAppName)
+function processActiveWindowResult(result) {
+  if (!result) return null;
+  
+  const appName = app.getName();
+  const appNameLower = appName.toLowerCase();
+  
+  let ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
+  let windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
+  
+  const isOwnApp = (ownerName && ownerName.toLowerCase() === appNameLower) || 
+                   (windowTitle && windowTitle.toLowerCase() === appNameLower) ||
+                   (ownerName && ownerName.toLowerCase().includes('time tracker')) ||
+                   (ownerName && ownerName.toLowerCase().includes('electron') && ownerName.toLowerCase().includes('time'));
+  
+  if (isOwnApp) {
+    return appName;
+  }
+  
+  const genericNames = ['electron', 'node', 'nodejs'];
+  if (ownerName) {
+    const ownerNameLower = ownerName.toLowerCase();
+    if (genericNames.some(generic => ownerNameLower === generic || ownerNameLower === `${generic}.exe`)) {
+      ownerName = null;
+    }
+  }
+  
+  if (windowTitle) {
+    const windowTitleLower = windowTitle.toLowerCase();
+    if (windowTitleLower === 'electron' || windowTitleLower === 'node') {
+      windowTitle = null;
+    }
+  }
+  
+  let finalAppName = null;
+  if (process.platform === 'darwin') {
+    if (ownerName) {
+      if (windowTitle && windowTitle.length > 0) {
+        const windowTitleLower = windowTitle.toLowerCase();
+        const ownerNameLower = ownerName.toLowerCase();
+        
+        if (windowTitleLower.includes(ownerNameLower) && windowTitleLower.length > ownerNameLower.length) {
+          finalAppName = windowTitle;
+        } else if (windowTitle !== ownerName) {
+          finalAppName = `${ownerName} - ${windowTitle}`;
+        } else {
+          finalAppName = ownerName;
+        }
+      } else {
+        finalAppName = ownerName;
+      }
+    } else if (windowTitle) {
+      finalAppName = windowTitle;
+    }
+  } else {
+    if (ownerName) {
+      if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
+        finalAppName = `${ownerName} - ${windowTitle}`;
+      } else {
+        finalAppName = ownerName;
+      }
+    } else if (windowTitle) {
+      finalAppName = windowTitle;
+    }
+  }
+  
+  return finalAppName;
+}
+
 async function getActiveAppName() {
   try {
     // Try active-win first (provides more detailed information)
@@ -834,7 +1080,7 @@ async function compressToJpegBufferFromDataUrl(dataUrl, targetSizeKB = 50) {
   return jpegBuffer;
 }
 
-// Process toast queue - ensures only one toast is shown at a time
+// Process toast queue - handles multiple screens by showing toasts on correct displays
 function processToastQueue() {
   if (isProcessingToastQueue || toastQueue.length === 0) {
     return;
@@ -842,44 +1088,51 @@ function processToastQueue() {
   
   isProcessingToastQueue = true;
   
-  // Get the most recent toast from queue (last item)
-  // NOTE: We intentionally do NOT clear the entire queue here.
-  // Older items remain queued and can be processed by subsequent calls,
-  // preventing newer screenshots (added after the timer was scheduled)
-  // from being accidentally discarded.
-  const toastItem = toastQueue.pop();
-  
-  if (!toastItem) {
-    isProcessingToastQueue = false;
-    return;
-  }
-  
-  const { filePath, base64Data } = toastItem;
-  
-  // If there's an existing toast, close it first
-  if (toastWin && !toastWin.isDestroyed()) {
-    const existingToastAge = Date.now() - (toastWin._createdAt || 0);
-    const delay = existingToastAge < 1000 ? (process.platform === 'darwin' ? 600 : 500) : 0;
+  // Process all toasts in the queue (one per screen)
+  // Group by screenIndex to handle multiple screens properly
+  const toastsByScreen = new Map();
+  while (toastQueue.length > 0) {
+    const toastItem = toastQueue.shift();
+    if (!toastItem) continue;
     
-    setTimeout(() => {
-      if (toastWin && !toastWin.isDestroyed()) {
-        toastWin.close();
-        toastWin = null;
-      }
-      // Create new toast after closing the old one
-      setTimeout(() => {
-        createToastWindow(filePath, base64Data);
-        isProcessingToastQueue = false;
-      }, process.platform === 'darwin' ? 100 : 50);
-    }, delay);
-  } else {
-    // No existing toast, create immediately
-    createToastWindow(filePath, base64Data);
-    isProcessingToastQueue = false;
+    const { filePath, base64Data, screenIndex } = toastItem;
+    const key = screenIndex || 0; // Use 0 as default for single screen
+    
+    // Keep only the most recent toast per screen
+    toastsByScreen.set(key, { filePath, base64Data, screenIndex: key });
   }
+  
+  // Create/update toast for each screen
+  toastsByScreen.forEach((toastItem, screenIndex) => {
+    const { filePath, base64Data } = toastItem;
+    
+    // Check if there's an existing toast for this screen
+    const existingToast = toastWindows.get(screenIndex);
+    
+    if (existingToast && !existingToast.isDestroyed()) {
+      const existingToastAge = Date.now() - (existingToast._createdAt || 0);
+      const delay = existingToastAge < 1000 ? (process.platform === 'darwin' ? 600 : 500) : 0;
+      
+      setTimeout(() => {
+        if (existingToast && !existingToast.isDestroyed()) {
+          existingToast.close();
+          toastWindows.delete(screenIndex);
+        }
+        // Create new toast after closing the old one
+        setTimeout(() => {
+          createToastWindow(filePath, base64Data, screenIndex);
+        }, process.platform === 'darwin' ? 100 : 50);
+      }, delay);
+    } else {
+      // No existing toast for this screen, create immediately
+      createToastWindow(filePath, base64Data, screenIndex);
+    }
+  });
+  
+  isProcessingToastQueue = false;
 }
 
-function showToastNotification(filePath, base64Data) {
+function showToastNotification(filePath, base64Data, screenIndex = null) {
   try {
     // Validate inputs
     if (!filePath || !base64Data) {
@@ -887,12 +1140,12 @@ function showToastNotification(filePath, base64Data) {
       return;
     }
     
-    // Add to queue instead of showing immediately
-    // This prevents conflicts when multiple screenshots are captured rapidly
-    toastQueue.push({ filePath, base64Data, timestamp: Date.now() });
+    // Add to queue with screenIndex to show on correct display
+    // This allows multiple toasts to be shown simultaneously (one per screen)
+    toastQueue.push({ filePath, base64Data, screenIndex: screenIndex || 0, timestamp: Date.now() });
     
     // Process queue with a small delay to batch rapid captures
-    // This ensures we only show the most recent screenshot
+    // This ensures each screen gets its own toast with the correct preview
     setTimeout(() => {
       processToastQueue();
     }, 100);
@@ -902,7 +1155,7 @@ function showToastNotification(filePath, base64Data) {
     try {
       const retryDelay = process.platform === 'darwin' ? 200 : 0;
       setTimeout(() => {
-        createToastWindow(filePath, base64Data);
+        createToastWindow(filePath, base64Data, screenIndex || 0);
       }, retryDelay);
     } catch (e) {
       logError('Toast', `Failed to create toast window: ${e.message}`, e);
@@ -910,7 +1163,7 @@ function showToastNotification(filePath, base64Data) {
   }
 }
 
-function createToastWindow(filePath, base64Data) {
+function createToastWindow(filePath, base64Data, screenIndex = 0) {
   try {
     // Use a consistent, sufficiently large size on all platforms so that
     // the preview image + side column (delete button + timer) are fully visible.
@@ -942,22 +1195,51 @@ function createToastWindow(filePath, base64Data) {
       // Instead rely on alwaysOnTop and setVisibleOnAllWorkspaces
     }
     
-    toastWin = new BrowserWindow(windowOptions);
+    const newToastWin = new BrowserWindow(windowOptions);
 
     // Track when this toast was created
-    toastWin._createdAt = Date.now();
+    newToastWin._createdAt = Date.now();
+    
+    // Store in both the Map (for multi-screen) and the legacy variable (for backward compatibility)
+    toastWindows.set(screenIndex, newToastWin);
+    toastWin = newToastWin; // Keep for backward compatibility
 
-    const { workArea } = screen.getPrimaryDisplay();
+    // Position toast on the correct display based on screenIndex
+    const allDisplays = screen.getAllDisplays();
+    let targetDisplay = null;
+    
+    // Try to find the display that matches the screenIndex
+    // screenIndex is 1-based (Screen 1, Screen 2, etc.) from desktopCapturer
+    // We need to map it to the display index (0-based)
+    if (screenIndex > 0 && screenIndex <= allDisplays.length) {
+      // screenIndex from desktopCapturer is usually 1-based, so subtract 1
+      targetDisplay = allDisplays[screenIndex - 1];
+    } else if (screenIndex === 0 && allDisplays.length > 0) {
+      // Default to primary display for screenIndex 0
+      targetDisplay = screen.getPrimaryDisplay();
+    } else {
+      // Fallback: try to match by position or use primary
+      targetDisplay = screen.getPrimaryDisplay();
+    }
+    
+    if (!targetDisplay) {
+      targetDisplay = screen.getPrimaryDisplay();
+    }
+    
+    const { workArea } = targetDisplay;
     const x = workArea.x + workArea.width - TOAST_WIDTH - 20;
     const y = workArea.y + workArea.height - TOAST_HEIGHT - 20;
-    toastWin.setPosition(x, y);
+    newToastWin.setPosition(x, y);
+    
+    logInfo('Toast', `Positioning toast for screen ${screenIndex} on display: ${workArea.width}x${workArea.height} at (${workArea.x}, ${workArea.y})`);
 
-    toastWin.loadFile(path.join(__dirname, 'toast.html'));
+    newToastWin.loadFile(path.join(__dirname, 'toast.html'));
 
-    toastWin.once('ready-to-show', () => {
+    newToastWin.once('ready-to-show', () => {
       // Check if window still exists (might have been closed)
-      if (!toastWin || toastWin.isDestroyed()) {
-        logWarn('Toast', 'Toast window was destroyed before ready-to-show');
+      if (!newToastWin || newToastWin.isDestroyed()) {
+        logWarn('Toast', `Toast window for screen ${screenIndex} was destroyed before ready-to-show`);
+        toastWindows.delete(screenIndex);
         return;
       }
       
@@ -966,8 +1248,9 @@ function createToastWindow(filePath, base64Data) {
         // Add a small delay to ensure the window is properly initialized
         const showDelay = process.platform === 'darwin' ? 150 : 0;
         setTimeout(() => {
-          if (!toastWin || toastWin.isDestroyed()) {
-            logWarn('Toast', 'Toast window was destroyed before showing');
+          if (!newToastWin || newToastWin.isDestroyed()) {
+            logWarn('Toast', `Toast window for screen ${screenIndex} was destroyed before showing`);
+            toastWindows.delete(screenIndex);
             return;
           }
           
@@ -975,50 +1258,50 @@ function createToastWindow(filePath, base64Data) {
           if (process.platform === 'darwin') {
             try {
               // Set visibility on all workspaces for macOS (must be called before show)
-              toastWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+              newToastWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
               // Ensure window is on top and visible
-              toastWin.setAlwaysOnTop(true, 'screen-saver');
+              newToastWin.setAlwaysOnTop(true, 'screen-saver');
               // Show the window
-              toastWin.show();
+              newToastWin.show();
               // Move to top after showing
-              toastWin.moveTop();
-              logInfo('Toast', 'Toast window shown on macOS with visibility settings applied');
+              newToastWin.moveTop();
+              logInfo('Toast', `Toast window for screen ${screenIndex} shown on macOS with visibility settings applied`);
               
               // Additional macOS-specific visibility fixes after a brief delay
               setTimeout(() => {
-                if (toastWin && !toastWin.isDestroyed()) {
+                if (newToastWin && !newToastWin.isDestroyed()) {
                   try {
                     // Re-apply visibility settings to ensure they stick
-                    toastWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-                    toastWin.setAlwaysOnTop(true, 'screen-saver');
-                    toastWin.moveTop();
+                    newToastWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+                    newToastWin.setAlwaysOnTop(true, 'screen-saver');
+                    newToastWin.moveTop();
                     // Ensure window is actually visible
-                    if (!toastWin.isVisible()) {
-                      logWarn('Toast', 'Toast window not visible, attempting to show again');
-                      toastWin.show();
+                    if (!newToastWin.isVisible()) {
+                      logWarn('Toast', `Toast window for screen ${screenIndex} not visible, attempting to show again`);
+                      newToastWin.show();
                     }
-                    logInfo('Toast', `Toast window visibility verified: isVisible=${toastWin.isVisible()}, isDestroyed=${toastWin.isDestroyed()}`);
+                    logInfo('Toast', `Toast window for screen ${screenIndex} visibility verified: isVisible=${newToastWin.isVisible()}, isDestroyed=${newToastWin.isDestroyed()}`);
                   } catch (e) {
-                    logError('Toast', `Error in macOS visibility check: ${e.message}`, e);
+                    logError('Toast', `Error in macOS visibility check for screen ${screenIndex}: ${e.message}`, e);
                   }
                 }
               }, 100);
             } catch (macError) {
-              logError('Toast', `Error applying macOS visibility settings: ${macError.message}`, macError);
+              logError('Toast', `Error applying macOS visibility settings for screen ${screenIndex}: ${macError.message}`, macError);
               // Fallback: just show the window
-              toastWin.show();
+              newToastWin.show();
             }
           } else {
-            toastWin.showInactive();
+            newToastWin.showInactive();
           }
           
-          logInfo('Toast', `Toast notification displayed for: ${path.basename(filePath)}`);
+          logInfo('Toast', `Toast notification displayed for screen ${screenIndex}: ${path.basename(filePath)}`);
           
           // Send init message after a brief delay to ensure window is ready
           // Validate base64Data before sending
           const initDelay = process.platform === 'darwin' ? 100 : 50;
           setTimeout(() => {
-            if (toastWin && !toastWin.isDestroyed() && toastWin.webContents && !toastWin.webContents.isDestroyed()) {
+            if (newToastWin && !newToastWin.isDestroyed() && newToastWin.webContents && !newToastWin.webContents.isDestroyed()) {
               // Validate base64Data format
               let validBase64Data = base64Data;
               if (base64Data && typeof base64Data === 'string') {
@@ -1038,32 +1321,36 @@ function createToastWindow(filePath, base64Data) {
                 validBase64Data = null;
               }
               
-              toastWin.webContents.send('toast-init', { filePath, base64Data: validBase64Data });
-              logInfo('Toast', `Sent init message with preview data (length: ${validBase64Data ? validBase64Data.length : 0})`);
+              newToastWin.webContents.send('toast-init', { filePath, base64Data: validBase64Data });
+              logInfo('Toast', `Sent init message to screen ${screenIndex} toast with preview data (length: ${validBase64Data ? validBase64Data.length : 0})`);
             } else {
-              logWarn('Toast', 'Toast webContents was destroyed before sending init message');
+              logWarn('Toast', `Toast webContents for screen ${screenIndex} was destroyed before sending init message`);
             }
           }, initDelay);
         }, showDelay);
       } catch (error) {
-        logError('Toast', `Error showing toast window: ${error.message}`, error);
+        logError('Toast', `Error showing toast window for screen ${screenIndex}: ${error.message}`, error);
       }
     });
 
     // Handle errors during load
-    toastWin.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      logError('Toast', `Failed to load toast.html: ${errorCode} - ${errorDescription}`);
+    newToastWin.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+      logError('Toast', `Failed to load toast.html for screen ${screenIndex}: ${errorCode} - ${errorDescription}`);
     });
 
     // Auto-close after 9 seconds
     setTimeout(() => { 
-      if (toastWin && !toastWin.isDestroyed()) {
-        toastWin.close(); 
+      if (newToastWin && !newToastWin.isDestroyed()) {
+        newToastWin.close(); 
       }
     }, 9000);
     
-    toastWin.on('closed', () => { 
-      toastWin = null; 
+    newToastWin.on('closed', () => { 
+      toastWindows.delete(screenIndex);
+      // Only clear toastWin if this was the last one
+      if (toastWin === newToastWin) {
+        toastWin = null;
+      }
     });
   } catch (error) {
     logError('Toast', `Error creating toast window: ${error.message}`, error);
@@ -1154,13 +1441,23 @@ async function addScreenshotToBatch(uploadData) {
     const filePath = path.join(screenshotsDir, jpegFilename);
 
     try {
-      showToastNotification(filePath, screenshotData);
+      // Pass screenIndex to show toast on the correct display
+      showToastNotification(filePath, screenshotData, screenIndex);
     } catch {}
 
+    // Use the provided appName if available (which should be screen-specific)
+    // Otherwise fall back to getting the frontmost app
     let capturedAppName = appName;
     if (!capturedAppName) {
       try {
-        capturedAppName = await getActiveAppName() || 'Unknown';
+        // If we have screenIndex, try to get app name for that specific display
+        if (screenIndex && screenIndex > 0) {
+          const displayIndex = screenIndex - 1; // screenIndex is 1-based, convert to 0-based display index
+          capturedAppName = await getActiveAppNameForDisplay(displayIndex) || 'Unknown';
+        } else {
+          // Fallback to regular getActiveAppName for single screen or unknown screen
+          capturedAppName = await getActiveAppName() || 'Unknown';
+        }
       } catch {
         capturedAppName = 'Unknown';
       }
@@ -1329,6 +1626,20 @@ async function processScreenshotBatch() {
         item.screenshotData = null;
 
         try {
+          // Send upload notification to all toast windows that might be showing this file
+          toastWindows.forEach((win, idx) => {
+            if (win && !win.isDestroyed()) {
+              try {
+                win.webContents.send('toast-file-uploaded', {
+                  oldFilePath: item.filePath,
+                  remoteUrl: publicUrl
+                });
+              } catch (e) {
+                logWarn('BATCH-UPLOAD', `Error sending upload notification to toast for screen ${idx}: ${e.message}`);
+              }
+            }
+          });
+          // Also try the legacy toastWin for backward compatibility
           if (toastWin && !toastWin.isDestroyed()) {
             toastWin.webContents.send('toast-file-uploaded', {
               oldFilePath: item.filePath,
@@ -1683,7 +1994,18 @@ ipcMain.handle('toast-delete-file', async (event, filePath) => {
       logInfo('DELETE', `[CLEANUP] Removed from pending map: ${filePath}`);
     }, 1000);
 
-    // âœ… STEP 5: Close toast window
+    // âœ… STEP 5: Close toast window(s) that match this file
+    // Close all toast windows that might be showing this file
+    toastWindows.forEach((win, idx) => {
+      if (win && !win.isDestroyed()) {
+        try {
+          win.close();
+        } catch (e) {
+          logWarn('DELETE', `Error closing toast for screen ${idx}: ${e.message}`);
+        }
+      }
+    });
+    toastWindows.clear();
     if (toastWin && !toastWin.isDestroyed()) {
       try {
         toastWin.close();
@@ -1966,6 +2288,17 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
               
               logInfo('BG-UPLOAD', `Screen ${index + 1} (${source.name || `Screen ${index + 1}`}): thumbnail ${thumbnailSize.width}x${thumbnailSize.height}, data length: ${screenshotData.length}`);
               
+              // Get app name for this specific screen/display
+              // screenIndex from desktopCapturer is 1-based, but display index is 0-based
+              let appNameForScreen = null;
+              try {
+                const displayIndex = index; // desktopCapturer index is 0-based, matches display index
+                appNameForScreen = await getActiveAppNameForDisplay(displayIndex);
+                logInfo('BG-UPLOAD', `App name for screen ${index + 1} (display ${displayIndex}): ${appNameForScreen || 'Unknown'}`);
+              } catch (error) {
+                logWarn('BG-UPLOAD', `Failed to get app name for screen ${index + 1}: ${error.message}`);
+              }
+              
               const result = await handleScreenshotUpload({
                 userEmail: currentUserEmail,
                 sessionId: currentSessionId,
@@ -1974,7 +2307,8 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
                 isIdle: isUserIdle,
                 contextLabel: 'BG-UPLOAD',
                 screenIndex: index + 1,
-                screenName: source.name || `Screen ${index + 1}`
+                screenName: source.name || `Screen ${index + 1}`,
+                appName: appNameForScreen // Pass the screen-specific app name
               });
               
               if (result && result.ok) {
