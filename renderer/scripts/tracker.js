@@ -1412,11 +1412,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const error = errorMessage || 'Screenshot capture returned no screens';
         console.error(error);
 
-        // We no longer show a permission dialog here to avoid repeatedly
-        // prompting the user when they click "Start". Permission prompts
-        // (both the macOS system dialog and our guidance dialog) are now
-        // handled once at app launch in the main process.
-        //
+        // Show user-friendly error message if permission is not granted
+        if (result && !result.permissionGranted) {
+          alert('Screen Recording Permission Required\n\n' +
+                'Please enable screen recording permission:\n' +
+                '1. Go to System Settings → Privacy & Security → Screen Recording\n' +
+                '2. Find "Time Tracker" in the list\n' +
+                '3. Enable the toggle\n' +
+                '4. Restart the app\n\n' +
+                'This permission is required to capture screenshots for time tracking.');
+        }
+
         // For debugging, we still log diagnostics if available.
         if (window.electronAPI && window.electronAPI.diagnoseScreenCapture) {
           try {
