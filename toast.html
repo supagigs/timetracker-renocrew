@@ -69,14 +69,15 @@
       align-items: center;
       width: 100%;
       flex: 1;
-      padding: 18px 24px 18px 18px;
+      padding: 18px 20px 18px 18px;
       background: #f8f9fa;
       box-sizing: border-box;
-      gap: 18px;
+      gap: 16px;
       overflow: hidden;
+      min-height: 0;
     }
     #preview-img {
-      width: 420px;
+      width: 400px;
       height: 230px;
       border-radius: 12px;
       object-fit: cover;
@@ -92,8 +93,9 @@
       align-items: center;
       justify-content: center;
       gap: 18px;
-      min-width: 62px;
-      flex: 1;
+      min-width: 80px;
+      width: 80px;
+      flex-shrink: 0;
     }
     #vertical-loader {
       width: 8px;
@@ -126,6 +128,13 @@
       display: block !important;
       visibility: visible !important;
       opacity: 1 !important;
+      position: relative;
+      z-index: 10;
+      min-width: 32px;
+      min-height: 32px;
+      /* macOS-specific: ensure button is always visible */
+      -webkit-appearance: none;
+      appearance: none;
     }
     #delete-btn:hover {
       color: #e11d48;
@@ -255,14 +264,31 @@
             }
             
             // Ensure delete button is still visible after init
+            // macOS-specific: force visibility with additional checks
             if (deleteBtn) {
               deleteBtn.style.display = 'block';
               deleteBtn.style.visibility = 'visible';
               deleteBtn.style.opacity = '1';
+              deleteBtn.style.position = 'relative';
+              deleteBtn.style.zIndex = '10';
+              // Force a reflow to ensure visibility on macOS
+              deleteBtn.offsetHeight;
+              console.log('[TOAST] Delete button visibility enforced after init');
             }
             
             initDataReceived = true;
             console.log('[TOAST] Initialized with filePath:', filePath);
+            
+            // macOS-specific: additional visibility check after a delay
+            setTimeout(() => {
+              const btn = document.getElementById('delete-btn');
+              if (btn) {
+                btn.style.display = 'block';
+                btn.style.visibility = 'visible';
+                btn.style.opacity = '1';
+                console.log('[TOAST] Delete button visibility re-checked after delay');
+              }
+            }, 200);
           } catch (error) {
             console.error('[TOAST] Error during initialization:', error);
           }
@@ -354,11 +380,25 @@
         }
       };
       
-      // Ensure delete button is visible
+      // Ensure delete button is visible - macOS-specific fixes
       deleteBtn.style.display = 'block';
       deleteBtn.style.visibility = 'visible';
       deleteBtn.style.opacity = '1';
+      deleteBtn.style.position = 'relative';
+      deleteBtn.style.zIndex = '10';
+      // Force a reflow to ensure visibility on macOS
+      deleteBtn.offsetHeight;
       console.log('[TOAST] Delete button handler set up successfully');
+      
+      // macOS-specific: additional visibility enforcement
+      setTimeout(() => {
+        if (deleteBtn && deleteBtn.parentElement) {
+          deleteBtn.style.display = 'block';
+          deleteBtn.style.visibility = 'visible';
+          deleteBtn.style.opacity = '1';
+          console.log('[TOAST] Delete button visibility re-enforced after delay');
+        }
+      }, 150);
     }
     
     // ============ TIMER INITIALIZATION ============

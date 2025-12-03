@@ -174,20 +174,16 @@ const SCREENSHOT_BATCH_FLUSH_INTERVAL = 5 * 60 * 1000; // Flush every 5 minutes 
 const screenshotBatchQueue = [];
 let isBatchUploading = false;
 let batchFlushInterval = null;
+let isFlushTimerActive = false;
 
 function scheduleBatchFlush() {
-  // If a flush timer is already scheduled or there is nothing to process, do nothing.
-  if (batchFlushInterval || screenshotBatchQueue.length === 0) {
+  // If a flush timer is already scheduled/active or there is nothing to process, do nothing.
+  if (isFlushTimerActive || batchFlushInterval || screenshotBatchQueue.length === 0) {
     return;
   }
 
+  isFlushTimerActive = true;
   batchFlushInterval = setTimeout(async () => {
-    // Clear the interval reference immediately to allow new timers to be scheduled
-    // if needed by concurrent code (e.g., addScreenshotToBatch). This prevents
-    // the timer variable from blocking new timer creation, but we check queue state
-    // and isBatchUploading flag to ensure proper coordination.
-    batchFlushInterval = null;
-
     if (screenshotBatchQueue.length > 0 && !isBatchUploading) {
       logInfo(
         'BATCH-UPLOAD',
@@ -196,14 +192,13 @@ function scheduleBatchFlush() {
       await processScreenshotBatch();
     }
 
-    // Only reschedule if this timer is still the active one (not cleared by concurrent code)
-    // and there are still items in the queue
+    // Mark this timer as finished before deciding whether to schedule another one
+    isFlushTimerActive = false;
+    batchFlushInterval = null;
+
     if (screenshotBatchQueue.length > 0) {
-      // Queue still has items (e.g. re-queued after failures) â€" schedule another flush.
-      // Only schedule if no other timer was set in the meantime
-      if (!batchFlushInterval) {
-        scheduleBatchFlush();
-      }
+      // Queue still has items (e.g. re-queued after failures) — schedule another flush.
+      scheduleBatchFlush();
     } else {
       logInfo('BATCH-UPLOAD', 'Flush timer finished (queue empty)');
     }
@@ -832,9 +827,11 @@ function processToastQueue() {
   isProcessingToastQueue = true;
   
   // Get the most recent toast from queue (last item)
-  // This ensures we show the latest screenshot when multiple are captured
+  // NOTE: We intentionally do NOT clear the entire queue here.
+  // Older items remain queued and can be processed by subsequent calls,
+  // preventing newer screenshots (added after the timer was scheduled)
+  // from being accidentally discarded.
   const toastItem = toastQueue.pop();
-  toastQueue = []; // Clear queue, we only show the most recent
   
   if (!toastItem) {
     isProcessingToastQueue = false;
@@ -905,7 +902,7 @@ function createToastWindow(filePath, base64Data) {
     // to be clipped, which made the delete button and 5s timer invisible.
     const TOAST_WIDTH = 520;
     const TOAST_HEIGHT = 340;
-    toastWin = new BrowserWindow({
+    const windowOptions = {
       width: TOAST_WIDTH,
       height: TOAST_HEIGHT,
       frame: false,
@@ -920,7 +917,16 @@ function createToastWindow(filePath, base64Data) {
         contextIsolation: true,
         nodeIntegration: false,
       },
-    });
+    };
+    
+    // macOS-specific settings for better visibility and reliability
+    if (process.platform === 'darwin') {
+      windowOptions.acceptsFirstMouse = true;
+      // Don't use 'panel' type as it can cause visibility issues
+      // Instead rely on alwaysOnTop and setVisibleOnAllWorkspaces
+    }
+    
+    toastWin = new BrowserWindow(windowOptions);
 
     // Track when this toast was created
     toastWin._createdAt = Date.now();
@@ -942,6 +948,7 @@ function createToastWindow(filePath, base64Data) {
       try {
         // On Mac, use show() instead of showInactive() for better reliability
         // Add a small delay to ensure the window is properly initialized
+        const showDelay = process.platform === 'darwin' ? 150 : 0;
         setTimeout(() => {
           if (!toastWin || toastWin.isDestroyed()) {
             logWarn('Toast', 'Toast window was destroyed before showing');
@@ -950,10 +957,41 @@ function createToastWindow(filePath, base64Data) {
           
           // On Mac, ensure the window is properly shown and visible
           if (process.platform === 'darwin') {
-            toastWin.show();
-            // Ensure window is on top and visible
-            toastWin.setAlwaysOnTop(true, 'screen-saver');
-            toastWin.moveTop();
+            try {
+              // Set visibility on all workspaces for macOS (must be called before show)
+              toastWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+              // Ensure window is on top and visible
+              toastWin.setAlwaysOnTop(true, 'screen-saver');
+              // Show the window
+              toastWin.show();
+              // Move to top after showing
+              toastWin.moveTop();
+              logInfo('Toast', 'Toast window shown on macOS with visibility settings applied');
+              
+              // Additional macOS-specific visibility fixes after a brief delay
+              setTimeout(() => {
+                if (toastWin && !toastWin.isDestroyed()) {
+                  try {
+                    // Re-apply visibility settings to ensure they stick
+                    toastWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+                    toastWin.setAlwaysOnTop(true, 'screen-saver');
+                    toastWin.moveTop();
+                    // Ensure window is actually visible
+                    if (!toastWin.isVisible()) {
+                      logWarn('Toast', 'Toast window not visible, attempting to show again');
+                      toastWin.show();
+                    }
+                    logInfo('Toast', `Toast window visibility verified: isVisible=${toastWin.isVisible()}, isDestroyed=${toastWin.isDestroyed()}`);
+                  } catch (e) {
+                    logError('Toast', `Error in macOS visibility check: ${e.message}`, e);
+                  }
+                }
+              }, 100);
+            } catch (macError) {
+              logError('Toast', `Error applying macOS visibility settings: ${macError.message}`, macError);
+              // Fallback: just show the window
+              toastWin.show();
+            }
           } else {
             toastWin.showInactive();
           }
@@ -962,6 +1000,7 @@ function createToastWindow(filePath, base64Data) {
           
           // Send init message after a brief delay to ensure window is ready
           // Validate base64Data before sending
+          const initDelay = process.platform === 'darwin' ? 100 : 50;
           setTimeout(() => {
             if (toastWin && !toastWin.isDestroyed() && toastWin.webContents && !toastWin.webContents.isDestroyed()) {
               // Validate base64Data format
@@ -988,8 +1027,8 @@ function createToastWindow(filePath, base64Data) {
             } else {
               logWarn('Toast', 'Toast webContents was destroyed before sending init message');
             }
-          }, 50);
-        }, process.platform === 'darwin' ? 100 : 0);
+          }, initDelay);
+        }, showDelay);
       } catch (error) {
         logError('Toast', `Error showing toast window: ${error.message}`, error);
       }
@@ -1027,16 +1066,50 @@ function broadcastScreenshotCaptured(screenshotData) {
 }
 
 // ============ DATABASE INSERTION HELPER ============
+// NOTE: The screenshots table now uses user_id (INTEGER, FK -> users.id)
+// instead of user_email. We resolve the user_id from the users table
+// using the provided userEmail before inserting the screenshot.
 async function insertScreenshotToDatabase(supabase, userEmail, sessionId, publicUrl, timestamp, appName, isIdle) {
+  // Normalize email to match how it's stored in the DB
+  const normalizedEmail = typeof userEmail === 'string' ? userEmail.trim().toLowerCase() : null;
+
+  if (!normalizedEmail) {
+    throw new Error('insertScreenshotToDatabase: userEmail is required to resolve user_id');
+  }
+
+  // Look up user_id from users table
+  const { data: userRow, error: userErr } = await supabase
+    .from('users')
+    .select('id')
+    .eq('email', normalizedEmail)
+    .maybeSingle();
+
+  if (userErr) {
+    logError('DB', `Failed to look up user_id for email ${normalizedEmail}: ${userErr.message}`, userErr);
+    throw userErr;
+  }
+
+  if (!userRow || typeof userRow.id !== 'number') {
+    const msg = `insertScreenshotToDatabase: No user found for email ${normalizedEmail}`;
+    logError('DB', msg);
+    throw new Error(msg);
+  }
+
+  const userId = userRow.id;
+
   const { error: dbErr } = await supabase.from('screenshots').insert({
-    user_email: userEmail,
+    user_id: userId,
     session_id: sessionId,
     screenshot_data: publicUrl,
     captured_at: timestamp,
     app_name: appName,
     captured_idle: Boolean(isIdle)
   });
-  if (dbErr) throw dbErr;
+
+  if (dbErr) {
+    logError('DB', `Failed to insert screenshot for user_id ${userId}: ${dbErr.message}`, dbErr);
+    throw dbErr;
+  }
 }
 
 // ============ SCREENSHOT BATCH QUEUE MANAGEMENT ============
@@ -1113,8 +1186,9 @@ async function addScreenshotToBatch(uploadData) {
         if (batchFlushInterval) {
           clearTimeout(batchFlushInterval);
           batchFlushInterval = null;
-          logInfo('BATCH-UPLOAD', 'Flush timer cleared after successful batch (queue empty)');
         }
+        isFlushTimerActive = false;
+        logInfo('BATCH-UPLOAD', 'Flush timer cleared after successful batch (queue empty)');
       } else {
         // Queue has items (possibly re-queued from failures)
         // If queue is still full, process immediately to maintain FIFO and avoid delays
@@ -1123,14 +1197,14 @@ async function addScreenshotToBatch(uploadData) {
           await processScreenshotBatch();
         }
         
-        // Ensure flush timer is scheduled for remaining items
-        // Clear any existing timer first to ensure re-queued items get processed promptly
-        // Note: If batchFlushInterval is null, it might be because a timer callback is executing,
-        // but scheduleBatchFlush() will handle that case (it checks isBatchUploading and queue length)
+        // Ensure flush timer is scheduled for remaining items.
+        // Clear any existing timer handle/flag first to avoid stale state,
+        // then schedule a fresh timer for the remaining items.
         if (batchFlushInterval) {
           clearTimeout(batchFlushInterval);
           batchFlushInterval = null;
         }
+        isFlushTimerActive = false;
         scheduleBatchFlush();
       }
     }
@@ -1392,6 +1466,7 @@ async function flushScreenshotBatch() {
   if (batchFlushInterval) {
     clearTimeout(batchFlushInterval);
     batchFlushInterval = null;
+    isFlushTimerActive = false;
   }
 
   if (screenshotBatchQueue.length > 0) {
