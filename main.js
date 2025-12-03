@@ -170,7 +170,7 @@ let toastQueue = []; // Queue for toast notifications when multiple screenshots 
 let isProcessingToastQueue = false;
 
 // ============ SCREENSHOT BATCH QUEUE ============
-const SCREENSHOT_BATCH_SIZE = 5;
+const SCREENSHOT_BATCH_SIZE = 5; // Upload screenshots in batches of 5
 const SCREENSHOT_BATCH_FLUSH_INTERVAL = 5 * 60 * 1000; // Flush every 5 minutes if batch not full
 const screenshotBatchQueue = [];
 let isBatchUploading = false;
@@ -179,18 +179,41 @@ let isFlushTimerActive = false;
 
 function scheduleBatchFlush() {
   // If a flush timer is already scheduled/active or there is nothing to process, do nothing.
-  if (isFlushTimerActive || batchFlushInterval || screenshotBatchQueue.length === 0) {
+  if (isFlushTimerActive || batchFlushInterval) {
+    if (screenshotBatchQueue.length === 0) {
+      // Queue is empty, cancel any existing timer
+      if (batchFlushInterval) {
+        clearTimeout(batchFlushInterval);
+        batchFlushInterval = null;
+        isFlushTimerActive = false;
+        logInfo('BATCH-UPLOAD', 'Cancelled flush timer (queue empty)');
+      }
+    }
     return;
+  }
+  
+  if (screenshotBatchQueue.length === 0) {
+    return; // Nothing to flush
   }
 
   isFlushTimerActive = true;
+  const queueSizeAtSchedule = screenshotBatchQueue.length;
+  logInfo('BATCH-UPLOAD', `Scheduling flush timer (${SCREENSHOT_BATCH_FLUSH_INTERVAL}ms) for ${queueSizeAtSchedule} screenshot(s) in queue`);
+  
   batchFlushInterval = setTimeout(async () => {
+    const queueSizeAtFlush = screenshotBatchQueue.length;
+    logInfo('BATCH-UPLOAD', `Flush timer fired. Queue size: ${queueSizeAtFlush} (was ${queueSizeAtSchedule} when scheduled)`);
+    
     if (screenshotBatchQueue.length > 0 && !isBatchUploading) {
       logInfo(
         'BATCH-UPLOAD',
         `Periodic flush: processing ${screenshotBatchQueue.length} screenshot(s) after timeout`,
       );
       await processScreenshotBatch();
+    } else if (isBatchUploading) {
+      logInfo('BATCH-UPLOAD', 'Flush timer skipped - batch upload already in progress');
+    } else {
+      logInfo('BATCH-UPLOAD', 'Flush timer skipped - queue is empty');
     }
 
     // Mark this timer as finished before deciding whether to schedule another one
@@ -199,13 +222,12 @@ function scheduleBatchFlush() {
 
     if (screenshotBatchQueue.length > 0) {
       // Queue still has items (e.g. re-queued after failures) — schedule another flush.
+      logInfo('BATCH-UPLOAD', `Queue still has ${screenshotBatchQueue.length} item(s), scheduling another flush timer`);
       scheduleBatchFlush();
     } else {
       logInfo('BATCH-UPLOAD', 'Flush timer finished (queue empty)');
     }
   }, SCREENSHOT_BATCH_FLUSH_INTERVAL);
-
-  logInfo('BATCH-UPLOAD', `Scheduled flush timer (${SCREENSHOT_BATCH_FLUSH_INTERVAL}ms)`);
 }
 
 // ============ MAIN WINDOW CREATION ============
@@ -1382,49 +1404,176 @@ function broadcastScreenshotCaptured(screenshotData) {
 }
 
 // ============ DATABASE INSERTION HELPER ============
-// NOTE: The screenshots table now uses user_id (INTEGER, FK -> users.id)
-// instead of user_email. We resolve the user_id from the users table
-// using the provided userEmail before inserting the screenshot.
-async function insertScreenshotToDatabase(supabase, userEmail, sessionId, publicUrl, timestamp, appName, isIdle) {
+// Supports both schemas:
+// 1) Legacy schema: screenshots.user_email (TEXT) - tried first
+// 2) New schema: screenshots.user_id (INTEGER FK -> users.id) - fallback
+async function insertScreenshotToDatabase(
+  supabase,
+  userEmail,
+  sessionId,
+  publicUrl,
+  timestamp,
+  appName,
+  isIdle
+) {
   // Normalize email to match how it's stored in the DB
-  const normalizedEmail = typeof userEmail === 'string' ? userEmail.trim().toLowerCase() : null;
+  const normalizedEmail =
+    typeof userEmail === 'string' ? userEmail.trim().toLowerCase() : null;
 
   if (!normalizedEmail) {
-    throw new Error('insertScreenshotToDatabase: userEmail is required to resolve user_id');
+    throw new Error(
+      'insertScreenshotToDatabase: userEmail is required to resolve user identity'
+    );
   }
 
-  // Look up user_id from users table
-  const { data: userRow, error: userErr } = await supabase
-    .from('users')
-    .select('id')
-    .eq('email', normalizedEmail)
-    .maybeSingle();
+  // First try the legacy schema that uses user_email (most common)
+  try {
+    // Build insert object with only the columns we know exist
+    const insertData = {
+      user_email: normalizedEmail,
+      session_id: sessionId,
+      screenshot_data: publicUrl,
+      captured_at: timestamp
+    };
+    
+    // Add optional columns if they exist (app_name, captured_idle)
+    if (appName) {
+      insertData.app_name = appName;
+    }
+    // Note: captured_idle might not exist in all schemas, so we'll try without it first
+    // If the insert fails due to missing column, we'll retry without it
+    
+    const { error: legacyErr } = await supabase.from('screenshots').insert(insertData);
 
-  if (userErr) {
-    logError('DB', `Failed to look up user_id for email ${normalizedEmail}: ${userErr.message}`, userErr);
-    throw userErr;
+    if (legacyErr) {
+      // Check if error is because user_email column doesn't exist
+      const errorMsg = String(legacyErr.message || '');
+      if (errorMsg.includes('column "user_email"') || errorMsg.includes('column user_email does not exist')) {
+        logWarn(
+          'DB',
+          `user_email column not found, trying user_id schema: ${errorMsg}`
+        );
+        throw legacyErr; // Will be caught and handled by fallback
+      }
+      
+      // If error is about captured_idle or app_name column, try again without them
+      if (errorMsg.includes('column "captured_idle"') || errorMsg.includes('column "app_name"') || 
+          errorMsg.includes('column captured_idle does not exist') || errorMsg.includes('column app_name does not exist')) {
+        logWarn(
+          'DB',
+          `Optional column missing, retrying without it: ${errorMsg}`
+        );
+        // Retry with minimal required columns only
+        const minimalInsert = {
+          user_email: normalizedEmail,
+          session_id: sessionId,
+          screenshot_data: publicUrl,
+          captured_at: timestamp
+        };
+        const { error: retryErr } = await supabase.from('screenshots').insert(minimalInsert);
+        if (retryErr) {
+          logError(
+            'DB',
+            `Failed to insert screenshot even with minimal columns: ${retryErr.message}`,
+            retryErr
+          );
+          throw retryErr;
+        }
+        logInfo(
+          'DB',
+          `Inserted screenshot row using user_email=${normalizedEmail} (minimal columns)`
+        );
+        return;
+      }
+      
+      logError(
+        'DB',
+        `Failed to insert screenshot row using user_email=${normalizedEmail}: ${legacyErr.message}`,
+        legacyErr
+      );
+      throw legacyErr;
+    }
+
+    logInfo(
+      'DB',
+      `Inserted screenshot row using user_email=${normalizedEmail}`
+    );
+    return;
+  } catch (err) {
+    // If the error suggests that user_email column doesn't exist,
+    // try the new schema that uses user_id and a users table.
+    const msg = String(err?.message || err);
+    const looksLikeNewSchema =
+      msg.includes('column "user_email"') ||
+      msg.includes('column user_email does not exist') ||
+      msg.includes('does not exist');
+
+    if (!looksLikeNewSchema) {
+      // Unexpected error – rethrow so batch logic can handle it.
+      throw err;
+    }
+
+    logWarn(
+      'DB',
+      `Falling back to user_id schema for ${normalizedEmail}: ${msg}`
+    );
   }
 
-  if (!userRow || typeof userRow.id !== 'number') {
-    const msg = `insertScreenshotToDatabase: No user found for email ${normalizedEmail}`;
-    logError('DB', msg);
-    throw new Error(msg);
-  }
+  // Fallback: Try new schema with user_id
+  try {
+    const { data: userRow, error: userErr } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
 
-  const userId = userRow.id;
+    if (userErr) {
+      logError(
+        'DB',
+        `Failed to look up user_id for email ${normalizedEmail}: ${userErr.message}`,
+        userErr
+      );
+      throw userErr;
+    }
 
-  const { error: dbErr } = await supabase.from('screenshots').insert({
-    user_id: userId,
-    session_id: sessionId,
-    screenshot_data: publicUrl,
-    captured_at: timestamp,
-    app_name: appName,
-    captured_idle: Boolean(isIdle)
-  });
+    if (!userRow || typeof userRow.id !== 'number') {
+      const msg = `insertScreenshotToDatabase: No user found for email ${normalizedEmail} in users table`;
+      logError('DB', msg);
+      throw new Error(msg);
+    }
 
-  if (dbErr) {
-    logError('DB', `Failed to insert screenshot for user_id ${userId}: ${dbErr.message}`, dbErr);
-    throw dbErr;
+    const userId = userRow.id;
+
+    const { error: dbErr } = await supabase.from('screenshots').insert({
+      user_id: userId,
+      session_id: sessionId,
+      screenshot_data: publicUrl,
+      captured_at: timestamp,
+      app_name: appName,
+      captured_idle: Boolean(isIdle)
+    });
+
+    if (dbErr) {
+      logError(
+        'DB',
+        `Failed to insert screenshot for user_id ${userId}: ${dbErr.message}`,
+        dbErr
+      );
+      throw dbErr;
+    }
+
+    logInfo(
+      'DB',
+      `Inserted screenshot row using user_id=${userId} for ${normalizedEmail}`
+    );
+    return;
+  } catch (err) {
+    logError(
+      'DB',
+      `Both user_email and user_id schemas failed for ${normalizedEmail}: ${err?.message || err}`,
+      err
+    );
+    throw err;
   }
 }
 
@@ -1497,6 +1646,8 @@ async function addScreenshotToBatch(uploadData) {
 
     screenshotBatchQueue.push(batchItem);
     pendingScreenshots.set(filePath, false);
+    
+    logInfo(contextLabel || 'BATCH-UPLOAD', `Screenshot added to batch queue. Queue size: ${screenshotBatchQueue.length}/${SCREENSHOT_BATCH_SIZE}`);
 
     // Ensure a single flush timer exists while there are items queued.
     scheduleBatchFlush();
@@ -1504,17 +1655,42 @@ async function addScreenshotToBatch(uploadData) {
     if (screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
       logInfo(contextLabel, `Batch full (${SCREENSHOT_BATCH_SIZE} screenshots), starting upload...`);
       const queueSizeBeforeProcessing = screenshotBatchQueue.length;
-      await processScreenshotBatch();
       
-      // Check if batch was actually processed or if it returned early
-      const queueSizeAfterProcessing = screenshotBatchQueue.length;
-      const wasProcessed = queueSizeAfterProcessing < queueSizeBeforeProcessing;
+      // Try to process the batch - if it returns early, retry after a short delay
+      let retryCount = 0;
+      const maxRetries = 3;
+      let wasProcessed = false;
       
-      if (!wasProcessed && isBatchUploading) {
-        // Batch processing is in progress by another call, wait a bit and check again
-        logInfo('BATCH-UPLOAD', 'Batch processing already in progress, will be handled by that process');
-        // The flush timer will handle any remaining items
-        return { ok: true, queued: true, batchSize: screenshotBatchQueue.length, processing: true };
+      while (retryCount < maxRetries && screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE && !wasProcessed) {
+        await processScreenshotBatch();
+        
+        // Check if batch was actually processed
+        const queueSizeAfterProcessing = screenshotBatchQueue.length;
+        wasProcessed = queueSizeAfterProcessing < queueSizeBeforeProcessing;
+        
+        if (!wasProcessed) {
+          if (isBatchUploading) {
+            // Another batch is processing, wait a bit and retry
+            logInfo('BATCH-UPLOAD', `Batch processing in progress, waiting before retry (attempt ${retryCount + 1}/${maxRetries})...`);
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+            retryCount++;
+          } else if (screenshotBatchQueue.length === 0) {
+            // Queue was cleared by another process, nothing to do
+            wasProcessed = true;
+            logInfo('BATCH-UPLOAD', 'Queue was cleared by another process');
+          } else {
+            // Queue still has items but processing returned early for unknown reason
+            logWarn('BATCH-UPLOAD', `Batch processing returned early but queue still has ${screenshotBatchQueue.length} items. Retrying...`);
+            retryCount++;
+            if (retryCount < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, 500)); // Wait 0.5 seconds
+            }
+          }
+        }
+      }
+      
+      if (!wasProcessed && screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
+        logError('BATCH-UPLOAD', `Failed to process batch after ${maxRetries} attempts. Queue size: ${screenshotBatchQueue.length}`);
       }
       
       // If the queue is now empty, cancel any pending flush timer.
@@ -1528,9 +1704,9 @@ async function addScreenshotToBatch(uploadData) {
         isFlushTimerActive = false;
         logInfo('BATCH-UPLOAD', 'Flush timer cleared after successful batch (queue empty)');
       } else {
-        // Queue has items (possibly re-queued from failures)
-        // If queue is still full, process immediately to maintain FIFO and avoid delays
-        if (screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
+        // Queue has items (possibly re-queued from failures or not yet processed)
+        // If queue is still full, try processing again
+        if (screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE && !isBatchUploading) {
           logInfo('BATCH-UPLOAD', `Queue still full after batch (${screenshotBatchQueue.length} items), processing immediately...`);
           await processScreenshotBatch();
         }
@@ -1604,12 +1780,19 @@ async function processScreenshotBatch() {
     return;
   }
   
+  if (validScreenshots.length === 0) {
+    logWarn('BATCH-UPLOAD', 'No valid screenshots to upload after filtering');
+    isBatchUploading = false;
+    return;
+  }
+
   logInfo('BATCH-UPLOAD', `Supabase client available, proceeding with upload of ${validScreenshots.length} screenshot(s)`);
 
   const uploadResults = [];
   const filesToDelete = [];
 
   try {
+    logInfo('BATCH-UPLOAD', `Starting parallel upload of ${validScreenshots.length} screenshot(s)...`);
     const uploadPromises = validScreenshots.map(async (item) => {
       try {
         if (pendingScreenshots.get(item.filePath) === true) {
@@ -1621,20 +1804,38 @@ async function processScreenshotBatch() {
         }
 
         const storagePath = `${item.userEmail}/${item.sessionId}/${item.jpegFilename}`;
+        logInfo(item.contextLabel, `Uploading to storage: ${storagePath} (${(item.jpegBuffer.length / 1024).toFixed(2)} KB)`);
+        
         const { error: storageError } = await supabase.storage
           .from(STORAGE_BUCKET)
           .upload(storagePath, item.jpegBuffer, { contentType: 'image/jpeg', upsert: true });
 
         if (storageError) {
-          logError(item.contextLabel, `Storage upload failed: ${storageError.message}`);
+          logError(item.contextLabel, `Storage upload failed for ${item.jpegFilename}: ${storageError.message}`, storageError);
           return { ok: false, error: storageError.message, filePath: item.filePath, item };
         }
+        
+        logInfo(item.contextLabel, `Storage upload successful: ${storagePath}`);
 
         const publicUrlRes = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
         const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
         if (!publicUrl) throw new Error('Unable to get storage public URL');
 
+        // Delete local file immediately after successful storage upload
+        // This ensures files are removed from local storage once they're in the bucket
+        // even if database insert fails later
+        try {
+          if (fs.existsSync(item.filePath)) {
+            fs.unlinkSync(item.filePath);
+            logInfo(item.contextLabel, `Deleted local file after successful upload: ${item.filePath}`);
+          }
+        } catch (deleteError) {
+          logWarn(item.contextLabel, `Failed to delete local file ${item.filePath} after upload: ${deleteError.message}`);
+          // Continue processing even if deletion fails - file is already in bucket
+        }
+
         const appName = item.appName || 'Unknown';
+        logInfo(item.contextLabel, `Inserting database record for ${item.jpegFilename}`);
         await insertScreenshotToDatabase(
           supabase,
           item.userEmail,
@@ -1644,6 +1845,7 @@ async function processScreenshotBatch() {
           appName,
           item.isIdle
         );
+        logInfo(item.contextLabel, `Database record inserted successfully for ${item.jpegFilename}`);
 
         broadcastScreenshotCaptured({
           timestamp: item.timestamp,
@@ -1681,7 +1883,7 @@ async function processScreenshotBatch() {
           }
         } catch {}
 
-        filesToDelete.push(item.filePath);
+        // Mark as processed (file already deleted above)
         pendingScreenshots.delete(item.filePath);
 
         logInfo(item.contextLabel, `Uploaded successfully: ${item.jpegFilename}`);
@@ -1694,13 +1896,18 @@ async function processScreenshotBatch() {
 
     const results = await Promise.all(uploadPromises);
     uploadResults.push(...results);
+    
+    logInfo('BATCH-UPLOAD', `All upload promises completed. Results: ${results.length} total, ${results.filter(r => r.ok).length} successful, ${results.filter(r => !r.ok && !r.skipped).length} failed`);
 
+    // Files are now deleted immediately after successful storage upload (see above)
+    // This section handles any remaining cleanup for cancelled or failed items
     let deletedCount = 0;
     for (const filePath of filesToDelete) {
       try {
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
           deletedCount++;
+          logInfo('BATCH-UPLOAD', `Deleted cancelled/failed file: ${filePath}`);
         }
       } catch (error) {
         logError('BATCH-UPLOAD', `Error deleting file ${filePath}:`, error);
@@ -2416,11 +2623,22 @@ ipcMain.handle('stop-background-screenshots', async () => {
 
 // Get batch queue status
 ipcMain.handle('get-screenshot-batch-status', () => {
+  const supabase = getSupabaseClient();
+  const hasSupabase = !!supabase;
+  const supabaseUrl = process.env.SUPABASE_URL || 'NOT SET';
+  const hasServiceKey = !!(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY);
+  
   return {
     queueSize: screenshotBatchQueue.length,
     batchSize: SCREENSHOT_BATCH_SIZE,
     isUploading: isBatchUploading,
-    nextFlushIn: batchFlushInterval ? SCREENSHOT_BATCH_FLUSH_INTERVAL : null
+    nextFlushIn: batchFlushInterval ? SCREENSHOT_BATCH_FLUSH_INTERVAL : null,
+    hasSupabaseClient: hasSupabase,
+    supabaseUrl: supabaseUrl.substring(0, 50) + (supabaseUrl.length > 50 ? '...' : ''), // Truncate for security
+    hasApiKey: hasServiceKey,
+    flushTimerActive: isFlushTimerActive,
+    pendingScreenshotsCount: pendingScreenshots.size,
+    storageBucket: STORAGE_BUCKET
   };
 });
 
