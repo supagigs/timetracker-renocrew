@@ -271,21 +271,37 @@ function createWindow() {
   // actually starts tracking (when we try to capture the screen).
   if (process.platform === 'darwin') {
     mainWindow.webContents.once('did-finish-load', () => {
-      // Delay permission check slightly to ensure window is fully ready
+      // Delay permission checks slightly to ensure window is fully ready
       setTimeout(() => {
-        // Only check Accessibility here; screen recording will be handled
-        // lazily when screenshots are actually requested.
+        // Accessibility permission is required for active app detection.
         checkAccessibilityPermission()
-        .then((hasPermission) => {
-          if (!hasPermission) {
-            setTimeout(() => {
-              requestAccessibilityPermission();
-            }, 2000);
-          }
-        })
-        .catch((error) => {
-          logWarn('Permissions', `Accessibility check failed: ${error?.message || error}`);
-        });
+          .then((hasPermission) => {
+            if (!hasPermission) {
+              // Only show our Accessibility dialog once, shortly after launch.
+              setTimeout(() => {
+                requestAccessibilityPermission();
+              }, 2000);
+            }
+          })
+          .catch((error) => {
+            logWarn('Permissions', `Accessibility check failed: ${error?.message || error}`);
+          });
+
+        // Screen recording permission: trigger the macOS system prompt once
+        // at app launch if permission has not yet been granted. We do this
+        // here so the system dialog appears on first launch, rather than
+        // later when the user clicks "Start".
+        checkScreenRecordingPermission()
+          .then((hasScreenPermission) => {
+            logInfo('Permissions', `Initial screen recording permission: ${hasScreenPermission ? 'granted' : 'missing/denied'}`);
+            if (!hasScreenPermission) {
+              // Show our guidance dialog once so the user knows how to grant it.
+              requestScreenRecordingPermission();
+            }
+          })
+          .catch((error) => {
+            logWarn('Permissions', `Initial screen recording check failed: ${error?.message || error}`);
+          });
       }, 500);
     });
   }
@@ -1252,8 +1268,10 @@ async function processScreenshotBatch() {
     logError('BATCH-UPLOAD', 'Supabase client unavailable, re-queuing batch');
     // Use push() to maintain FIFO order - re-queued items should go to the end
     screenshotBatchQueue.push(...validScreenshots);
-    // Note: scheduleBatchFlush() will be called in finally block after isBatchUploading is set to false
-    // to avoid race condition where timer callback executes before flag is cleared
+    // Explicitly schedule a flush for re-queued items. We cannot rely on the
+    // finally block here because we return early, so we must trigger the timer
+    // before exiting to avoid leaving items stuck in the queue.
+    scheduleBatchFlush();
     isBatchUploading = false;
     return;
   }

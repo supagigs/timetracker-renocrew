@@ -73,12 +73,16 @@
       background: #f8f9fa;
       box-sizing: border-box;
       gap: 16px;
-      overflow: hidden;
+      /* Allow slight overflow so side column (delete button) is never clipped,
+         especially on macOS with display scaling. */
+      overflow: visible;
       min-height: 0;
     }
     #preview-img {
-      width: 400px;
-      height: 230px;
+      /* Slightly narrower so the side column always fits within the toast window
+         on macOS (where window scaling can reduce effective width). */
+      width: 360px;
+      height: 220px;
       border-radius: 12px;
       object-fit: cover;
       background: #e8e8e8;

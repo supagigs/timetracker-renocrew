@@ -1411,55 +1411,17 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!screenshots || screenshots.length === 0) {
         const error = errorMessage || 'Screenshot capture returned no screens';
         console.error(error);
-        
-        // Show user-friendly error message and check permissions
-        if (window.electronAPI) {
+
+        // We no longer show a permission dialog here to avoid repeatedly
+        // prompting the user when they click "Start". Permission prompts
+        // (both the macOS system dialog and our guidance dialog) are now
+        // handled once at app launch in the main process.
+        //
+        // For debugging, we still log diagnostics if available.
+        if (window.electronAPI && window.electronAPI.diagnoseScreenCapture) {
           try {
-            // Check permission status
-            if (window.electronAPI.checkScreenPermission) {
-              const permCheck = await window.electronAPI.checkScreenPermission();
-              console.log('Screen permission check:', permCheck);
-              
-              if (!permCheck.granted) {
-                console.error('⚠️ PERMISSION ISSUE:', permCheck.message);
-                
-                // Build detailed error message
-                let errorMsg = `Screen Recording Permission Issue\n\n${permCheck.message}\n\n`;
-                
-                if (permCheck.appInfo) {
-                  errorMsg += `App Information:\n`;
-                  errorMsg += `- Name: ${permCheck.appInfo.name}\n`;
-                  errorMsg += `- Packaged: ${permCheck.appInfo.isPackaged ? 'Yes' : 'No (Dev Mode)'}\n\n`;
-                }
-                
-                if (permCheck.troubleshooting) {
-                  errorMsg += `Troubleshooting:\n`;
-                  errorMsg += `- Look for "${permCheck.troubleshooting.appName}" in Screen Recording settings\n`;
-                  errorMsg += `- ${permCheck.troubleshooting.note}\n\n`;
-                }
-                
-                errorMsg += `Steps to fix:\n`;
-                errorMsg += `1. Go to System Settings → Privacy & Security → Screen Recording\n`;
-                errorMsg += `2. Find "${permCheck.appInfo?.name || 'Time Tracker'}" in the list\n`;
-                errorMsg += `3. Enable the toggle (you may need to enter your password)\n`;
-                errorMsg += `4. Quit the app completely (Cmd+Q) and restart it\n`;
-                errorMsg += `5. Try capturing screenshots again`;
-                
-                console.error('Full permission details:', permCheck);
-                alert(errorMsg);
-              } else {
-                console.log('✅ Permission check passed, but capture still failed. This might be a timing issue or the app needs a restart.');
-              }
-            }
-            
-            // Get full diagnostics
-            if (window.electronAPI.diagnoseScreenCapture) {
-              const diagnostics = await window.electronAPI.diagnoseScreenCapture();
-              console.log('Screen capture diagnostics:', diagnostics);
-              if (diagnostics.permissionDetails && !diagnostics.permissionDetails.granted) {
-                console.error('Permission status:', diagnostics.permissionDetails);
-              }
-            }
+            const diagnostics = await window.electronAPI.diagnoseScreenCapture();
+            console.log('Screen capture diagnostics:', diagnostics);
           } catch (diagError) {
             console.error('Failed to get diagnostics:', diagError);
           }
