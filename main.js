@@ -171,8 +171,8 @@ function getMacOSBundleId() {
   }
 }
 
-// Check Screen Recording permission on macOS without triggering prompts
-// Uses systemPreferences.getMediaAccessStatus('screen') which is the reliable method
+// Check Screen Recording permission on macOS using multiple methods for reliability
+// Tries node-mac-permissions first (most reliable), then systemPreferences, then verification
 // Returns: 'granted', 'denied', 'not-determined', 'restricted', 'unknown', or 'not_applicable'
 function checkMacOSScreenRecordingPermission() {
   if (process.platform !== 'darwin') {
@@ -186,58 +186,106 @@ function checkMacOSScreenRecordingPermission() {
     return cachedScreenRecordingPermission;
   }
   
+  // Log context for debugging
+  const bundleId = getMacOSBundleId();
+  const appName = app.getName();
+  const isPackaged = app.isPackaged;
+  
+  logInfo('Permissions', `Checking screen recording permission...`);
+  logInfo('Permissions', `  App Name: ${appName}`);
+  logInfo('Permissions', `  Bundle ID: ${bundleId || 'unknown'}`);
+  logInfo('Permissions', `  Is Packaged: ${isPackaged}`);
+  logInfo('Permissions', `  App Path: ${app.getAppPath()}`);
+  
+  let finalStatus = 'unknown';
+  let methodUsed = 'none';
+  
+  // METHOD 1: Try node-mac-permissions first (most reliable, checks TCC database directly)
   try {
-    // Use Electron's native systemPreferences.getMediaAccessStatus('screen')
-    // This is the reliable method that checks TCC database status immediately
-    // Returns: 'granted', 'denied', 'not-determined', 'restricted', or 'unknown'
-    const status = systemPreferences.getMediaAccessStatus('screen');
+    const permissions = require('node-mac-permissions');
+    const status = permissions.getStatus('screenCapture');
+    logInfo('Permissions', `Screen recording permission (via node-mac-permissions): ${status}`);
     
-    // Log additional context for debugging
-    const bundleId = getMacOSBundleId();
-    const appName = app.getName();
-    const isPackaged = app.isPackaged;
-    
-    logInfo('Permissions', `Screen recording permission status (via systemPreferences): ${status}`);
-    logInfo('Permissions', `  App Name: ${appName}`);
-    logInfo('Permissions', `  Bundle ID: ${bundleId || 'unknown'}`);
-    logInfo('Permissions', `  Is Packaged: ${isPackaged}`);
-    logInfo('Permissions', `  App Path: ${app.getAppPath()}`);
-    
-    // If status is denied but user might have just granted it, log a warning
-    if (status === 'denied') {
-      logWarn('Permissions', 'Permission status is DENIED. If you just granted permission in System Settings:');
-      logWarn('Permissions', '  1. Make sure you enabled "Time Tracker" (not "Electron" or dev build)');
-      logWarn('Permissions', `  2. Bundle ID should match: ${bundleId || 'com.supagigs.timetracker'}`);
-      logWarn('Permissions', '  3. Quit and restart the app completely (Cmd+Q)');
-      logWarn('Permissions', '  4. Check System Settings → Privacy & Security → Screen Recording');
+    // Map node-mac-permissions status to Electron's format
+    // Returns: 'authorized', 'denied', 'not-determined', or 'restricted'
+    if (status === 'authorized') {
+      finalStatus = 'granted';
+      methodUsed = 'node-mac-permissions';
+    } else if (status === 'denied') {
+      finalStatus = 'denied';
+      methodUsed = 'node-mac-permissions';
+    } else if (status === 'not-determined') {
+      finalStatus = 'not-determined';
+      methodUsed = 'node-mac-permissions';
+    } else if (status === 'restricted') {
+      finalStatus = 'restricted';
+      methodUsed = 'node-mac-permissions';
+    } else {
+      logWarn('Permissions', `node-mac-permissions returned unknown status: ${status}`);
     }
-    
-    // Cache the status
-    cachedScreenRecordingPermission = status;
-    permissionCheckTimestamp = now;
-    
-    return status;
-  } catch (error) {
-    logWarn('Permissions', 'Error checking Screen Recording permission via systemPreferences:', error);
-    
-    // Fallback: try node-mac-permissions if available
+  } catch (moduleError) {
+    logInfo('Permissions', `node-mac-permissions not available: ${moduleError?.message || moduleError}`);
+  }
+  
+  // METHOD 2: Try systemPreferences.getMediaAccessStatus (Electron's native method)
+  // Only use this if node-mac-permissions didn't work
+  if (finalStatus === 'unknown') {
     try {
-      const permissions = require('node-mac-permissions');
-      const status = permissions.getStatus('screenCapture');
-      logInfo('Permissions', `Screen recording permission status (via node-mac-permissions fallback): ${status}`);
-      
-      // Map node-mac-permissions status to Electron's format
-      // node-mac-permissions returns: 'authorized', 'denied', 'not-determined', or 'restricted'
-      const mappedStatus = status === 'authorized' ? 'granted' : status;
-      
-      cachedScreenRecordingPermission = mappedStatus;
-      permissionCheckTimestamp = now;
-      return mappedStatus;
-    } catch (moduleError) {
-      logWarn('Permissions', 'Both systemPreferences and node-mac-permissions unavailable');
-      return 'unknown';
+      // Check if the method exists (might not be available in all Electron versions)
+      if (typeof systemPreferences.getMediaAccessStatus === 'function') {
+        const status = systemPreferences.getMediaAccessStatus('screen');
+        logInfo('Permissions', `Screen recording permission (via systemPreferences.getMediaAccessStatus): ${status}`);
+        
+        if (status && status !== 'unknown') {
+          finalStatus = status;
+          methodUsed = 'systemPreferences.getMediaAccessStatus';
+        } else {
+          logWarn('Permissions', `systemPreferences.getMediaAccessStatus returned '${status}' - may be unreliable`);
+        }
+      } else {
+        logWarn('Permissions', 'systemPreferences.getMediaAccessStatus is not available in this Electron version');
+      }
+    } catch (error) {
+      logWarn('Permissions', `Error checking permission via systemPreferences: ${error?.message || error}`);
     }
   }
+  
+  // If we still don't have a status, log detailed troubleshooting
+  if (finalStatus === 'unknown' || finalStatus === 'denied') {
+    logWarn('Permissions', '═══════════════════════════════════════════════════════════');
+    logWarn('Permissions', 'PERMISSION STATUS CHECK FAILED OR DENIED');
+    logWarn('Permissions', '═══════════════════════════════════════════════════════════');
+    logWarn('Permissions', `Method used: ${methodUsed}`);
+    logWarn('Permissions', `Status: ${finalStatus}`);
+    logWarn('Permissions', `App Name: ${appName}`);
+    logWarn('Permissions', `Bundle ID: ${bundleId || 'unknown'}`);
+    logWarn('Permissions', `Is Packaged: ${isPackaged}`);
+    logWarn('Permissions', '');
+    logWarn('Permissions', 'TROUBLESHOOTING STEPS:');
+    logWarn('Permissions', '1. Open System Settings → Privacy & Security → Screen Recording');
+    logWarn('Permissions', `2. Look for "${appName}" in the list (NOT "Electron")`);
+    logWarn('Permissions', `3. Expected Bundle ID: ${bundleId || 'com.supagigs.timetracker'}`);
+    logWarn('Permissions', '4. Make sure the toggle is ON');
+    logWarn('Permissions', '5. QUIT the app completely (Cmd+Q, not just close window)');
+    logWarn('Permissions', '6. Restart the app');
+    logWarn('Permissions', '7. If still not working, try:');
+    logWarn('Permissions', `   Terminal: tccutil reset ScreenCapture ${bundleId || 'com.supagigs.timetracker'}`);
+    logWarn('Permissions', '═══════════════════════════════════════════════════════════');
+    
+    if (!isPackaged) {
+      logWarn('Permissions', '⚠️  WARNING: Running in DEV mode');
+      logWarn('Permissions', '   Dev builds use different bundle ID than packaged apps');
+      logWarn('Permissions', '   Permissions are separate for dev and packaged versions');
+    }
+  } else if (finalStatus === 'granted') {
+    logInfo('Permissions', `✅ Screen recording permission is GRANTED (checked via ${methodUsed})`);
+  }
+  
+  // Cache the status
+  cachedScreenRecordingPermission = finalStatus;
+  permissionCheckTimestamp = now;
+  
+  return finalStatus;
 }
 
 // Get active app name and window title using AppleScript (fallback for macOS when active-win fails)
