@@ -237,7 +237,14 @@ function checkMacOSScreenRecordingPermission() {
         logInfo('Permissions', `Screen recording permission (via systemPreferences.getMediaAccessStatus): ${status}`);
         
         if (status && status !== 'unknown') {
-          finalStatus = status;
+          // Normalize 'authorized' to 'granted' for consistency
+          // Some Electron versions return 'authorized' instead of 'granted'
+          if (status === 'authorized') {
+            finalStatus = 'granted';
+            logInfo('Permissions', 'Normalized status from "authorized" to "granted"');
+          } else {
+            finalStatus = status;
+          }
           methodUsed = 'systemPreferences.getMediaAccessStatus';
         } else {
           logWarn('Permissions', `systemPreferences.getMediaAccessStatus returned '${status}' - may be unreliable`);
@@ -248,6 +255,12 @@ function checkMacOSScreenRecordingPermission() {
     } catch (error) {
       logWarn('Permissions', `Error checking permission via systemPreferences: ${error?.message || error}`);
     }
+  }
+  
+  // Normalize any remaining 'authorized' status to 'granted' for consistency
+  if (finalStatus === 'authorized') {
+    finalStatus = 'granted';
+    logInfo('Permissions', 'Normalized final status from "authorized" to "granted"');
   }
   
   // If we still don't have a status, log detailed troubleshooting
