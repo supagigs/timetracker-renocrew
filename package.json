@@ -75,27 +75,27 @@
     "asar": true,
     "compression": "maximum",
     "mac": {
-      "category": "public.app-category.productivity",
-      "icon": "SupagigsIcon.png",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": "universal"
-        }
-      ],
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false,
-      "entitlements": null,
-      "entitlementsInherit": null,
-      "extendInfo": {
-        "NSCameraUsageDescription": "This app needs camera access for screenshot functionality.",
-        "NSMicrophoneUsageDescription": "This app does not use the microphone.",
-        "NSDesktopFolderUsageDescription": "This app needs to save screenshots to your desktop.",
-        "NSDocumentsFolderUsageDescription": "This app needs to save screenshots to your documents folder.",
-        "NSAppleEventsUsageDescription": "This app needs to detect which application you are using for accurate time tracking. This allows the app to record which app you're working in when screenshots are captured.",
-        "NSScreenCaptureUsageDescription": "This app needs screen recording permission to capture screenshots for time tracking. Please enable this permission in System Settings → Privacy & Security → Screen Recording."
-      }
-    },
+  "category": "public.app-category.productivity",
+  "icon": "SupagigsIcon.png",
+  "target": [
+    {
+      "target": "dmg",
+      "arch": "universal"
+    }
+   ],
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "entitlements.mac.plist",
+    "entitlementsInherit": "entitlements.mac.plist",
+    "extendInfo": {
+    "NSCameraUsageDescription": "This app needs camera access for screenshot functionality.",
+    "NSMicrophoneUsageDescription": "This app does not use the microphone.",
+    "NSDesktopFolderUsageDescription": "This app needs to save screenshots to your desktop.",
+    "NSDocumentsFolderUsageDescription": "This app needs to save screenshots to your documents folder.",
+    "NSAppleEventsUsageDescription": "This app needs to detect which application you are using for accurate time tracking.",
+    "NSScreenCaptureUsageDescription": "This app needs screen recording permission to capture screenshots."
+    }
+  },
     "dmg": {
       "title": "${productName} ${version}",
       "icon": "SupagigsIcon.png",

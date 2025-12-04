@@ -106,6 +106,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   setUserLoggedIn: (loggedIn) =>
     ipcRenderer.invoke('set-user-logged-in', loggedIn),
+  requestScreenPermission: () =>
+  ipcRenderer.invoke('request-screen-permission'),
+
 });
 
 contextBridge.exposeInMainWorld('toastAPI', {

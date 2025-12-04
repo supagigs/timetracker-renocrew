@@ -118,26 +118,20 @@ function getMacOSBundleId() {
   if (process.platform !== 'darwin') {
     return null;
   }
-  
+
   try {
-    // Try to read the bundle ID from Info.plist
     let appPath = app.getAppPath();
-    
-    // If packaged, the app is in a .app bundle
+
     if (app.isPackaged) {
-      // Get the .app bundle path
       appPath = app.getPath('exe');
-      // Navigate to the .app bundle directory
       if (appPath.endsWith('/Contents/MacOS/Electron') || appPath.endsWith('/Contents/MacOS/Time Tracker')) {
         appPath = path.resolve(appPath, '../../..');
       }
-      
-      // Try to read Info.plist
+
       const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist');
       if (fs.existsSync(infoPlistPath)) {
         try {
           const plistContent = fs.readFileSync(infoPlistPath, 'utf8');
-          // Simple regex to extract CFBundleIdentifier
           const bundleIdMatch = plistContent.match(/<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/);
           if (bundleIdMatch && bundleIdMatch[1]) {
             return bundleIdMatch[1].trim();
@@ -147,13 +141,12 @@ function getMacOSBundleId() {
         }
       }
     }
-    
-    // Fallback: use appId from package.json build config
+
     try {
-      const packageJsonPath = app.isPackaged 
+      const packageJsonPath = app.isPackaged
         ? path.join(process.resourcesPath, 'package.json')
         : path.join(__dirname, 'package.json');
-      
+
       if (fs.existsSync(packageJsonPath)) {
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
         if (packageJson.build && packageJson.build.appId) {
@@ -163,7 +156,7 @@ function getMacOSBundleId() {
     } catch (e) {
       logWarn('Permissions', `Failed to read package.json for bundle ID: ${e.message}`);
     }
-    
+
     return null;
   } catch (error) {
     logWarn('Permissions', `Error getting bundle ID: ${error.message}`);
@@ -180,11 +173,11 @@ function checkMacOSScreenRecordingPermission() {
   }
   
   // Return cached value if still valid
-  const now = Date.now();
-  if (cachedScreenRecordingPermission !== null && (now - permissionCheckTimestamp) < PERMISSION_CACHE_DURATION) {
-    logInfo('Permissions', `Screen recording permission status (cached): ${cachedScreenRecordingPermission}`);
-    return cachedScreenRecordingPermission;
-  }
+  // const now = Date.now();
+  // if (cachedScreenRecordingPermission !== null && (now - permissionCheckTimestamp) < PERMISSION_CACHE_DURATION) {
+  //   logInfo('Permissions', `Screen recording permission status (cached): ${cachedScreenRecordingPermission}`);
+  //   return cachedScreenRecordingPermission;
+  // }
   
   // Log context for debugging
   const bundleId = getMacOSBundleId();
@@ -195,7 +188,7 @@ function checkMacOSScreenRecordingPermission() {
   logInfo('Permissions', `  App Name: ${appName}`);
   logInfo('Permissions', `  Bundle ID: ${bundleId || 'unknown'}`);
   logInfo('Permissions', `  Is Packaged: ${isPackaged}`);
-  logInfo('Permissions', `  App Path: ${app.getAppPath()}`);
+  // logInfo('Permissions', `  App Path: ${app.getAppPath()}`);
   
   let finalStatus = 'unknown';
   let methodUsed = 'none';
@@ -260,9 +253,37 @@ function checkMacOSScreenRecordingPermission() {
   // Normalize any remaining 'authorized' status to 'granted' for consistency
   if (finalStatus === 'authorized') {
     finalStatus = 'granted';
-    logInfo('Permissions', 'Normalized final status from "authorized" to "granted"');
+    logInfo('Permissions', `Final status: ${finalStatus} (method: ${methodUsed})`);
+    return finalStatus;
   }
   
+  async function triggerScreenRecordingPermissionPrompt() {
+    if (process.platform !== 'darwin') {
+      return { triggered: false, reason: 'not_macos' };
+    }
+  
+    logInfo('Permissions', 'Triggering screen recording permission prompt...');
+  
+    try {
+      // Attempt to capture a screen - this will trigger the system prompt if needed
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 150, height: 150 } // Small size for prompt trigger
+      });
+  
+      if (sources && sources.length > 0) {
+        logInfo('Permissions', ` Permission prompt triggered successfully - ${sources.length} source(s) available`);
+        return { triggered: true, granted: true, sources: sources.length };
+      } else {
+        logWarn('Permissions', 'Permission prompt triggered but no sources returned');
+        return { triggered: true, granted: false, sources: 0 };
+      }
+    } catch (error) {
+      logError('Permissions', `Failed to trigger permission prompt: ${error.message}`);
+      return { triggered: false, error: error.message };
+    }
+  }
+
   // If we still don't have a status, log detailed troubleshooting
   if (finalStatus === 'unknown' || finalStatus === 'denied') {
     logWarn('Permissions', '═══════════════════════════════════════════════════════════');
@@ -530,13 +551,13 @@ function createWindow() {
       mainWindow.show();
       logInfo('Window', 'Window displayed (DOM is Ready)')
     }
-  })
+  });
 
   // Check permissions on macOS after window is ready
   if (process.platform === 'darwin') {
-    mainWindow.webContents.once('did-finish-load', () => {
+    mainWindow.webContents.once('ready-to-show', () => {
       // Delay permission checks slightly to ensure window is fully ready
-      setTimeout(() => {
+      setTimeout(async() => {
         // On first launch, show comprehensive permissions dialog
         if (isFirstLaunch()) {
           logInfo('FirstLaunch', 'First launch detected - showing comprehensive permissions dialog');
@@ -546,29 +567,16 @@ function createWindow() {
         } else {
           // On subsequent launches, only check and log permission status (don't show dialogs automatically)
           logInfo('Permissions', 'Subsequent launch - checking permission status silently');
-          
-          // Check and log permission status for debugging
-          checkAccessibilityPermission()
-            .then((hasPermission) => {
-              logInfo('Permissions', `Accessibility permission: ${hasPermission ? 'granted' : 'not granted'}`);
-            })
-            .catch((error) => {
-              logWarn('Permissions', `Accessibility check failed: ${error?.message || error}`);
-            });
-          
-          checkScreenRecordingPermission()
-            .then((hasScreenPermission) => {
-              logInfo('Permissions', `Screen recording permission: ${hasScreenPermission ? 'granted' : 'not granted'}`);
-              
-              // Get detailed status for logging
-              const detailedStatus = checkMacOSScreenRecordingPermission();
-              logInfo('Permissions', `Screen recording detailed status: ${detailedStatus}`);
-            })
-            .catch((error) => {
-              logWarn('Permissions', `Screen recording check failed: ${error?.message || error}`);
-            });
+        
+
+         // Just log the status, don't trigger prompts
+          const screenStatus = checkMacOSScreenRecordingPermission();
+          const accessibilityStatus = checkMacOSAccessibilityPermission();
+
+          logInfo('Permissions', `Screen Recording: ${screenStatus}`);
+          logInfo('Permissions', `Accessibility: ${accessibilityStatus}`);
         }
-      }, 500);
+      }, 1000); // Wait 1 second after window is ready
     });
   }
 
@@ -681,66 +689,28 @@ function createWindow() {
 // Returns boolean for backward compatibility, but uses accurate status checking
 async function checkScreenRecordingPermission() {
   if (process.platform !== 'darwin') {
-    return true; // Not macOS, no permission needed
+    return true;
   }
-
-  // Return cached value if still valid
-  const now = Date.now();
-  const cachedStatus = cachedScreenRecordingPermission;
-  
-  // Check cache - handle both old ('authorized') and new ('granted') status values
-  if (cachedStatus !== null && (now - permissionCheckTimestamp) < PERMISSION_CACHE_DURATION) {
-    if (cachedStatus === 'granted' || cachedStatus === 'authorized') {
-      logInfo('Permissions', 'Screen recording permission (cached: granted)');
-      return true;
-    }
-    if (cachedStatus === 'denied' || cachedStatus === 'restricted') {
-      logInfo('Permissions', `Screen recording permission (cached: ${cachedStatus})`);
-      return false;
-    }
-  }
-
   try {
-    // Use the reliable systemPreferences.getMediaAccessStatus('screen') method
+    // Always do a fresh check - no caching
     const permissionStatus = checkMacOSScreenRecordingPermission();
-    
-    // Map status to boolean return value
-    // 'granted' = true, everything else = false
+
     if (permissionStatus === 'granted') {
-      logInfo('Permissions', 'Screen recording permission granted (checked via systemPreferences)');
-      // Update cache - normalize to 'granted'
-      cachedScreenRecordingPermission = 'granted';
-      permissionCheckTimestamp = Date.now();
+      logInfo('Permissions', ' Screen recording permission is granted');
       return true;
     }
-    
+
     if (permissionStatus === 'denied' || permissionStatus === 'restricted') {
-      logWarn('Permissions', `Screen recording permission ${permissionStatus} (checked via systemPreferences)`);
-      cachedScreenRecordingPermission = permissionStatus;
-      permissionCheckTimestamp = Date.now();
+      logWarn('Permissions', ` Screen recording permission is ${permissionStatus}`);
       return false;
     }
-    
-    // For 'not-determined' or 'unknown', we might need to trigger a prompt
-    // However, we should avoid using desktopCapturer as it can hang
-    // If status is unknown, assume not granted
+
     if (permissionStatus === 'not-determined' || permissionStatus === 'unknown') {
-      logWarn('Permissions', `Screen recording permission status: ${permissionStatus} - permission may need to be requested`);
-      cachedScreenRecordingPermission = permissionStatus;
-      permissionCheckTimestamp = Date.now();
-      
-      // For 'not-determined', we could try to trigger the prompt via desktopCapturer
-      // but this should be done carefully and only when actually needed
-      // For now, return false and let the user grant permission manually
+      logInfo('Permissions', ` Screen recording permission is ${permissionStatus} - prompt may be needed`);
       return false;
     }
-    
-    // Unknown status - default to false
-    logWarn('Permissions', `Screen recording permission status unknown: ${permissionStatus}`);
-    cachedScreenRecordingPermission = permissionStatus;
-    permissionCheckTimestamp = Date.now();
+
     return false;
-    
   } catch (error) {
     logWarn('Permissions', 'Error checking screen recording permission:', error);
     return false;
@@ -833,27 +803,46 @@ async function requestScreenRecordingPermission() {
   if (process.platform !== 'darwin') {
     return;
   }
+  // Check current status
+  const currentStatus = checkMacOSScreenRecordingPermission();
 
-  const hasPermission = await checkScreenRecordingPermission();
-  
-  if (!hasPermission && mainWindow && !mainWindow.isDestroyed()) {
+  if (currentStatus === 'granted') {
+    logInfo('Permissions', 'Screen recording permission already granted, no dialog needed');
+    return;
+  }
+
+  if (currentStatus === 'not-determined') {
+    // Permission hasn't been asked yet - trigger the prompt
+    logInfo('Permissions', 'Permission not determined, triggering prompt...');
+    const result = await triggerScreenRecordingPermissionPrompt();
+
+    if (result.granted) {
+      logInfo('Permissions', '✅ Permission granted after prompt');
+      return;
+    }
+  }
+  // If we get here, permission is denied/restricted or user dismissed the prompt
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const bundleId = getMacOSBundleId();
+
     dialog.showMessageBox(mainWindow, {
       type: 'warning',
       title: 'Screen Recording Permission Required',
       message: 'Screen Recording Permission Required',
-      detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
-              'Please grant permission:\n' +
-              '1. Go to System Settings â†’ Privacy & Security â†’ Screen Recording\n' +
-              '2. Find "Time Tracker" in the list\n' +
-              '3. Enable the toggle\n' +
-              '4. Restart the app\n\n' +
-              'The app will request permission automatically when you start tracking.',
+      detail: `This app needs screen recording permission to capture screenshots.\n\n` +
+        `Current Status: ${currentStatus}\n\n` +
+        `Please grant permission:\n` +
+        `1. Open System Settings → Privacy & Security → Screen Recording\n` +
+        `2. Find "Time Tracker" in the list (NOT "Electron")\n` +
+        `3. Enable the toggle\n` +
+        `4. **QUIT the app completely (Cmd+Q)**\n` + // **Emphasized Quit step**
+        `5. **Restart the app**\n\n` +
+        `Bundle ID: ${bundleId || 'com.supagigs.timetracker'}`,
       buttons: ['Open System Settings', 'OK'],
-      defaultId: 1,
+      defaultId: 0,
       cancelId: 1
     }).then((result) => {
       if (result.response === 0) {
-        // Open System Settings to Screen Recording
         shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
       }
     });
@@ -3454,9 +3443,9 @@ ipcMain.handle('check-screen-permission', async () => {
       };
     }
     
-    // Clear cache to force fresh check
-    cachedScreenRecordingPermission = null;
-    permissionCheckTimestamp = 0;
+    // // Clear cache to force fresh check
+    // cachedScreenRecordingPermission = null;
+    // permissionCheckTimestamp = 0;
     
     // Get the actual status from systemPreferences
     const status = checkMacOSScreenRecordingPermission();
@@ -3464,6 +3453,8 @@ ipcMain.handle('check-screen-permission', async () => {
     // Also get boolean for backward compatibility
     const hasPermission = status === 'granted';
     
+    logInfo('Permissions', `IPC check-screen-permission: status=${status}, hasPermission=${hasPermission}`);
+
     return { 
       ok: true,
       status: status, // 'granted', 'denied', 'not-determined', 'restricted', 'unknown', or 'not_applicable'
@@ -3479,6 +3470,67 @@ ipcMain.handle('check-screen-permission', async () => {
       hasPermission: false,
       error: error?.message || String(error),
       timestamp: new Date().toISOString()
+    };
+  }
+});
+
+ipcMain.handle('request-screen-permission', async () => {
+  if (process.platform !== 'darwin') {
+    return {
+      ok: true,
+      status: 'not_applicable',
+      message: 'Not macOS'
+    };
+  }
+
+  logInfo('Permissions', 'IPC request-screen-permission called');
+
+  try {
+    const currentStatus = checkMacOSScreenRecordingPermission();
+
+    if (currentStatus === 'granted') {
+      return {
+        ok: true,
+        status: 'granted',
+        message: 'Permission already granted'
+      };
+    }
+
+    if (currentStatus === 'denied' || currentStatus === 'restricted') {
+      // Show dialog to guide user to System Settings
+      await requestScreenRecordingPermission();
+      return {
+        ok: false,
+        status: currentStatus,
+        message: 'Permission denied - user must enable in System Settings'
+      };
+    }
+
+    // Status is 'not-determined' or 'unknown' - trigger the prompt
+    logInfo('Permissions', 'Triggering permission prompt via desktopCapturer...');
+    const result = await triggerScreenRecordingPermissionPrompt();
+
+    if (result.granted) {
+      return {
+        ok: true,
+        status: 'granted',
+        message: 'Permission granted'
+      };
+    } else {
+      // If prompt fails or is dismissed, show the guidance dialog
+      await requestScreenRecordingPermission();
+      return {
+        ok: false,
+        status: 'denied',
+        message: 'Permission denied by user'
+      };
+    }
+  } catch (error) {
+    logError('Permissions', `request-screen-permission failed: ${error.message}`);
+    return {
+      ok: false,
+      status: 'error',
+      error: error.message
     };
   }
 });
