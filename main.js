@@ -113,6 +113,64 @@ let cachedScreenRecordingPermission = null;
 let permissionCheckTimestamp = 0;
 const PERMISSION_CACHE_DURATION = 5000; // Cache for 5 seconds
 
+// Helper function to get the actual bundle ID from the app bundle
+function getMacOSBundleId() {
+  if (process.platform !== 'darwin') {
+    return null;
+  }
+  
+  try {
+    // Try to read the bundle ID from Info.plist
+    let appPath = app.getAppPath();
+    
+    // If packaged, the app is in a .app bundle
+    if (app.isPackaged) {
+      // Get the .app bundle path
+      appPath = app.getPath('exe');
+      // Navigate to the .app bundle directory
+      if (appPath.endsWith('/Contents/MacOS/Electron') || appPath.endsWith('/Contents/MacOS/Time Tracker')) {
+        appPath = path.resolve(appPath, '../../..');
+      }
+      
+      // Try to read Info.plist
+      const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist');
+      if (fs.existsSync(infoPlistPath)) {
+        try {
+          const plistContent = fs.readFileSync(infoPlistPath, 'utf8');
+          // Simple regex to extract CFBundleIdentifier
+          const bundleIdMatch = plistContent.match(/<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/);
+          if (bundleIdMatch && bundleIdMatch[1]) {
+            return bundleIdMatch[1].trim();
+          }
+        } catch (e) {
+          logWarn('Permissions', `Failed to read Info.plist: ${e.message}`);
+        }
+      }
+    }
+    
+    // Fallback: use appId from package.json build config
+    try {
+      const packageJsonPath = app.isPackaged 
+        ? path.join(process.resourcesPath, 'package.json')
+        : path.join(__dirname, 'package.json');
+      
+      if (fs.existsSync(packageJsonPath)) {
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+        if (packageJson.build && packageJson.build.appId) {
+          return packageJson.build.appId;
+        }
+      }
+    } catch (e) {
+      logWarn('Permissions', `Failed to read package.json for bundle ID: ${e.message}`);
+    }
+    
+    return null;
+  } catch (error) {
+    logWarn('Permissions', `Error getting bundle ID: ${error.message}`);
+    return null;
+  }
+}
+
 // Check Screen Recording permission on macOS without triggering prompts
 // Uses systemPreferences.getMediaAccessStatus('screen') which is the reliable method
 // Returns: 'granted', 'denied', 'not-determined', 'restricted', 'unknown', or 'not_applicable'
@@ -133,9 +191,28 @@ function checkMacOSScreenRecordingPermission() {
     // This is the reliable method that checks TCC database status immediately
     // Returns: 'granted', 'denied', 'not-determined', 'restricted', or 'unknown'
     const status = systemPreferences.getMediaAccessStatus('screen');
-    logInfo('Permissions', `Screen recording permission status (via systemPreferences): ${status}`);
     
-    // Cache the status (normalize 'granted' to match our existing cache logic)
+    // Log additional context for debugging
+    const bundleId = getMacOSBundleId();
+    const appName = app.getName();
+    const isPackaged = app.isPackaged;
+    
+    logInfo('Permissions', `Screen recording permission status (via systemPreferences): ${status}`);
+    logInfo('Permissions', `  App Name: ${appName}`);
+    logInfo('Permissions', `  Bundle ID: ${bundleId || 'unknown'}`);
+    logInfo('Permissions', `  Is Packaged: ${isPackaged}`);
+    logInfo('Permissions', `  App Path: ${app.getAppPath()}`);
+    
+    // If status is denied but user might have just granted it, log a warning
+    if (status === 'denied') {
+      logWarn('Permissions', 'Permission status is DENIED. If you just granted permission in System Settings:');
+      logWarn('Permissions', '  1. Make sure you enabled "Time Tracker" (not "Electron" or dev build)');
+      logWarn('Permissions', `  2. Bundle ID should match: ${bundleId || 'com.supagigs.timetracker'}`);
+      logWarn('Permissions', '  3. Quit and restart the app completely (Cmd+Q)');
+      logWarn('Permissions', '  4. Check System Settings → Privacy & Security → Screen Recording');
+    }
+    
+    // Cache the status
     cachedScreenRecordingPermission = status;
     permissionCheckTimestamp = now;
     
@@ -3347,15 +3424,27 @@ ipcMain.handle('check-screen-permission', async () => {
 
 // Diagnostic handler to check screen capture capabilities
 ipcMain.handle('diagnose-screen-capture', async () => {
+  // Clear cache for fresh diagnostic check
+  cachedScreenRecordingPermission = null;
+  permissionCheckTimestamp = 0;
+  
+  const bundleId = process.platform === 'darwin' ? getMacOSBundleId() : null;
+  const appName = app.getName();
+  const isPackaged = app.isPackaged;
+  
   const diagnostics = {
     platform: process.platform,
+    appName: appName,
+    isPackaged: isPackaged,
+    bundleId: bundleId || 'unknown',
     displays: [],
     sources: [],
     permissions: 'unknown',
+    permissionStatus: 'unknown',
     permissionCheck: null,
-    cachedPermission: cachedScreenRecordingPermission,
+    cachedPermission: null,
     timestamp: new Date().toISOString(),
-    bundleId: process.platform === 'darwin' ? (app.getAppPath ? app.getAppPath() : 'unknown') : 'n/a'
+    troubleshooting: []
   };
   
   try {
@@ -3369,23 +3458,62 @@ ipcMain.handle('diagnose-screen-capture', async () => {
       primary: display === screen.getPrimaryDisplay()
     }));
     
+    if (displays.length === 0) {
+      diagnostics.troubleshooting.push('WARNING: No displays detected. This may indicate a system issue.');
+      logWarn('DIAGNOSTIC', 'No displays detected - this is unusual');
+    }
+    
     // Check permission status via systemPreferences (reliable method)
     if (process.platform === 'darwin') {
       try {
-        // Get the actual status value from systemPreferences
+        // Get the actual status value from systemPreferences (cache already cleared above)
         const status = checkMacOSScreenRecordingPermission();
         diagnostics.permissionStatus = status; // 'granted', 'denied', 'not-determined', etc.
+        diagnostics.permissions = status; // For backward compatibility
         diagnostics.permissionCheck = status === 'granted'; // Boolean for backward compatibility
+        
         logInfo('DIAGNOSTIC', `Permission status (via systemPreferences): ${status}`);
+        logInfo('DIAGNOSTIC', `Bundle ID: ${bundleId || 'unknown'}`);
+        logInfo('DIAGNOSTIC', `App Name: ${appName}`);
+        logInfo('DIAGNOSTIC', `Is Packaged: ${isPackaged}`);
+        
+        // Add troubleshooting steps based on status
+        if (status === 'denied') {
+          diagnostics.troubleshooting.push('Permission status is DENIED in TCC database.');
+          diagnostics.troubleshooting.push(`Make sure "Time Tracker" (not "Electron") is enabled in System Settings → Privacy & Security → Screen Recording`);
+          diagnostics.troubleshooting.push(`Expected bundle ID: ${bundleId || 'com.supagigs.timetracker'}`);
+          diagnostics.troubleshooting.push('After enabling permission, QUIT the app completely (Cmd+Q) and restart it.');
+          
+          if (!isPackaged) {
+            diagnostics.troubleshooting.push('⚠️ Running in DEV mode - permissions for dev builds are separate from packaged apps.');
+            diagnostics.troubleshooting.push('If you granted permission to the packaged app, it won\'t work for dev mode and vice versa.');
+          }
+        } else if (status === 'not-determined') {
+          diagnostics.troubleshooting.push('Permission has not been determined yet.');
+          diagnostics.troubleshooting.push('macOS may prompt you when the app tries to capture a screenshot.');
+        } else if (status === 'restricted') {
+          diagnostics.troubleshooting.push('Permission is RESTRICTED (e.g., by parental controls or MDM).');
+          diagnostics.troubleshooting.push('Contact your system administrator if this is a managed device.');
+        } else if (status === 'granted') {
+          diagnostics.troubleshooting.push('✅ Permission is GRANTED in TCC database.');
+        }
       } catch (permError) {
         diagnostics.permissionCheckError = permError?.message || String(permError);
+        diagnostics.troubleshooting.push(`Error checking permission: ${permError?.message}`);
         logWarn('DIAGNOSTIC', `Permission check failed: ${permError?.message}`);
       }
     }
     
     // Try to get screen sources - secondary verification (primary status from systemPreferences)
-    const maxWidth = Math.max(...displays.map(d => d.size.width));
-    const maxHeight = Math.max(...displays.map(d => d.size.height));
+    let maxWidth = 1920;
+    let maxHeight = 1080;
+    
+    if (displays && displays.length > 0) {
+      maxWidth = Math.max(...displays.map(d => d.size.width));
+      maxHeight = Math.max(...displays.map(d => d.size.height));
+    } else {
+      logWarn('DIAGNOSTIC', 'No displays detected - using default thumbnail size');
+    }
     
     logInfo('DIAGNOSTIC', `Attempting desktopCapturer.getSources() with thumbnailSize: ${maxWidth}x${maxHeight}`);
     
@@ -3420,20 +3548,48 @@ ipcMain.handle('diagnose-screen-capture', async () => {
       // Verify with sources if we have status
       if (statusFromSystemPreferences === 'granted') {
         if (!sources || sources.length === 0) {
-          diagnostics.recommendation = 'Status shows granted, but no sources returned. App may need restart after granting permission.';
+          diagnostics.recommendation = 'Status shows granted in TCC, but no sources returned. App likely needs restart after granting permission.';
+          diagnostics.troubleshooting.push('Permission is granted but screenshots still fail:');
+          diagnostics.troubleshooting.push('1. Quit the app completely (Cmd+Q, not just close window)');
+          diagnostics.troubleshooting.push('2. Restart the app');
+          diagnostics.troubleshooting.push('3. Try capturing a screenshot again');
         } else if (sources.length < displays.length) {
           diagnostics.recommendation = `Status shows granted, but only ${sources.length} of ${displays.length} displays are accessible.`;
         } else {
           diagnostics.recommendation = 'Permission is granted and working correctly.';
         }
       } else if (statusFromSystemPreferences === 'denied') {
-        diagnostics.recommendation = 'Permission is denied. Enable it in System Settings → Privacy & Security → Screen Recording.';
+        diagnostics.recommendation = `Permission is DENIED in TCC database. Even if System Settings shows it enabled, there may be a bundle ID mismatch.`;
+        diagnostics.troubleshooting.push('CRITICAL: Permission shows as DENIED. Common causes:');
+        diagnostics.troubleshooting.push('1. Bundle ID mismatch - Check that the app in System Settings matches this app');
+        diagnostics.troubleshooting.push(`   - Expected bundle ID: ${bundleId || 'com.supagigs.timetracker'}`);
+        diagnostics.troubleshooting.push(`   - App name should be: "Time Tracker" (not "Electron")`);
+        diagnostics.troubleshooting.push(`   - Current app name: "${appName}"`);
+        diagnostics.troubleshooting.push(`   - Is packaged: ${isPackaged}`);
+        diagnostics.troubleshooting.push('2. App not restarted after granting permission');
+        diagnostics.troubleshooting.push('3. Permission granted to wrong app (dev vs packaged)');
+        diagnostics.troubleshooting.push('');
+        diagnostics.troubleshooting.push('SOLUTION:');
+        diagnostics.troubleshooting.push('1. Open System Settings → Privacy & Security → Screen Recording');
+        diagnostics.troubleshooting.push('2. Find "Time Tracker" in the list (NOT "Electron")');
+        diagnostics.troubleshooting.push('3. Make sure the toggle is ON');
+        diagnostics.troubleshooting.push('4. If app is not listed, try capturing a screenshot to trigger the permission prompt');
+        diagnostics.troubleshooting.push('5. QUIT the app completely (Cmd+Q)');
+        diagnostics.troubleshooting.push('6. Restart the app');
+        diagnostics.troubleshooting.push('7. If still not working, try resetting permission:');
+        diagnostics.troubleshooting.push(`   Terminal: tccutil reset ScreenCapture ${bundleId || 'com.supagigs.timetracker'}`);
       } else if (statusFromSystemPreferences === 'not-determined') {
         diagnostics.recommendation = 'Permission has not been determined yet. It may be requested when capturing screenshots.';
+        diagnostics.troubleshooting.push('Permission status is "not-determined" - this means macOS hasn\'t asked for permission yet.');
+        diagnostics.troubleshooting.push('Try capturing a screenshot and macOS should prompt you for permission.');
       } else if (statusFromSystemPreferences === 'restricted') {
         diagnostics.recommendation = 'Permission is restricted (e.g., by parental controls or MDM).';
+        diagnostics.troubleshooting.push('Permission is RESTRICTED by system policy (parental controls or MDM).');
+        diagnostics.troubleshooting.push('Contact your system administrator to enable Screen Recording permission.');
       } else {
         diagnostics.recommendation = 'Permission status is unknown. Check System Settings → Privacy & Security → Screen Recording.';
+        diagnostics.troubleshooting.push('Permission status could not be determined.');
+        diagnostics.troubleshooting.push('Check System Settings → Privacy & Security → Screen Recording manually.');
       }
     } else {
       diagnostics.permissions = 'not_applicable';
