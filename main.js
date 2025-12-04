@@ -1,6 +1,9 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { execSync, exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 
 if (process.platform === 'win32') {
   app.setAppUserModelId("Supagigs Time Tracker");
@@ -67,41 +70,67 @@ function checkMacOSAccessibilityPermission() {
     return 'not_applicable';
   }
   
+  const bundleId = getMacOSBundleId();
+  let finalStatus = 'unknown';
+  let methodUsed = 'none';
+  
   try {
-    // Try to use node-mac-permissions if available (doesn't trigger prompts)
+    // METHOD 1: Try to use node-mac-permissions if available (doesn't trigger prompts)
     try {
       const permissions = require('node-mac-permissions');
       const status = permissions.getStatus('accessibility');
       logInfo('Permissions', `Accessibility permission status (via node-mac-permissions): ${status}`);
-      return status; // Returns: 'authorized', 'denied', 'not-determined', or 'restricted'
+      finalStatus = status; // Returns: 'authorized', 'denied', 'not-determined', or 'restricted'
+      methodUsed = 'node-mac-permissions';
     } catch (moduleError) {
-      // Module not available, fall back to checking via AppleScript (but this is silent check)
+      // Module not available, fall back to other methods
       logInfo('Permissions', 'node-mac-permissions not available, using fallback method');
     }
     
-    // Fallback: Use a silent check that doesn't trigger permission prompts
-    // We check if we can query System Events without actually triggering a prompt
-    const { execSync } = require('child_process');
-    try {
-      // This command checks permission status without triggering a new prompt
-      // It will only work if permission is already granted
-      execSync('osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true" 2>&1', { 
-        encoding: 'utf8',
-        timeout: 1000,
-        stdio: 'pipe'
-      });
-      return 'authorized';
-    } catch (e) {
-      const errorMsg = String(e.message || e.stdout || e.stderr || '');
-      // Check if error is due to permission denial
-      if (errorMsg.includes('not allowed assistive') || 
-          errorMsg.includes('(-1719)') || 
-          errorMsg.includes('accessibility')) {
-        return 'denied';
+    // METHOD 2: Try TCC database query (most reliable fallback)
+    if (finalStatus === 'unknown' && bundleId) {
+      try {
+        const tccStatus = checkTCCDatabasePermission(bundleId, 'accessibility');
+        if (tccStatus !== 'unknown') {
+          finalStatus = tccStatus;
+          methodUsed = 'TCC-database-query';
+          logInfo('Permissions', `Accessibility permission (via TCC database): ${finalStatus}`);
+        }
+      } catch (error) {
+        logWarn('Permissions', `TCC database check failed: ${error?.message || error}`);
       }
-      // If it's a different error, we can't determine status
-      return 'unknown';
     }
+    
+    // METHOD 3: Fallback - Use a silent check that doesn't trigger permission prompts
+    // We check if we can query System Events without actually triggering a prompt
+    if (finalStatus === 'unknown') {
+      try {
+        // This command checks permission status without triggering a new prompt
+        // It will only work if permission is already granted
+        execSync('osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true" 2>&1', { 
+          encoding: 'utf8',
+          timeout: 1000,
+          stdio: 'pipe'
+        });
+        finalStatus = 'authorized';
+        methodUsed = 'AppleScript-test';
+        logInfo('Permissions', `Accessibility permission (via AppleScript test): authorized`);
+      } catch (e) {
+        const errorMsg = String(e.message || e.stdout || e.stderr || '');
+        // Check if error is due to permission denial
+        if (errorMsg.includes('not allowed assistive') || 
+            errorMsg.includes('(-1719)') || 
+            errorMsg.includes('accessibility')) {
+          finalStatus = 'denied';
+          methodUsed = 'AppleScript-test';
+          logInfo('Permissions', `Accessibility permission (via AppleScript test): denied`);
+        }
+        // If it's a different error, we can't determine status
+      }
+    }
+    
+    logInfo('Permissions', `Accessibility permission final status: ${finalStatus} (method: ${methodUsed})`);
+    return finalStatus;
   } catch (error) {
     logWarn('Permissions', 'Error checking Accessibility permission:', error);
     return 'unknown';
@@ -161,6 +190,88 @@ function getMacOSBundleId() {
   } catch (error) {
     logWarn('Permissions', `Error getting bundle ID: ${error.message}`);
     return null;
+  }
+}
+
+// Check TCC database directly for permission status (most reliable method)
+// This queries the macOS TCC (Transparency, Consent, and Control) database
+// auth_value = 2 means 'authorized', auth_value = 0 means 'denied'
+function checkTCCDatabasePermission(bundleId, service) {
+  if (process.platform !== 'darwin' || !bundleId) {
+    return 'unknown';
+  }
+
+  try {
+    // TCC database paths (user-level is more accessible)
+    const tccPaths = [
+      `${process.env.HOME}/Library/Application Support/com.apple.TCC/TCC.db`,
+      '/Library/Application Support/com.apple.TCC/TCC.db'
+    ];
+
+    let tccPath = null;
+    for (const tccPathCandidate of tccPaths) {
+      if (fs.existsSync(tccPathCandidate)) {
+        tccPath = tccPathCandidate;
+        break;
+      }
+    }
+
+    if (!tccPath) {
+      logInfo('Permissions', 'TCC database not found - may require Full Disk Access');
+      return 'unknown';
+    }
+
+    // Service names in TCC database
+    const serviceMap = {
+      'screenCapture': 'kTCCServiceScreenCapture',
+      'accessibility': 'kTCCServiceAccessibility'
+    };
+
+    const tccService = serviceMap[service] || service;
+    
+    // Query TCC database for permission status
+    // auth_value: 0 = denied, 2 = authorized, 1 = not determined
+    const query = `SELECT auth_value FROM access WHERE service = '${tccService}' AND client = '${bundleId}';`;
+    const command = `sqlite3 "${tccPath}" "${query}"`;
+    
+    try {
+      const result = execSync(command, { 
+        encoding: 'utf8', 
+        timeout: 2000,
+        stdio: 'pipe'
+      }).trim();
+
+      if (result === '2') {
+        logInfo('Permissions', `TCC database shows ${service} permission as AUTHORIZED (auth_value=2) for ${bundleId}`);
+        return 'granted';
+      } else if (result === '0') {
+        logInfo('Permissions', `TCC database shows ${service} permission as DENIED (auth_value=0) for ${bundleId}`);
+        return 'denied';
+      } else if (result === '1') {
+        logInfo('Permissions', `TCC database shows ${service} permission as NOT DETERMINED (auth_value=1) for ${bundleId}`);
+        return 'not-determined';
+      } else if (result === '') {
+        logInfo('Permissions', `TCC database has no entry for ${service} permission (not-determined) for ${bundleId}`);
+        return 'not-determined';
+      } else {
+        logWarn('Permissions', `TCC database returned unexpected value: ${result}`);
+        return 'unknown';
+      }
+    } catch (execError) {
+      const errorMsg = String(execError.message || execError.stderr || execError.stdout || '');
+      // If sqlite3 is not available or database is locked, that's okay - we'll use other methods
+      if (errorMsg.includes('command not found') || errorMsg.includes('sqlite3')) {
+        logInfo('Permissions', 'sqlite3 command not available - TCC database check skipped');
+      } else if (errorMsg.includes('database is locked') || errorMsg.includes('permission denied')) {
+        logInfo('Permissions', 'TCC database is locked or inaccessible - may require Full Disk Access');
+      } else {
+        logWarn('Permissions', `TCC database query failed: ${errorMsg}`);
+      }
+      return 'unknown';
+    }
+  } catch (error) {
+    logWarn('Permissions', `Error checking TCC database: ${error?.message || error}`);
+    return 'unknown';
   }
 }
 
@@ -250,39 +361,30 @@ function checkMacOSScreenRecordingPermission() {
     }
   }
   
+  // METHOD 3: Try TCC database query (most reliable fallback - directly queries macOS permission database)
+  // Only use this if previous methods didn't work or returned 'unknown'
+  if (finalStatus === 'unknown' && bundleId) {
+    try {
+      const tccStatus = checkTCCDatabasePermission(bundleId, 'screenCapture');
+      if (tccStatus !== 'unknown') {
+        finalStatus = tccStatus;
+        methodUsed = 'TCC-database-query';
+        logInfo('Permissions', `Screen recording permission (via TCC database): ${finalStatus}`);
+      }
+    } catch (error) {
+      logWarn('Permissions', `TCC database check failed: ${error?.message || error}`);
+    }
+  }
+  
   // Normalize any remaining 'authorized' status to 'granted' for consistency
   if (finalStatus === 'authorized') {
     finalStatus = 'granted';
-    logInfo('Permissions', `Final status: ${finalStatus} (method: ${methodUsed})`);
-    return finalStatus;
+    logInfo('Permissions', 'Normalized final status from "authorized" to "granted"');
   }
-  
-  async function triggerScreenRecordingPermissionPrompt() {
-    if (process.platform !== 'darwin') {
-      return { triggered: false, reason: 'not_macos' };
-    }
-  
-    logInfo('Permissions', 'Triggering screen recording permission prompt...');
-  
-    try {
-      // Attempt to capture a screen - this will trigger the system prompt if needed
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: { width: 150, height: 150 } // Small size for prompt trigger
-      });
-  
-      if (sources && sources.length > 0) {
-        logInfo('Permissions', ` Permission prompt triggered successfully - ${sources.length} source(s) available`);
-        return { triggered: true, granted: true, sources: sources.length };
-      } else {
-        logWarn('Permissions', 'Permission prompt triggered but no sources returned');
-        return { triggered: true, granted: false, sources: 0 };
-      }
-    } catch (error) {
-      logError('Permissions', `Failed to trigger permission prompt: ${error.message}`);
-      return { triggered: false, error: error.message };
-    }
-  }
+
+  // Cache the status
+  cachedScreenRecordingPermission = finalStatus;
+  permissionCheckTimestamp = Date.now();
 
   // If we still don't have a status, log detailed troubleshooting
   if (finalStatus === 'unknown' || finalStatus === 'denied') {
@@ -320,6 +422,34 @@ function checkMacOSScreenRecordingPermission() {
   permissionCheckTimestamp = now;
   
   return finalStatus;
+}
+
+// Trigger screen recording permission prompt by attempting to capture screen
+async function triggerScreenRecordingPermissionPrompt() {
+  if (process.platform !== 'darwin') {
+    return { triggered: false, reason: 'not_macos' };
+  }
+
+  logInfo('Permissions', 'Triggering screen recording permission prompt...');
+
+  try {
+    // Attempt to capture a screen - this will trigger the system prompt if needed
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 150, height: 150 } // Small size for prompt trigger
+    });
+
+    if (sources && sources.length > 0) {
+      logInfo('Permissions', `Permission prompt triggered successfully - ${sources.length} source(s) available`);
+      return { triggered: true, granted: true, sources: sources.length };
+    } else {
+      logWarn('Permissions', 'Permission prompt triggered but no sources returned');
+      return { triggered: true, granted: false, sources: 0 };
+    }
+  } catch (error) {
+    logError('Permissions', `Failed to trigger permission prompt: ${error.message}`);
+    return { triggered: false, error: error.message };
+  }
 }
 
 // Get active app name and window title using AppleScript (fallback for macOS when active-win fails)
