@@ -137,10 +137,10 @@ function checkMacOSAccessibilityPermission() {
   }
 }
 
-// Cache for permission status to avoid repeated checks
-let cachedScreenRecordingPermission = null;
-let permissionCheckTimestamp = 0;
-const PERMISSION_CACHE_DURATION = 5000; // Cache for 5 seconds
+// // Cache for permission status to avoid repeated checks
+// let cachedScreenRecordingPermission = null;
+// let permissionCheckTimestamp = 0;
+// const PERMISSION_CACHE_DURATION = 5000; // Cache for 5 seconds
 
 // Helper function to get the actual bundle ID from the app bundle
 function getMacOSBundleId() {
@@ -821,28 +821,24 @@ async function checkScreenRecordingPermission() {
   if (process.platform !== 'darwin') {
     return true;
   }
-  try {
-    // Always do a fresh check - no caching
-    const permissionStatus = checkMacOSScreenRecordingPermission();
 
-    if (permissionStatus === 'granted') {
-      logInfo('Permissions', ' Screen recording permission is granted');
+  try {
+    // Try to get sources - this is the actual test
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 0, height: 0 }
+    });
+
+    // If we can get sources, permission is working
+    if (sources && sources.length > 0) {
+      logInfo('Permissions', '✅ Screen recording permission check passed - sources available');
       return true;
     }
 
-    if (permissionStatus === 'denied' || permissionStatus === 'restricted') {
-      logWarn('Permissions', ` Screen recording permission is ${permissionStatus}`);
-      return false;
-    }
-
-    if (permissionStatus === 'not-determined' || permissionStatus === 'unknown') {
-      logInfo('Permissions', ` Screen recording permission is ${permissionStatus} - prompt may be needed`);
-      return false;
-    }
-
+    logWarn('Permissions', '⚠️ Screen recording permission check failed - no sources returned');
     return false;
   } catch (error) {
-    logWarn('Permissions', 'Error checking screen recording permission:', error);
+    logWarn('Permissions', `Screen recording permission test failed: ${error.message}`);
     return false;
   }
 }
@@ -933,68 +929,68 @@ async function requestScreenRecordingPermission() {
   if (process.platform !== 'darwin') {
     return;
   }
-  // Check current status
-  const currentStatus = checkMacOSScreenRecordingPermission();
 
-  if (currentStatus === 'granted') {
-    logInfo('Permissions', 'Screen recording permission already granted, no dialog needed');
+  if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
 
-  if (currentStatus === 'not-determined') {
-    // Permission hasn't been asked yet - trigger the prompt
-    logInfo('Permissions', 'Permission not determined, triggering prompt...');
-    const result = await triggerScreenRecordingPermissionPrompt();
+  // First check if permission is already working
+  const hasPermission = await checkScreenRecordingPermission();
+  if (hasPermission) {
+    logInfo('Permissions', 'Screen recording permission already granted');
+    return;
+  }
 
-    if (result.granted) {
-      logInfo('Permissions', '✅ Permission granted after prompt');
-      return;
+  // Permission not working - show dialog
+  dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    title: 'Screen Recording Permission Required',
+    message: 'Screen Recording Permission Required',
+    detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
+            'Please grant permission:\n' +
+            '1. Open System Settings → Privacy & Security → Screen Recording\n' +
+            '2. Find "Time Tracker" in the list (NOT "Electron")\n' +
+            '3. Enable the toggle\n' +
+            '4. **QUIT the app completely (Cmd+Q)**\n' +
+            '5. **Restart the app**',
+    buttons: ['Open System Settings', 'OK'],
+    defaultId: 0,
+    cancelId: 1
+  }).then((result) => {
+    if (result.response === 0) {
+      shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
     }
-  }
-  // If we get here, permission is denied/restricted or user dismissed the prompt
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const bundleId = getMacOSBundleId();
-
-    dialog.showMessageBox(mainWindow, {
-      type: 'warning',
-      title: 'Screen Recording Permission Required',
-      message: 'Screen Recording Permission Required',
-      detail: `This app needs screen recording permission to capture screenshots.\n\n` +
-        `Current Status: ${currentStatus}\n\n` +
-        `Please grant permission:\n` +
-        `1. Open System Settings → Privacy & Security → Screen Recording\n` +
-        `2. Find "Time Tracker" in the list (NOT "Electron")\n` +
-        `3. Enable the toggle\n` +
-        `4. **QUIT the app completely (Cmd+Q)**\n` + // **Emphasized Quit step**
-        `5. **Restart the app**\n\n` +
-        `Bundle ID: ${bundleId || 'com.supagigs.timetracker'}`,
-      buttons: ['Open System Settings', 'OK'],
-      defaultId: 0,
-      cancelId: 1
-    }).then((result) => {
-      if (result.response === 0) {
-        shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
-      }
-    });
-  }
+  });
 }
+
 
 // Check and request Accessibility permission on macOS
 // This function checks permission status WITHOUT triggering prompts if already granted
 async function checkAccessibilityPermission() {
   if (process.platform !== 'darwin') {
-    return true; // Not macOS, no permission needed
+    return true;
   }
 
   try {
-    const status = checkMacOSAccessibilityPermission();
-    logInfo('Permissions', `Accessibility permission status: ${status}`);
-    
-    // Return true only if explicitly authorized
-    // 'denied', 'unknown', or 'not-determined' all return false
-    return status === 'authorized';
+    // Try AppleScript to test accessibility
+    const result = await new Promise((resolve) => {
+      const { exec } = require('child_process');
+      const command = 'osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true"';
+      
+      exec(command, { timeout: 1000 }, (error) => {
+        // If no error, accessibility permission is granted
+        resolve(!error);
+      });
+    });
+
+    if (result) {
+      logInfo('Permissions', ' Accessibility permission check passed');
+    } else {
+      logWarn('Permissions', ' Accessibility permission check failed');
+    }
+    return result;
   } catch (error) {
-    logWarn('Permissions', 'Error checking Accessibility permission:', error);
+    logWarn('Permissions', `Accessibility permission test failed: ${error.message}`);
     return false;
   }
 }
@@ -1006,30 +1002,32 @@ async function requestAccessibilityPermission() {
   }
 
   const hasPermission = await checkAccessibilityPermission();
-  
-  if (!hasPermission && mainWindow && !mainWindow.isDestroyed()) {
-    dialog.showMessageBox(mainWindow, {
-      type: 'warning',
-      title: 'Accessibility Permission Required',
-      message: 'Accessibility Permission Required',
-      detail: 'This app needs Accessibility permission to detect which application you are using.\n\n' +
-              'Without this permission, app names will show as "Unknown".\n\n' +
-              'Please grant permission:\n' +
-              '1. Go to System Settings â†’ Privacy & Security â†’ Accessibility\n' +
-              '2. Find "Time Tracker" in the list\n' +
-              '3. Enable the toggle\n' +
-              '4. Restart the app\n\n' +
-              'The app will request permission automatically when needed.',
-      buttons: ['Open System Settings', 'OK'],
-      defaultId: 1,
-      cancelId: 1
-    }).then((result) => {
-      if (result.response === 0) {
-        // Open System Settings to Accessibility
-        shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
-      }
-    });
+  if (hasPermission) {
+    return;
   }
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    title: 'Accessibility Permission Required',
+    message: 'Accessibility Permission Required',
+    detail: 'This app needs Accessibility permission to detect which application you are using.\n\n' +
+            'Please grant permission:\n' +
+            '1. Open System Settings → Privacy & Security → Accessibility\n' +
+            '2. Find "Time Tracker" in the list\n' +
+            '3. Enable the toggle\n' +
+            '4. Restart the app',
+    buttons: ['Open System Settings', 'OK'],
+    defaultId: 1,
+    cancelId: 1
+  }).then((result) => {
+    if (result.response === 0) {
+      shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+    }
+  });
 }
 
 // Get app name for a specific display by finding the frontmost window on that display
@@ -3566,103 +3564,44 @@ ipcMain.handle('check-screen-permission', async () => {
     if (process.platform !== 'darwin') {
       return {
         ok: true,
-        status: 'not_applicable',
         hasPermission: true,
-        platform: process.platform,
-        timestamp: new Date().toISOString()
+        platform: process.platform
       };
     }
     
-    // // Clear cache to force fresh check
-    // cachedScreenRecordingPermission = null;
-    // permissionCheckTimestamp = 0;
+    const hasPermission = await checkScreenRecordingPermission();
     
-    // Get the actual status from systemPreferences
-    const status = checkMacOSScreenRecordingPermission();
-    
-    // Also get boolean for backward compatibility
-    const hasPermission = status === 'granted';
-    
-    logInfo('Permissions', `IPC check-screen-permission: status=${status}, hasPermission=${hasPermission}`);
-
     return { 
       ok: true,
-      status: status, // 'granted', 'denied', 'not-determined', 'restricted', 'unknown', or 'not_applicable'
-      hasPermission: hasPermission, // Boolean for backward compatibility
-      platform: process.platform,
-      timestamp: new Date().toISOString()
+      hasPermission: hasPermission,
+      platform: process.platform
     };
   } catch (error) {
-    logWarn('Permissions', `check-screen-permission failed: ${error?.message || error}`);
+    logWarn('Permissions', `check-screen-permission error: ${error?.message}`);
     return { 
       ok: false, 
-      status: 'unknown',
       hasPermission: false,
-      error: error?.message || String(error),
-      timestamp: new Date().toISOString()
+      error: error?.message
     };
   }
 });
 
 ipcMain.handle('request-screen-permission', async () => {
   if (process.platform !== 'darwin') {
-    return {
-      ok: true,
-      status: 'not_applicable',
-      message: 'Not macOS'
-    };
+    return { ok: true, status: 'not_applicable' };
   }
 
-  logInfo('Permissions', 'IPC request-screen-permission called');
+  await requestScreenRecordingPermission();
+  return { ok: true };
+});
 
-  try {
-    const currentStatus = checkMacOSScreenRecordingPermission();
-
-    if (currentStatus === 'granted') {
-      return {
-        ok: true,
-        status: 'granted',
-        message: 'Permission already granted'
-      };
-    }
-
-    if (currentStatus === 'denied' || currentStatus === 'restricted') {
-      // Show dialog to guide user to System Settings
-      await requestScreenRecordingPermission();
-      return {
-        ok: false,
-        status: currentStatus,
-        message: 'Permission denied - user must enable in System Settings'
-      };
-    }
-
-    // Status is 'not-determined' or 'unknown' - trigger the prompt
-    logInfo('Permissions', 'Triggering permission prompt via desktopCapturer...');
-    const result = await triggerScreenRecordingPermissionPrompt();
-
-    if (result.granted) {
-      return {
-        ok: true,
-        status: 'granted',
-        message: 'Permission granted'
-      };
-    } else {
-      // If prompt fails or is dismissed, show the guidance dialog
-      await requestScreenRecordingPermission();
-      return {
-        ok: false,
-        status: 'denied',
-        message: 'Permission denied by user'
-      };
-    }
-  } catch (error) {
-    logError('Permissions', `request-screen-permission failed: ${error.message}`);
-    return {
-      ok: false,
-      status: 'error',
-      error: error.message
-    };
+ipcMain.handle('request-accessibility-permission', async () => {
+  if (process.platform !== 'darwin') {
+    return { ok: true, status: 'not_applicable' };
   }
+
+  await requestAccessibilityPermission();
+  return { ok: true };
 });
 
 // Diagnostic handler to check screen capture capabilities
