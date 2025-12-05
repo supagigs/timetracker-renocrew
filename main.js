@@ -676,39 +676,49 @@ function createWindow() {
   mainWindow.loadFile('renderer/screens/login.html');
   mainWindow.on('closed', () => { mainWindow = null; });
 
-  mainWindow.webContents.once('dom-ready', () => {
-    if(mainWindow && !mainWindow.isDestroyed()){
+  mainWindow.webContents.once('dom-ready', async () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      
+      // Handle macOS permissions BEFORE showing window
+      if (process.platform === 'darwin') {
+        if (isFirstLaunch()) {
+          // FIRST LAUNCH - Ask for permissions while window is hidden
+          try {
+            logInfo('FirstLaunch', 'FIRST LAUNCH DETECTED - Requesting permissions');         
+            logInfo('Permissions', 'Requesting screen recording permission...');
+
+            await requestScreenRecordingPermission();
+            logInfo('Permissions', 'Screen recording permission handled');
+            logInfo('Permissions', 'Requesting accessibility permission...');
+            
+            await requestAccessibilityPermission();
+            logInfo('Permissions', 'Accessibility permission handled');
+            
+            // Mark first launch as completed - permissions will NOT be asked again
+            markFirstLaunchCompleted();
+            logInfo('FirstLaunch', '==============================================');
+            logInfo('FirstLaunch', 'FIRST LAUNCH COMPLETE - Flag saved');
+            logInfo('FirstLaunch', 'Permissions will NOT be asked on next run');
+            logInfo('FirstLaunch', '==============================================');
+            
+          } catch (error) {
+            logWarn('FirstLaunch', 'Error during first launch permission handling:', error?.message);
+            // Still mark as completed even if there was an error
+            markFirstLaunchCompleted();
+          }
+        } else {
+          // SUBSEQUENT LAUNCHES - Skip permissions entirely
+          logInfo('Permissions', 'Not first launch - permissions already handled');
+          logInfo('Permissions', 'Skipping permission dialogs');
+        }
+      }
+      
+      // NOW show the window - permissions are already handled
       mainWindow.show();
-      logInfo('Window', 'Window displayed (DOM is Ready)')
+      logInfo('Window', 'Window displayed after permission handling');
     }
   });
-
-  // Check permissions on macOS after window is ready
-  if (process.platform === 'darwin') {
-    mainWindow.webContents.once('ready-to-show', () => {
-      // Delay permission checks slightly to ensure window is fully ready
-      setTimeout(async() => {
-        // On first launch, show comprehensive permissions dialog
-        if (isFirstLaunch()) {
-          logInfo('FirstLaunch', 'First launch detected - showing comprehensive permissions dialog');
-          setTimeout(() => {
-            showFirstLaunchPermissionsDialog();
-          }, 1500); // Show after window is visible
-        } else {
-          // On subsequent launches, only check and log permission status (don't show dialogs automatically)
-          logInfo('Permissions', 'Subsequent launch - checking permission status silently');
-        
-
-         // Just log the status, don't trigger prompts
-          const screenStatus = checkMacOSScreenRecordingPermission();
-          const accessibilityStatus = checkMacOSAccessibilityPermission();
-
-          logInfo('Permissions', `Screen Recording: ${screenStatus}`);
-          logInfo('Permissions', `Accessibility: ${accessibilityStatus}`);
-        }
-      }, 1000); // Wait 1 second after window is ready
-    });
-  }
+  
 
   const broadcastIdleState = (isIdle) => {
     try {
@@ -863,7 +873,7 @@ async function showFirstLaunchPermissionsDialog() {
   
   // Check current permission status
   const screenRecordingStatus = checkMacOSScreenRecordingPermission();
-  const accessibilityStatus = checkMacOSAccessibilityPermission();
+  const accessibilityStatus = await checkMacOSAccessibilityPermission();
   
   const screenRecordingGranted = screenRecordingStatus === 'granted';
   const accessibilityGranted = accessibilityStatus === 'authorized';
@@ -1051,7 +1061,7 @@ async function getActiveAppNameForDisplay(displayIndex = 0) {
     logInfo('ActiveWindow', `Getting app name for display ${displayIndex + 1} at center (${displayCenterX}, ${displayCenterY})`);
     
     // Try to use active-win first if available
-    const accessibilityStatus = checkMacOSAccessibilityPermission();
+    const accessibilityStatus = await checkMacOSAccessibilityPermission();
     if (accessibilityStatus === 'authorized') {
       try {
         if (!activeWindowModule) {
@@ -1283,7 +1293,7 @@ async function getActiveAppName() {
     
     // On macOS, check for Accessibility permission first
     if (process.platform === 'darwin') {
-      const accessibilityStatus = checkMacOSAccessibilityPermission();
+      const accessibilityStatus = await checkMacOSAccessibilityPermission();
       if (accessibilityStatus !== 'authorized') {
         logWarn('ActiveWindow', `Accessibility permission not granted (status: ${accessibilityStatus}). Will try AppleScript fallback.`);
         useAppleScriptFallback = true;
