@@ -750,10 +750,21 @@ function createWindow() {
   mainWindow.loadFile('renderer/screens/login.html');
   mainWindow.on('closed', () => { mainWindow = null; });
 
-  mainWindow.webContents.once('dom-ready', async () => {
+  // CRITICAL: On macOS, window MUST be visible BEFORE requesting permissions
+  // macOS rejects screen recording authorization if app appears "headless" or service-type
+  // Show window first, then request permissions after it's visible
+  mainWindow.once('ready-to-show', async () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
+      // Show window FIRST - this is required for macOS to grant permissions
+      mainWindow.show();
+      mainWindow.focus();
+      logInfo('Window', 'Window shown and focused - ready for permission requests');
       
-      // Handle macOS permissions BEFORE showing window
+      // Small delay to ensure window is fully visible and not considered "headless"
+      // macOS needs to see the app as a foreground GUI app, not a background service
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // NOW handle macOS permissions AFTER window is visible
       if (process.platform === 'darwin') {
         try {
           const { screenRecordingStatus, accessibilityStatus } = await ensureMacPermissionsOnStartup();
@@ -768,10 +779,6 @@ function createWindow() {
           logWarn('Permissions', `Startup permission preflight failed: ${error?.message || error}`);
         }
       }
-      
-      // NOW show the window - permissions are already handled
-      mainWindow.show();
-      logInfo('Window', 'Window displayed after permission handling');
     }
   });
   
@@ -3695,6 +3702,121 @@ ipcMain.handle('request-accessibility-permission', async () => {
   return { ok: true };
 });
 
+// Deep TCC database check - queries macOS TCC database directly
+// This helps verify what macOS actually sees in the permission database
+async function checkTCCDatabaseEntries(bundleId) {
+  if (process.platform !== 'darwin' || !bundleId) {
+    return { error: 'Not macOS or bundle ID missing' };
+  }
+
+  const result = {
+    bundleId: bundleId,
+    entries: [],
+    accessible: false,
+    error: null
+  };
+
+  try {
+    // TCC database paths
+    const tccPaths = [
+      `${process.env.HOME}/Library/Application Support/com.apple.TCC/TCC.db`,
+      '/Library/Application Support/com.apple.TCC/TCC.db'
+    ];
+
+    let tccPath = null;
+    for (const tccPathCandidate of tccPaths) {
+      if (fs.existsSync(tccPathCandidate)) {
+        tccPath = tccPathCandidate;
+        break;
+      }
+    }
+
+    if (!tccPath) {
+      result.error = 'TCC database not found (may require Full Disk Access)';
+      return result;
+    }
+
+    // Query TCC database for all entries related to this bundle ID
+    // This is the exact query from the instructions
+    const query = `SELECT client, service, allowed, prompt_count FROM access WHERE client LIKE '%${bundleId}%' OR client LIKE '%timetracker%';`;
+    const command = `sqlite3 "${tccPath}" "${query}"`;
+
+    try {
+      const output = execSync(command, {
+        encoding: 'utf8',
+        timeout: 3000,
+        stdio: 'pipe'
+      }).trim();
+
+      result.accessible = true;
+
+      if (output) {
+        // Parse the output - each line is a row
+        const lines = output.split('\n').filter(line => line.trim());
+        result.entries = lines.map(line => {
+          const parts = line.split('|');
+          if (parts.length >= 4) {
+            return {
+              client: parts[0],
+              service: parts[1],
+              allowed: parts[2] === '1' ? 'YES' : parts[2] === '0' ? 'NO' : parts[2],
+              promptCount: parts[3],
+              // Interpret allowed value
+              status: parts[2] === '1' ? 'ALLOWED' : parts[2] === '0' ? 'DENIED' : 'UNKNOWN'
+            };
+          }
+          return { raw: line };
+        });
+
+        // Check for specific services
+        const screenCaptureEntry = result.entries.find(e => 
+          e.service === 'kTCCServiceScreenCapture' || 
+          (e.service && e.service.includes('ScreenCapture'))
+        );
+        const accessibilityEntry = result.entries.find(e => 
+          e.service === 'kTCCServiceAccessibility' || 
+          (e.service && e.service.includes('Accessibility'))
+        );
+
+        result.screenCapture = screenCaptureEntry || { found: false };
+        result.accessibility = accessibilityEntry || { found: false };
+
+        // Analysis
+        if (result.entries.length === 0) {
+          result.analysis = 'NO ENTRIES FOUND - macOS never registered your app in TCC database';
+          result.recommendation = 'App may not be properly code-signed or Hardened Runtime may not be enabled';
+        } else if (screenCaptureEntry && screenCaptureEntry.allowed === '0') {
+          result.analysis = 'Screen Recording entry found but ALLOWED=0 (DENIED) - even if UI shows ON';
+          result.recommendation = 'This is a confirmed macOS bug. Try: sudo tccutil reset ScreenCapture';
+        } else if (!screenCaptureEntry) {
+          result.analysis = 'Screen Recording entry NOT FOUND in TCC database';
+          result.recommendation = 'Permission may not have been requested yet, or app is not properly signed';
+        } else if (screenCaptureEntry.allowed === '1') {
+          result.analysis = 'Screen Recording entry found and ALLOWED=1 (GRANTED)';
+          result.recommendation = 'Permission is correctly set in TCC database';
+        }
+      } else {
+        result.analysis = 'No entries found for this bundle ID';
+        result.recommendation = 'App may not be registered in TCC database - check code signing and Hardened Runtime';
+      }
+    } catch (execError) {
+      const errorMsg = String(execError.message || execError.stderr || execError.stdout || '');
+      if (errorMsg.includes('permission denied') || errorMsg.includes('database is locked')) {
+        result.error = 'TCC database access denied (this is EXPECTED and OK - app does not need Full Disk Access)';
+        result.accessible = false;
+      } else if (errorMsg.includes('command not found') || errorMsg.includes('sqlite3')) {
+        result.error = 'sqlite3 command not available';
+      } else {
+        result.error = `Query failed: ${errorMsg}`;
+      }
+    }
+  } catch (error) {
+    result.error = `Error checking TCC database: ${error?.message || error}`;
+  }
+
+  return result;
+}
+
 // Diagnostic handler to check screen capture capabilities
 ipcMain.handle('diagnose-screen-capture', async () => {
   // Clear cache for fresh diagnostic check
@@ -3870,6 +3992,16 @@ ipcMain.handle('diagnose-screen-capture', async () => {
       }
     } else {
       diagnostics.permissions = 'not_applicable';
+    }
+    
+    // Add TCC database check for macOS
+    if (process.platform === 'darwin' && bundleId) {
+      try {
+        diagnostics.tccDatabase = await checkTCCDatabaseEntries(bundleId);
+      } catch (tccError) {
+        diagnostics.tccDatabaseError = tccError?.message || String(tccError);
+        logWarn('DIAGNOSTIC', `TCC database check failed: ${tccError?.message}`);
+      }
     }
     
     logInfo('DIAGNOSTIC', JSON.stringify(diagnostics, null, 2));
