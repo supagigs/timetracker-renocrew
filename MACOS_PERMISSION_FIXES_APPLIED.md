@@ -279,9 +279,11 @@ codesign -d --entitlements - "Time Tracker.app"
 
 ### Check TCC Database (requires Full Disk Access for Terminal):
 ```bash
-sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
-"SELECT client,service,allowed,prompt_count FROM access WHERE client LIKE '%timetracker%';"
+sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+"SELECT client, service, allowed, prompt_count FROM access WHERE client LIKE '%timetracker%';"
 ```
+
+
 
 ### Reset Permissions:
 ```bash

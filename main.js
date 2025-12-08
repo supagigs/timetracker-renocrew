@@ -322,30 +322,38 @@ function checkMacOSScreenRecordingPermission() {
   let methodUsed = 'none';
   
   // METHOD 1: Try node-mac-permissions first (most reliable, checks TCC database directly)
+  // This is the recommended method per instructions
   try {
     const permissions = require('node-mac-permissions');
+    
+    // Use getStatus method (equivalent to hasScreenRecordingPermission)
     const status = permissions.getStatus('screenCapture');
-    logInfo('Permissions', `Screen recording permission (via node-mac-permissions): ${status}`);
+    logInfo('Permissions', `Screen recording permission check (via node-mac-permissions.getStatus): ${status}`);
     
     // Map node-mac-permissions status to Electron's format
     // Returns: 'authorized', 'denied', 'not-determined', or 'restricted'
     if (status === 'authorized') {
       finalStatus = 'granted';
-      methodUsed = 'node-mac-permissions';
+      methodUsed = 'node-mac-permissions.getStatus';
+      logInfo('Permissions', '✅ Screen recording permission is AUTHORIZED');
     } else if (status === 'denied') {
       finalStatus = 'denied';
-      methodUsed = 'node-mac-permissions';
+      methodUsed = 'node-mac-permissions.getStatus';
+      logWarn('Permissions', '❌ Screen recording permission is DENIED');
     } else if (status === 'not-determined') {
       finalStatus = 'not-determined';
-      methodUsed = 'node-mac-permissions';
+      methodUsed = 'node-mac-permissions.getStatus';
+      logInfo('Permissions', '⚠️ Screen recording permission is NOT DETERMINED (not requested yet)');
     } else if (status === 'restricted') {
       finalStatus = 'restricted';
-      methodUsed = 'node-mac-permissions';
+      methodUsed = 'node-mac-permissions.getStatus';
+      logWarn('Permissions', '🔒 Screen recording permission is RESTRICTED (by MDM/parental controls)');
     } else {
       logWarn('Permissions', `node-mac-permissions returned unknown status: ${status}`);
     }
   } catch (moduleError) {
     logInfo('Permissions', `node-mac-permissions not available: ${moduleError?.message || moduleError}`);
+    logInfo('Permissions', 'Falling back to alternative permission check methods...');
   }
   
   // METHOD 2: Try systemPreferences.getMediaAccessStatus (Electron's native method)
@@ -437,7 +445,7 @@ function checkMacOSScreenRecordingPermission() {
   return finalStatus;
 }
 
-// Trigger screen recording permission prompt by attempting to capture screen
+// Trigger screen recording permission prompt using node-mac-permissions
 async function triggerScreenRecordingPermissionPrompt() {
   if (process.platform !== 'darwin') {
     return { triggered: false, reason: 'not_macos' };
@@ -446,18 +454,51 @@ async function triggerScreenRecordingPermissionPrompt() {
   logInfo('Permissions', 'Triggering screen recording permission prompt...');
 
   try {
-    // Attempt to capture a screen - this will trigger the system prompt if needed
+    // METHOD 1: Try using node-mac-permissions library (recommended method)
+    try {
+      const permissions = require('node-mac-permissions');
+      
+      // Check current status first
+      const currentStatus = permissions.getStatus('screenCapture');
+      logInfo('Permissions', `Current screen recording permission status (before prompt): ${currentStatus}`);
+      
+      // If already authorized, return success
+      if (currentStatus === 'authorized') {
+        logInfo('Permissions', 'Screen recording permission already authorized');
+        return { triggered: false, granted: true, reason: 'already_authorized', status: currentStatus };
+      }
+      
+      // Request permission using node-mac-permissions
+      // Note: node-mac-permissions doesn't have askForScreenRecordingPermission in v2.5.0
+      // So we'll use desktopCapturer as fallback to trigger the system prompt
+      logInfo('Permissions', 'Using desktopCapturer to trigger system permission prompt...');
+    } catch (moduleError) {
+      logInfo('Permissions', `node-mac-permissions not available, using desktopCapturer method: ${moduleError?.message || moduleError}`);
+    }
+
+    // METHOD 2: Fallback - Attempt to capture a screen - this will trigger the system prompt if needed
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width: 150, height: 150 } // Small size for prompt trigger
     });
 
+    // Check status again after attempting to trigger
+    let finalStatus = 'unknown';
+    try {
+      const permissions = require('node-mac-permissions');
+      finalStatus = permissions.getStatus('screenCapture');
+      logInfo('Permissions', `Screen recording permission status (after prompt attempt): ${finalStatus}`);
+    } catch (e) {
+      // node-mac-permissions not available, use sources as indicator
+      logInfo('Permissions', 'node-mac-permissions not available for status check');
+    }
+
     if (sources && sources.length > 0) {
-      logInfo('Permissions', `Permission prompt triggered successfully - ${sources.length} source(s) available`);
-      return { triggered: true, granted: true, sources: sources.length };
+      logInfo('Permissions', `Permission prompt triggered successfully - ${sources.length} source(s) available, status: ${finalStatus}`);
+      return { triggered: true, granted: true, sources: sources.length, status: finalStatus };
     } else {
-      logWarn('Permissions', 'Permission prompt triggered but no sources returned');
-      return { triggered: true, granted: false, sources: 0 };
+      logWarn('Permissions', `Permission prompt triggered but no sources returned, status: ${finalStatus}`);
+      return { triggered: true, granted: false, sources: 0, status: finalStatus };
     }
   } catch (error) {
     logError('Permissions', `Failed to trigger permission prompt: ${error.message}`);
@@ -1114,32 +1155,70 @@ async function ensureMacPermissionsOnStartup() {
     };
   }
 
+  logInfo('Permissions', '═══════════════════════════════════════════════════════════');
   logInfo('Permissions', 'Running macOS startup permission preflight');
+  logInfo('Permissions', '═══════════════════════════════════════════════════════════');
+  
+  const bundleId = getMacOSBundleId();
+  const appName = app.getName();
+  const isPackaged = app.isPackaged;
+  
+  logInfo('Permissions', `App Name: ${appName}`);
+  logInfo('Permissions', `Bundle ID: ${bundleId || 'unknown'}`);
+  logInfo('Permissions', `Is Packaged: ${isPackaged}`);
+  logInfo('Permissions', '');
 
   let screenRecordingStatus = 'unknown';
   let accessibilityStatus = 'unknown';
   let screenPrompted = false;
   let accessibilityPrompted = false;
 
+  // Check screen recording permission with detailed logging
+  logInfo('Permissions', 'Checking screen recording permission...');
   try {
     screenRecordingStatus = checkMacOSScreenRecordingPermission();
+    logInfo('Permissions', `Screen recording permission status: ${screenRecordingStatus}`);
   } catch (error) {
-    logWarn('Permissions', `Startup check: failed to read screen recording status: ${error?.message || error}`);
+    logError('Permissions', `Failed to check screen recording status: ${error?.message || error}`);
+    logError('Permissions', error.stack || 'No stack trace available');
   }
 
+  // Check accessibility permission with detailed logging
+  logInfo('Permissions', 'Checking accessibility permission...');
   try {
     accessibilityStatus = checkMacOSAccessibilityPermission();
+    logInfo('Permissions', `Accessibility permission status: ${accessibilityStatus}`);
   } catch (error) {
-    logWarn('Permissions', `Startup check: failed to read accessibility status: ${error?.message || error}`);
+    logError('Permissions', `Failed to check accessibility status: ${error?.message || error}`);
+    logError('Permissions', error.stack || 'No stack trace available');
   }
+
+  logInfo('Permissions', '');
 
   // Trigger screen recording prompt immediately if missing
   if (screenRecordingStatus !== 'granted') {
+    logInfo('Permissions', `Screen recording permission is ${screenRecordingStatus} - requesting permission...`);
     const promptResult = await triggerScreenRecordingPermissionPrompt();
     screenPrompted = !!promptResult?.triggered;
+    
+    logInfo('Permissions', `Permission prompt result: triggered=${promptResult?.triggered}, granted=${promptResult?.granted}, status=${promptResult?.status || 'unknown'}`);
+    
     if (promptResult?.granted) {
       screenRecordingStatus = 'granted';
+      logInfo('Permissions', '✅ Screen recording permission granted!');
+    } else if (promptResult?.status) {
+      // Update status based on what node-mac-permissions reports
+      if (promptResult.status === 'authorized') {
+        screenRecordingStatus = 'granted';
+      } else {
+        screenRecordingStatus = promptResult.status === 'denied' ? 'denied' : 
+                                promptResult.status === 'not-determined' ? 'not-determined' : 
+                                promptResult.status === 'restricted' ? 'restricted' : screenRecordingStatus;
+      }
+      logInfo('Permissions', `Permission status after prompt: ${screenRecordingStatus}`);
     }
+  } else {
+    logInfo('Permissions', '✅ Screen recording permission already granted');
   }
 
   // Trigger Accessibility prompt immediately if missing
@@ -1154,7 +1233,27 @@ async function ensureMacPermissionsOnStartup() {
     }
   }
 
-  logInfo('Permissions', `Startup permission summary - Screen: ${screenRecordingStatus}, Accessibility: ${accessibilityStatus}, Prompted: screen=${screenPrompted}, accessibility=${accessibilityPrompted}`);
+  logInfo('Permissions', '');
+  logInfo('Permissions', '═══════════════════════════════════════════════════════════');
+  logInfo('Permissions', 'Startup Permission Summary:');
+  logInfo('Permissions', `  Screen Recording: ${screenRecordingStatus} ${screenRecordingStatus === 'granted' ? '✅' : '❌'}`);
+  logInfo('Permissions', `  Accessibility: ${accessibilityStatus} ${accessibilityStatus === 'authorized' ? '✅' : '❌'}`);
+  logInfo('Permissions', `  Screen Prompted: ${screenPrompted ? 'Yes' : 'No'}`);
+  logInfo('Permissions', `  Accessibility Prompted: ${accessibilityPrompted ? 'Yes' : 'No'}`);
+  
+  if (screenRecordingStatus !== 'granted' || accessibilityStatus !== 'authorized') {
+    logWarn('Permissions', '');
+    logWarn('Permissions', '⚠️  Some permissions are missing. The app may not function correctly.');
+    logWarn('Permissions', 'Please grant the required permissions in System Settings:');
+    if (screenRecordingStatus !== 'granted') {
+      logWarn('Permissions', '  → System Settings → Privacy & Security → Screen Recording');
+    }
+    if (accessibilityStatus !== 'authorized') {
+      logWarn('Permissions', '  → System Settings → Privacy & Security → Accessibility');
+    }
+  }
+  
+  logInfo('Permissions', '═══════════════════════════════════════════════════════════');
 
   return { screenRecordingStatus, accessibilityStatus, screenPrompted, accessibilityPrompted };
 }

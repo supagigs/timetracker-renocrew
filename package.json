@@ -87,8 +87,8 @@
    ],
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
-    "entitlements": "./entitlements.mac.plist",
-    "entitlementsInherit": "./entitlements.mac.plist",
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist",
     "extendInfo": {
     "NSCameraUsageDescription": "This app needs camera access for screenshot functionality.",
     "NSMicrophoneUsageDescription": "This app does not use the microphone.",
