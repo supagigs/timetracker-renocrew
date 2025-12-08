@@ -87,12 +87,25 @@ function checkMacOSAccessibilityPermission() {
       logInfo('Permissions', 'node-mac-permissions not available, using fallback method');
     }
     
-    // METHOD 2: Try TCC database query (most reliable fallback)
+    // Normalize any earlier value
+    if (finalStatus === 'granted') {
+      finalStatus = 'authorized';
+    }
+    
+    // METHOD 2: Electron API that queries accessibility trust without prompting
+    if (finalStatus === 'unknown' && typeof systemPreferences.isTrustedAccessibilityClient === 'function') {
+      const trusted = systemPreferences.isTrustedAccessibilityClient(false);
+      finalStatus = trusted ? 'authorized' : 'denied';
+      methodUsed = 'systemPreferences.isTrustedAccessibilityClient';
+      logInfo('Permissions', `Accessibility permission (via systemPreferences): ${finalStatus}`);
+    }
+    
+    // METHOD 3: Try TCC database query (most reliable fallback)
     if (finalStatus === 'unknown' && bundleId) {
       try {
         const tccStatus = checkTCCDatabasePermission(bundleId, 'accessibility');
         if (tccStatus !== 'unknown') {
-          finalStatus = tccStatus;
+          finalStatus = tccStatus === 'granted' ? 'authorized' : tccStatus;
           methodUsed = 'TCC-database-query';
           logInfo('Permissions', `Accessibility permission (via TCC database): ${finalStatus}`);
         }
@@ -101,7 +114,7 @@ function checkMacOSAccessibilityPermission() {
       }
     }
     
-    // METHOD 3: Fallback - Use a silent check that doesn't trigger permission prompts
+    // METHOD 4: Fallback - Use a silent check that doesn't trigger permission prompts
     // We check if we can query System Events without actually triggering a prompt
     if (finalStatus === 'unknown') {
       try {
@@ -284,11 +297,11 @@ function checkMacOSScreenRecordingPermission() {
   }
   
   // Return cached value if still valid
-  // const now = Date.now();
-  // if (cachedScreenRecordingPermission !== null && (now - permissionCheckTimestamp) < PERMISSION_CACHE_DURATION) {
-  //   logInfo('Permissions', `Screen recording permission status (cached): ${cachedScreenRecordingPermission}`);
-  //   return cachedScreenRecordingPermission;
-  // }
+  const now = Date.now();
+  if (cachedScreenRecordingPermission !== null && (now - permissionCheckTimestamp) < PERMISSION_CACHE_DURATION) {
+    logInfo('Permissions', `Screen recording permission status (cached): ${cachedScreenRecordingPermission}`);
+    return cachedScreenRecordingPermission;
+  }
   
   // Log context for debugging
   const bundleId = getMacOSBundleId();
@@ -381,10 +394,6 @@ function checkMacOSScreenRecordingPermission() {
     finalStatus = 'granted';
     logInfo('Permissions', 'Normalized final status from "authorized" to "granted"');
   }
-
-  // Cache the status
-  cachedScreenRecordingPermission = finalStatus;
-  permissionCheckTimestamp = Date.now();
 
   // If we still don't have a status, log detailed troubleshooting
   if (finalStatus === 'unknown' || finalStatus === 'denied') {
@@ -532,9 +541,66 @@ function getActiveAppNameViaAppleScript() {
   });
 }
 
+// Resolve the active window using @paymoapp/active-window (preferred on macOS) or active-win
+async function getActiveWindowDetails(preferPaymoFirst = false) {
+  const providers = [];
+  
+  // Prefer the Paymo fork on macOS because it better handles permission edge cases
+  if (process.platform === 'darwin') {
+    if (preferPaymoFirst) {
+      providers.push('paymo');
+      providers.push('active-win');
+    } else {
+      providers.push('active-win');
+      providers.push('paymo');
+    }
+  } else {
+    providers.push('active-win');
+  }
+  
+  for (const provider of providers) {
+    try {
+      let fn = null;
+      if (provider === 'paymo') {
+        if (!paymoActiveWindowModule) {
+          paymoActiveWindowModule = await import('@paymoapp/active-window');
+          logInfo('ActiveWindow', '@paymoapp/active-window loaded');
+        }
+        fn = (paymoActiveWindowModule && paymoActiveWindowModule.getActiveWindow) ||
+             (paymoActiveWindowModule && paymoActiveWindowModule.activeWindow) ||
+             (paymoActiveWindowModule && paymoActiveWindowModule.default) ||
+             paymoActiveWindowModule;
+      } else {
+        if (!activeWindowModule) {
+          activeWindowModule = await import('active-win');
+          logInfo('ActiveWindow', 'active-win loaded');
+        }
+        fn = (activeWindowModule && activeWindowModule.activeWindow) ||
+             (activeWindowModule && activeWindowModule.default) ||
+             activeWindowModule;
+      }
+      
+      if (typeof fn === 'function') {
+        const result = await fn();
+        if (result) {
+          logInfo('ActiveWindow', `${provider === 'paymo' ? '@paymoapp/active-window' : 'active-win'} returned result successfully`);
+          return { result, provider };
+        }
+      } else {
+        logWarn('ActiveWindow', `${provider === 'paymo' ? '@paymoapp/active-window' : 'active-win'} export not a function`);
+      }
+    } catch (error) {
+      logWarn('ActiveWindow', `${provider === 'paymo' ? '@paymoapp/active-window' : 'active-win'} failed: ${error.message}`);
+    }
+  }
+  
+  return { result: null, provider: null };
+}
+
 // ============ GLOBAL STATE ============
 const IDLE_THRESHOLD_SECONDS = 30;
 let activeWindowModule = null;
+let paymoActiveWindowModule = null;
 let mainWindow = null;
 let sharp = null;   //lazy load for first screenshot only
 let isTimerActive = false;
@@ -572,6 +638,10 @@ const screenshotBatchQueue = [];
 let isBatchUploading = false;
 let batchFlushInterval = null;
 let isFlushTimerActive = false;
+// Cache for macOS permission checks to avoid repeated expensive lookups
+let cachedScreenRecordingPermission = null;
+let permissionCheckTimestamp = 0;
+const PERMISSION_CACHE_DURATION = 5000; // Cache for 5 seconds
 
 function scheduleBatchFlush() {
   // If a flush timer is already scheduled/active or there is nothing to process, do nothing.
@@ -681,35 +751,17 @@ function createWindow() {
       
       // Handle macOS permissions BEFORE showing window
       if (process.platform === 'darwin') {
-        if (isFirstLaunch()) {
-          // FIRST LAUNCH - Ask for permissions while window is hidden
-          try {
-            logInfo('FirstLaunch', 'FIRST LAUNCH DETECTED - Requesting permissions');         
-            logInfo('Permissions', 'Requesting screen recording permission...');
-
-            await requestScreenRecordingPermission();
-            logInfo('Permissions', 'Screen recording permission handled');
-            logInfo('Permissions', 'Requesting accessibility permission...');
-            
-            await requestAccessibilityPermission();
-            logInfo('Permissions', 'Accessibility permission handled');
-            
-            // Mark first launch as completed - permissions will NOT be asked again
-            markFirstLaunchCompleted();
-            logInfo('FirstLaunch', '==============================================');
-            logInfo('FirstLaunch', 'FIRST LAUNCH COMPLETE - Flag saved');
-            logInfo('FirstLaunch', 'Permissions will NOT be asked on next run');
-            logInfo('FirstLaunch', '==============================================');
-            
-          } catch (error) {
-            logWarn('FirstLaunch', 'Error during first launch permission handling:', error?.message);
-            // Still mark as completed even if there was an error
-            markFirstLaunchCompleted();
+        try {
+          const { screenRecordingStatus, accessibilityStatus } = await ensureMacPermissionsOnStartup();
+          if (screenRecordingStatus !== 'granted' || accessibilityStatus !== 'authorized') {
+            logWarn('Permissions', `Startup permissions incomplete - screen: ${screenRecordingStatus}, accessibility: ${accessibilityStatus}`);
           }
-        } else {
-          // SUBSEQUENT LAUNCHES - Skip permissions entirely
-          logInfo('Permissions', 'Not first launch - permissions already handled');
-          logInfo('Permissions', 'Skipping permission dialogs');
+          if (isFirstLaunch()) {
+            markFirstLaunchCompleted();
+            logInfo('FirstLaunch', 'First launch flag stored after permission preflight');
+          }
+        } catch (error) {
+          logWarn('Permissions', `Startup permission preflight failed: ${error?.message || error}`);
         }
       }
       
@@ -1040,6 +1092,62 @@ async function requestAccessibilityPermission() {
   });
 }
 
+// Run on app startup (before showing any UI) to check and trigger macOS prompts immediately
+async function ensureMacPermissionsOnStartup() {
+  if (process.platform !== 'darwin') {
+    return {
+      screenRecordingStatus: 'not_applicable',
+      accessibilityStatus: 'not_applicable',
+      screenPrompted: false,
+      accessibilityPrompted: false
+    };
+  }
+
+  logInfo('Permissions', 'Running macOS startup permission preflight');
+
+  let screenRecordingStatus = 'unknown';
+  let accessibilityStatus = 'unknown';
+  let screenPrompted = false;
+  let accessibilityPrompted = false;
+
+  try {
+    screenRecordingStatus = checkMacOSScreenRecordingPermission();
+  } catch (error) {
+    logWarn('Permissions', `Startup check: failed to read screen recording status: ${error?.message || error}`);
+  }
+
+  try {
+    accessibilityStatus = checkMacOSAccessibilityPermission();
+  } catch (error) {
+    logWarn('Permissions', `Startup check: failed to read accessibility status: ${error?.message || error}`);
+  }
+
+  // Trigger screen recording prompt immediately if missing
+  if (screenRecordingStatus !== 'granted') {
+    const promptResult = await triggerScreenRecordingPermissionPrompt();
+    screenPrompted = !!promptResult?.triggered;
+    if (promptResult?.granted) {
+      screenRecordingStatus = 'granted';
+    }
+  }
+
+  // Trigger Accessibility prompt immediately if missing
+  if (accessibilityStatus !== 'authorized' && typeof systemPreferences.isTrustedAccessibilityClient === 'function') {
+    try {
+      const trusted = systemPreferences.isTrustedAccessibilityClient(true);
+      accessibilityPrompted = true;
+      accessibilityStatus = trusted ? 'authorized' : (accessibilityStatus === 'unknown' ? 'denied' : accessibilityStatus);
+      logInfo('Permissions', `Accessibility trust prompt displayed. New status: ${accessibilityStatus}`);
+    } catch (error) {
+      logWarn('Permissions', `Startup Accessibility prompt failed: ${error?.message || error}`);
+    }
+  }
+
+  logInfo('Permissions', `Startup permission summary - Screen: ${screenRecordingStatus}, Accessibility: ${accessibilityStatus}, Prompted: screen=${screenPrompted}, accessibility=${accessibilityPrompted}`);
+
+  return { screenRecordingStatus, accessibilityStatus, screenPrompted, accessibilityPrompted };
+}
+
 // Get app name for a specific display by finding the frontmost window on that display
 async function getActiveAppNameForDisplay(displayIndex = 0) {
   if (process.platform !== 'darwin') {
@@ -1060,41 +1168,30 @@ async function getActiveAppNameForDisplay(displayIndex = 0) {
     
     logInfo('ActiveWindow', `Getting app name for display ${displayIndex + 1} at center (${displayCenterX}, ${displayCenterY})`);
     
-    // Try to use active-win first if available
+    // Try to use @paymoapp/active-window first (better macOS handling), then active-win
     const accessibilityStatus = await checkMacOSAccessibilityPermission();
     if (accessibilityStatus === 'authorized') {
       try {
-        if (!activeWindowModule) {
-          activeWindowModule = await import('active-win');
-        }
-        
-        const fn =
-          (activeWindowModule && activeWindowModule.activeWindow) ||
-          (activeWindowModule && activeWindowModule.default) ||
-          activeWindowModule;
-        
-        if (typeof fn === 'function') {
-          const result = await fn();
-          if (result && result.bounds) {
-            // Check if the window is on the target display
-            const windowCenterX = result.bounds.x + (result.bounds.width / 2);
-            const windowCenterY = result.bounds.y + (result.bounds.height / 2);
-            
-            // Check if window center is within the target display bounds
-            if (windowCenterX >= targetDisplay.bounds.x &&
-                windowCenterX < targetDisplay.bounds.x + targetDisplay.bounds.width &&
-                windowCenterY >= targetDisplay.bounds.y &&
-                windowCenterY < targetDisplay.bounds.y + targetDisplay.bounds.height) {
-              // Window is on target display, process it
-              return processActiveWindowResult(result);
-            } else {
-              // Window is on a different display, try AppleScript to get windows on target display
-              logInfo('ActiveWindow', `active-win window is on different display, using AppleScript for display ${displayIndex + 1}`);
-            }
+        const { result, provider } = await getActiveWindowDetails(true);
+        if (result && result.bounds) {
+          // Check if the window is on the target display
+          const windowCenterX = result.bounds.x + (result.bounds.width / 2);
+          const windowCenterY = result.bounds.y + (result.bounds.height / 2);
+          
+          // Check if window center is within the target display bounds
+          if (windowCenterX >= targetDisplay.bounds.x &&
+              windowCenterX < targetDisplay.bounds.x + targetDisplay.bounds.width &&
+              windowCenterY >= targetDisplay.bounds.y &&
+              windowCenterY < targetDisplay.bounds.y + targetDisplay.bounds.height) {
+            // Window is on target display, process it
+            return processActiveWindowResult(result);
+          } else {
+            // Window is on a different display, try AppleScript to get windows on target display
+            logInfo('ActiveWindow', `${provider || 'active window provider'} window is on different display, using AppleScript for display ${displayIndex + 1}`);
           }
         }
       } catch (error) {
-        logWarn('ActiveWindow', `active-win failed for display ${displayIndex + 1}, using AppleScript: ${error.message}`);
+        logWarn('ActiveWindow', `Active window provider failed for display ${displayIndex + 1}, using AppleScript: ${error.message}`);
       }
     }
     
@@ -1290,6 +1387,7 @@ async function getActiveAppName() {
     // Try active-win first (provides more detailed information)
     let result = null;
     let useAppleScriptFallback = false;
+    const preferPaymo = process.platform === 'darwin';
     
     // On macOS, check for Accessibility permission first
     if (process.platform === 'darwin') {
@@ -1305,46 +1403,25 @@ async function getActiveAppName() {
     // Try active-win if we have permission or if not on macOS
     if (!useAppleScriptFallback) {
       try {
-        // load module if not loaded
-        if (!activeWindowModule) {
-          activeWindowModule = await import('active-win');
-          logInfo('ActiveWindow', 'active-win loaded');
-        }
-
-        // handle different exports across versions:
-        //  - newer: activeWindow()
-        //  - older: default()
-        //  - some bundles export the function itself
-        const fn =
-          (activeWindowModule && activeWindowModule.activeWindow) ||
-          (activeWindowModule && activeWindowModule.default) ||
-          activeWindowModule;
-
-        if (typeof fn === 'function') {
-          result = await fn();
-          if (result) {
-            logInfo('ActiveWindow', 'active-win returned result successfully');
-            
-            // On Mac, if active-win succeeded but didn't return a window title, try AppleScript to get it
-            if (process.platform === 'darwin' && (!result.title || result.title.trim() === '')) {
-              logInfo('ActiveWindow', 'active-win returned no window title, trying AppleScript to get title');
-              const appleScriptResult = await getActiveAppNameViaAppleScript();
-              if (appleScriptResult && appleScriptResult.title && appleScriptResult.title.trim() !== '') {
-                // Merge the window title from AppleScript with the result from active-win
-                result.title = appleScriptResult.title;
-                logInfo('ActiveWindow', `Merged window title from AppleScript: ${result.title}`);
-              }
+        const { result: providerResult, provider } = await getActiveWindowDetails(preferPaymo);
+        result = providerResult;
+        if (result) {
+          // On Mac, if provider succeeded but didn't return a window title, try AppleScript to get it
+          if (process.platform === 'darwin' && (!result.title || result.title.trim() === '')) {
+            logInfo('ActiveWindow', `${provider || 'active window provider'} returned no window title, trying AppleScript to get title`);
+            const appleScriptResult = await getActiveAppNameViaAppleScript();
+            if (appleScriptResult && appleScriptResult.title && appleScriptResult.title.trim() !== '') {
+              // Merge the window title from AppleScript with the result from active-win
+              result.title = appleScriptResult.title;
+              logInfo('ActiveWindow', `Merged window title from AppleScript: ${result.title}`);
             }
-          } else {
-            logWarn('ActiveWindow', 'active-win returned no result, will try AppleScript fallback');
-            useAppleScriptFallback = true;
           }
         } else {
-          logWarn('ActiveWindow', 'active-win export not a function, will try AppleScript fallback');
+          logWarn('ActiveWindow', 'Active window provider returned no result, will try AppleScript fallback');
           useAppleScriptFallback = true;
         }
       } catch (error) {
-        logWarn('ActiveWindow', `active-win failed: ${error.message}, will try AppleScript fallback`);
+        logWarn('ActiveWindow', `Active window provider failed: ${error.message}, will try AppleScript fallback`);
         useAppleScriptFallback = true;
       }
     }
