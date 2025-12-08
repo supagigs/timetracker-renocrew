@@ -55,18 +55,49 @@ Then restart the app and grant permission again.
 
 **Warning:** This will reset ALL Screen Recording permissions for this Bundle ID.
 
-### 5. **Permission Check Method Not Working**
+### 5. **TCC Database Access Denied (This is OK!)**
+If you see "permission denied" when accessing the TCC database, **this is EXPECTED and NORMAL**. The app does NOT need Full Disk Access to function.
+
+**What this means:**
+- The app tried to read the TCC database directly to check permission status
+- macOS denied access to the TCC database file (which requires Full Disk Access)
+- **This does NOT affect the app's functionality** - it will use other methods to check permissions
+
+**What the app does:**
+1. Tries to read TCC database (may fail with "permission denied" - this is OK)
+2. Falls back to `node-mac-permissions` (if installed)
+3. Falls back to `systemPreferences.getMediaAccessStatus('screen')`
+4. Verifies with `desktopCapturer.getSources()`
+
+**You do NOT need to:**
+- Grant Full Disk Access to the app
+- Grant Full Disk Access to Terminal
+- Do anything special - the app handles this automatically
+
+**The app only needs:**
+- ✅ Screen Recording permission
+- ✅ Accessibility permission (for window/app detection)
+
+**If you see this in logs:**
+```
+TCC database is inaccessible (permission denied) - this is EXPECTED and OK
+The app does NOT need Full Disk Access to function. Using alternative permission check methods.
+```
+This is **normal** and you can safely ignore it.
+
+### 6. **Permission Check Method Not Working**
 The app uses multiple methods to check permission:
 1. `node-mac-permissions` (most reliable)
 2. `systemPreferences.getMediaAccessStatus('screen')` (Electron native)
-3. Verification via `desktopCapturer.getSources()`
+3. TCC database query (may fail with permission denied - this is OK)
+4. Verification via `desktopCapturer.getSources()`
 
 **If `node-mac-permissions` is not installed:**
 ```bash
 npm install node-mac-permissions
 ```
 
-### 6. **App Running in Different Context**
+### 7. **App Running in Different Context**
 The app might be running with different permissions than expected (e.g., from different location, different user, etc.)
 
 **Check:**

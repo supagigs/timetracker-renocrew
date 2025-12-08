@@ -230,7 +230,8 @@ function checkTCCDatabasePermission(bundleId, service) {
     }
 
     if (!tccPath) {
-      logInfo('Permissions', 'TCC database not found - may require Full Disk Access');
+      logInfo('Permissions', 'TCC database not found - this is OK, will use other permission check methods');
+      logInfo('Permissions', 'Note: The app does NOT need Full Disk Access to function');
       return 'unknown';
     }
 
@@ -274,11 +275,14 @@ function checkTCCDatabasePermission(bundleId, service) {
       const errorMsg = String(execError.message || execError.stderr || execError.stdout || '');
       // If sqlite3 is not available or database is locked, that's okay - we'll use other methods
       if (errorMsg.includes('command not found') || errorMsg.includes('sqlite3')) {
-        logInfo('Permissions', 'sqlite3 command not available - TCC database check skipped');
+        logInfo('Permissions', 'sqlite3 command not available - TCC database check skipped (will use other methods)');
       } else if (errorMsg.includes('database is locked') || errorMsg.includes('permission denied')) {
-        logInfo('Permissions', 'TCC database is locked or inaccessible - may require Full Disk Access');
+        // This is EXPECTED and OK - the app doesn't need Full Disk Access to function
+        // We'll use other methods (node-mac-permissions, systemPreferences) to check permissions
+        logInfo('Permissions', `TCC database is inaccessible (permission denied) - this is EXPECTED and OK`);
+        logInfo('Permissions', 'The app does NOT need Full Disk Access to function. Using alternative permission check methods.');
       } else {
-        logWarn('Permissions', `TCC database query failed: ${errorMsg}`);
+        logWarn('Permissions', `TCC database query failed: ${errorMsg} (will use other methods)`);
       }
       return 'unknown';
     }
@@ -3856,9 +3860,13 @@ ipcMain.handle('diagnose-screen-capture', async () => {
         diagnostics.troubleshooting.push('Permission is RESTRICTED by system policy (parental controls or MDM).');
         diagnostics.troubleshooting.push('Contact your system administrator to enable Screen Recording permission.');
       } else {
-        diagnostics.recommendation = 'Permission status is unknown. Check System Settings → Privacy & Security → Screen Recording.';
-        diagnostics.troubleshooting.push('Permission status could not be determined.');
+        // Status is 'unknown' - could be due to TCC database access issues (which is OK)
+        diagnostics.recommendation = 'Permission status is unknown. This may be because TCC database access was denied (which is EXPECTED and OK).';
+        diagnostics.troubleshooting.push('Permission status could not be determined via TCC database.');
+        diagnostics.troubleshooting.push('NOTE: If you see "permission denied" when accessing TCC database, this is NORMAL.');
+        diagnostics.troubleshooting.push('The app does NOT need Full Disk Access to function - it only needs Screen Recording permission.');
         diagnostics.troubleshooting.push('Check System Settings → Privacy & Security → Screen Recording manually.');
+        diagnostics.troubleshooting.push('Make sure "Time Tracker" is enabled in Screen Recording permissions.');
       }
     } else {
       diagnostics.permissions = 'not_applicable';
