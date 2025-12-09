@@ -108,11 +108,71 @@ runtime=Hardened Runtime
 - **Hardened Runtime enabled**: Works with ad-hoc signatures for development
 - **No code signing errors**: electron-builder handles it automatically
 
+## Quick Fix: Sign Existing App in /Applications
+
+If you have an app already installed in `/Applications/` that was built before the fix, you can manually sign it:
+
+**⚠️ Important:** You must run these commands from your **project root directory** (where `build/entitlements.mac.plist` exists).
+
+### Step 1: Navigate to Project Root
+
+```bash
+cd "/path/to/your/project/Supatimetracker"
+```
+
+Or if you're already in the project:
+```bash
+# Verify you're in the right place
+ls build/entitlements.mac.plist
+# Should show: build/entitlements.mac.plist
+```
+
+### Option A: Use the Signing Script (Recommended)
+
+From your project root directory:
+
+```bash
+chmod +x scripts/sign-mac-app.sh
+./scripts/sign-mac-app.sh "/Applications/Time Tracker.app"
+```
+
+### Option B: Manual codesign Command
+
+From your project root directory:
+
+```bash
+codesign --force --deep --sign - \
+  --entitlements build/entitlements.mac.plist \
+  --options runtime \
+  "/Applications/Time Tracker.app"
+```
+
+**Alternative:** If you want to run from any directory, use the absolute path to entitlements:
+
+```bash
+# Replace /path/to/project with your actual project path
+codesign --force --deep --sign - \
+  --entitlements "/path/to/project/Supatimetracker/build/entitlements.mac.plist" \
+  --options runtime \
+  "/Applications/Time Tracker.app"
+```
+
+### Verify After Signing
+
+```bash
+# Check entitlements are now embedded
+codesign -d --entitlements - "/Applications/Time Tracker.app"
+
+# Should now show the entitlements XML!
+```
+
+**Note:** After manually signing, you may need to quit and restart the app for the entitlements to take effect.
+
 ## Alternative Solutions
 
 ### Option 2: Manual Signing After Build
 
-If you need to manually sign after build (not recommended for regular use):
+If you need to manually sign a newly built app (not recommended for regular use):
 
 ```bash
 # Sign the app with entitlements
@@ -167,10 +227,16 @@ If you have an Apple Developer account and want to distribute the app:
 
 ### Entitlements Still Not Showing
 
+**If checking an app in `/Applications/`:**
+- The app was likely built before the fix was applied
+- **Solution:** Manually sign the existing app (see "Quick Fix: Sign Existing App" section above)
+- Or rebuild and reinstall the app
+
+**If checking a newly built app:**
 1. **Verify the build completed successfully** - Check for any errors during build
 2. **Check entitlements file exists** - Ensure `build/entitlements.mac.plist` is present
 3. **Verify code signing occurred** - Run `codesign -dv "dist/mac/Time Tracker.app"` to see signing info
-4. **Clean and rebuild** - Sometimes cached builds can cause issues
+4. **Clean and rebuild** - Sometimes cached builds can cause issues: `rm -rf dist/ && npm run build`
 
 ### Code Signing Errors
 
