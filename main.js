@@ -2230,15 +2230,15 @@ async function insertScreenshotToDatabase(
       user_email: normalizedEmail,
       session_id: sessionId,
       screenshot_data: publicUrl,
-      captured_at: timestamp
+      captured_at: timestamp,
+      // Attempt to set captured_idle when the column exists; fallback logic below will retry without it if missing
+      captured_idle: Boolean(isIdle)
     };
     
-    // Add optional columns if they exist (app_name, captured_idle)
+    // Add optional app_name if provided; fallback logic below handles column absence
     if (appName) {
       insertData.app_name = appName;
     }
-    // Note: captured_idle might not exist in all schemas, so we'll try without it first
-    // If the insert fails due to missing column, we'll retry without it
     
     const { error: legacyErr } = await supabase.from('screenshots').insert(insertData);
 
@@ -3092,6 +3092,14 @@ ipcMain.handle('get-system-idle-state', (event, thresholdSeconds) => {
   } catch (e) {
     logError('IPC', 'Error getting idle state', e);
     return 'unknown';
+  }
+});
+
+ipcMain.on('update-idle-state', (_event, isIdle) => {
+  try {
+    isUserIdle = Boolean(isIdle);
+  } catch (e) {
+    logError('IPC', `Failed to update idle state: ${e?.message || e}`);
   }
 });
 

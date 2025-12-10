@@ -1191,52 +1191,75 @@ select:disabled {
 
 .screenshots-container {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 18px;
 }
 
-.screenshot-item {
-  padding: 16px;
+.screenshot-card {
+  border: 1px solid #e5b7b7;
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 12px;
+  width: 100%;
+  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.06);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 
-.screenshot-item--idle {
+.screenshot-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.12);
+}
+
+.screenshot-card--idle {
   border: 1px solid rgba(220, 38, 38, 0.65);
-  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
-}
-
-.screenshot-app {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-
-.screenshot-flag {
-  display: inline-block;
-  margin-bottom: 6px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(220, 38, 38, 0.12);
-  color: rgba(185, 28, 28, 0.95);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.12);
 }
 
 .screenshot-image {
   width: 100%;
-  height: 200px;
-  object-fit: contain;
-  background: var(--surface-muted);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  margin-bottom: 12px;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #e5b7b7;
+  background: #f8fafc;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .screenshot-image:hover {
-  transform: scale(1.02);
-  box-shadow: var(--shadow-card);
+  transform: scale(1.01);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+}
+
+.screenshot-meta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #1f2937;
+}
+
+.screenshot-timestamp {
+  font-weight: 600;
+}
+
+.screenshot-idle-pill {
+  display: inline-block;
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #f9c7c7;
+  color: #d95353;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.screenshot-app {
+  margin-top: 2px;
+  color: #444444;
+}
+
+.screenshot-source {
+  margin-top: 3px;
+  color: #6b7280;
+  font-size: 11px;
 }
 
 .no-screenshots,

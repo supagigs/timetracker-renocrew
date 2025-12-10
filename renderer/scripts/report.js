@@ -566,9 +566,10 @@ document.addEventListener('DOMContentLoaded', () => {
     screenshots.forEach(screenshot => {
       console.log('Processing screenshot:', screenshot);
       const screenshotItem = document.createElement('div');
-      screenshotItem.className = 'screenshot-item';
-      if (screenshot.captured_idle) {
-        screenshotItem.classList.add('screenshot-item--idle');
+      const isIdle = Boolean(screenshot.captured_idle);
+      screenshotItem.className = 'screenshot-item screenshot-card';
+      if (isIdle) {
+        screenshotItem.classList.add('screenshot-card--idle');
       }
       const appName = screenshot.app_name || screenshot.appName || 'Unknown app';
       
@@ -601,7 +602,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       
       const info = document.createElement('div');
-      info.className = 'screenshot-info';
+      info.className = 'screenshot-info screenshot-meta';
       
       // Format date and time according to system locale and timezone
       // This will display in the user's local timezone (e.g., IST)
@@ -620,12 +621,11 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       
       const formattedTime = formatScreenshotTime(capturedTime);
-      
-      const idleFlag = screenshot.captured_idle ? '<div class="screenshot-flag">Idle capture</div>' : '';
+      const idlePill = isIdle ? '<div class="screenshot-idle-pill">Idle capture</div>' : '';
 
       info.innerHTML = `
-        <div class="screenshot-time">${formattedTime}</div>
-        ${idleFlag}
+        <div class="screenshot-timestamp">${formattedTime}</div>
+        ${idlePill}
         <div class="screenshot-app">App: ${appName}</div>
         <div class="screenshot-source">${screenshot.isLocal ? 'Local File' : 'Database'}</div>
       `;
