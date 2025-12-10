@@ -255,10 +255,12 @@ document.addEventListener('DOMContentLoaded', () => {
         idleTracker.startTracking();
       }
       
-      // Take an immediate screenshot so short sessions still show images
-      captureScreenshot();
-      // Start screenshot capture
-      startScreenshotCapture();
+      // Delay the very first screenshot to avoid multi-monitor misrouting (5-7s window)
+      const FIRST_CAPTURE_DELAY_MS = 6000; // ~6 seconds
+      setTimeout(() => {
+        captureScreenshot();
+        startScreenshotCapture();
+      }, FIRST_CAPTURE_DELAY_MS);
     }
   }
 
@@ -1465,15 +1467,6 @@ document.addEventListener('DOMContentLoaded', () => {
           }).then(res => {
             if (!res?.ok) {
               console.error(`queueScreenshotUpload failed for screen ${screenIndex}:`, res?.error);
-            } else {
-              showScreenshotNotification({
-                timestamp: baseTimestamp,
-                previewDataUrl: screenshot.dataURL,
-                storageUrl: res.url || null,
-                sessionId: currentSessionId || 'temp-session',
-                appName: res.appName || undefined,
-                isIdle: res.capturedIdle || false,
-              });
             }
           }).catch(err => console.error(`queueScreenshotUpload error for screen ${screenIndex}:`, err));
         }
@@ -1622,98 +1615,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Setup screenshot notification listener
   function setupScreenshotNotificationListener() {
     window.electronAPI.onScreenshotCaptured((data) => {
-      console.log('Screenshot captured notification received:', data);
-      showScreenshotNotification(data);
+      console.log(`Screenshot captured and processed (screen: ${data?.screenIndex || 'Primary'})`);
+      // Toasts are rendered by the main process per-screen; no renderer toast here.
     });
-  }
-
-  // Show screenshot notification popup
-  function showScreenshotNotification(data) {
-    // Remove any existing notification
-    const existingNotification = document.querySelector('.screenshot-notification');
-    if (existingNotification) {
-      existingNotification.classList.add('fade-out');
-      setTimeout(() => existingNotification.remove(), 400);
-    }
-
-    // Create notification element
-    const notification = document.createElement('div');
-    notification.className = 'screenshot-notification';
-
-    const previewSource =
-      data?.previewDataUrl ||
-      data?.dataUrl ||
-      (data?.filePath ? `file://${data.filePath}` : null) ||
-      data?.storageUrl ||
-      null;
-    
-    const now = new Date();
-    const timeString = now.toLocaleTimeString('en-US', { 
-      hour: '2-digit', 
-      minute: '2-digit',
-      second: '2-digit'
-    });
-    const appName = data?.appName || 'Unknown app';
-    const idleNote = data?.isIdle ? '<div class="screenshot-notification-flag">Idle capture</div>' : '';
-    
-    notification.innerHTML = `
-       <div class="screenshot-notification-content">
-         <div class="screenshot-notification-title">Screenshot Captured</div>
-         <div class="screenshot-notification-subtitle">App: ${appName}</div>
-         ${idleNote}
-         <div class="screenshot-notification-time">${timeString}</div>
-       </div>
-     `;
-    
-    // Add click handler to dismiss
-    notification.addEventListener('click', () => {
-      dismissNotification(notification);
-      if (previewSource) {
-        if (previewSource.startsWith('http')) {
-          if (window.electronAPI && window.electronAPI.openExternalUrl) {
-            window.electronAPI.openExternalUrl(previewSource);
-          } else {
-            window.open(previewSource, '_blank', 'noopener');
-          }
-        } else {
-          openScreenshotPreview(previewSource);
-        }
-      }
-    });
-    
-    // Add to document
-    document.body.appendChild(notification);
-    
-    // Auto-dismiss after 3 seconds
-    setTimeout(() => {
-      if (notification.parentElement) {
-        dismissNotification(notification);
-      }
-    }, 3000);
-  }
-
-  function openScreenshotPreview(imageSrc) {
-    const modal = document.createElement('div');
-    modal.className = 'screenshot-modal';
-    modal.innerHTML = `<img src="${imageSrc}" alt="Screenshot Preview">`;
-
-    modal.addEventListener('click', () => {
-      if (modal.parentElement) {
-        modal.remove();
-      }
-    });
-
-    document.body.appendChild(modal);
-  }
-
-  // Dismiss notification with animation
-  function dismissNotification(notification) {
-    notification.classList.add('fade-out');
-    setTimeout(() => {
-      if (notification.parentElement) {
-        notification.remove();
-      }
-    }, 400);
   }
 
   // Handle window close events to save active session

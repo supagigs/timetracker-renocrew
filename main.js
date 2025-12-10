@@ -1,3 +1,112 @@
+// Capture all screens once and queue uploads + per-screen toasts
+async function backgroundCaptureScreenshots() {
+  try {
+    const allDisplays = screen.getAllDisplays();
+    if (!allDisplays || allDisplays.length === 0) {
+      logWarn('BG-UPLOAD', 'No displays detected for background capture');
+      return;
+    }
+
+    const maxDimension = Math.max(...allDisplays.map(d => Math.max(d.size.width, d.size.height)));
+
+    let sources;
+    try {
+      logInfo('BG-UPLOAD', `[backgroundCaptureScreenshots] Requesting sources at ${maxDimension}x${maxDimension}`);
+      sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: maxDimension, height: maxDimension }
+      });
+    } catch (e) {
+      logError('BG-UPLOAD', 'desktopCapturer.getSources failed:', e);
+      return;
+    }
+
+    if (!sources || sources.length === 0) {
+      logWarn('BG-UPLOAD', 'No sources returned by desktopCapturer (permissions likely denied).');
+      return;
+    }
+
+    const displayLookup = new Map();
+    allDisplays.forEach((display, idx) => {
+      const idKey = String(display.id);
+      const nameKey = (display.name || `Screen ${idx + 1}`).toLowerCase();
+      displayLookup.set(idKey, {
+        index: idx,
+        name: display.name || `Screen ${idx + 1}`,
+        nameKey,
+      });
+    });
+
+    const resolveSourceScreenMeta = (source, fallbackIndex) => {
+      let screenIndex = fallbackIndex;
+      let screenName = source?.name || `Screen ${fallbackIndex}`;
+
+      const displayId =
+        (typeof source?.display_id === 'string' && source.display_id) ||
+        (typeof source?.id === 'string' && source.id.includes(':') ? source.id.split(':')[1] : null);
+      if (displayId && displayLookup.has(displayId)) {
+        const { index, name } = displayLookup.get(displayId);
+        return { screenIndex: index + 1, screenName: name || screenName };
+      }
+
+      const name = (source?.name || '').toLowerCase().trim();
+      const nameMatch = name.match(/(\d+)/);
+      if (nameMatch) {
+        const numericIdx = parseInt(nameMatch[1], 10);
+        if (!Number.isNaN(numericIdx) && allDisplays[numericIdx - 1]) {
+          const mapped = allDisplays[numericIdx - 1];
+          const mappedName = mapped.name || `Screen ${numericIdx}`;
+          return { screenIndex: numericIdx, screenName: mappedName };
+        }
+      }
+
+      return { screenIndex, screenName };
+    };
+
+    const timestamp = new Date().toISOString();
+    const contextAppName = await getActiveAppName();
+    const isIdle = isUserIdle;
+
+    const uploadPromises = sources.map(async (source, index) => {
+      if (!source || !source.thumbnail) {
+        logWarn('BG-UPLOAD', `No thumbnail/source for screen ${index + 1}. Skipping.`);
+        return null;
+      }
+
+      const { screenIndex, screenName } = resolveSourceScreenMeta(source, index + 1);
+      const base64Data = source.thumbnail.toPNG().toString('base64');
+      const dataUrl = `data:image/png;base64,${base64Data}`;
+
+      // Queue toast for this screen/image
+      toastQueue.push({
+        filePath: null,
+        base64Data: dataUrl,
+        screenIndex,
+      });
+      processToastQueue();
+
+      const uploadData = {
+        userEmail: currentUserEmail,
+        sessionId: currentSessionId,
+        screenshotData: dataUrl,
+        timestamp,
+        isIdle,
+        contextLabel: 'BG-UPLOAD',
+        appName: contextAppName,
+        screenIndex,
+        screenName,
+      };
+
+      return handleScreenshotUpload(uploadData);
+    });
+
+    await Promise.allSettled(uploadPromises);
+    logInfo('BG-UPLOAD', `[backgroundCaptureScreenshots] Completed for ${sources.length} screen(s)`);
+  } catch (error) {
+    logError('BG-UPLOAD', '[backgroundCaptureScreenshots] Unexpected error:', error);
+  }
+}
+
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -3153,128 +3262,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
       }, 30000); // 30 second timeout
       
       try {
-        // Get all displays to calculate proper thumbnail size
-        const allDisplays = screen.getAllDisplays();
-        const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
-        const maxHeight = Math.max(...allDisplays.map(d => d.size.height));
-        
-        logInfo('BG-UPLOAD', `Detected ${allDisplays.length} display(s), requesting screenshots with size ${maxWidth}x${maxHeight}`);
-        
-        // Log display details for debugging
-        allDisplays.forEach((display, idx) => {
-          logInfo('BG-UPLOAD', `Display ${idx + 1}: ${display.size.width}x${display.size.height} at (${display.bounds.x}, ${display.bounds.y}), scale: ${display.scaleFactor}`);
-        });
-        
-        const sources = await desktopCapturer.getSources({
-          types: ['screen'],
-          thumbnailSize: { width: maxWidth, height: maxHeight }
-        });
-        
-        logInfo('BG-UPLOAD', `Received ${sources?.length || 0} screen source(s) from desktopCapturer`);
-        
-        // Log detailed source information for debugging
-        if (sources && sources.length > 0) {
-          sources.forEach((source, idx) => {
-            logInfo('BG-UPLOAD', `Source ${idx + 1}: id="${source.id}", name="${source.name}", thumbnail size: ${source.thumbnail?.getSize()?.width || 'N/A'}x${source.thumbnail?.getSize()?.height || 'N/A'}`);
-          });
-        } else {
-          logWarn('BG-UPLOAD', 'âš ï¸ No screen sources returned! This may indicate:');
-          logWarn('BG-UPLOAD', '  1. Missing screen recording permissions (macOS)');
-          logWarn('BG-UPLOAD', '  2. No displays connected');
-          logWarn('BG-UPLOAD', '  3. Platform-specific limitation');
-          
-          // On macOS, show a helpful message to the user
-          if (process.platform === 'darwin' && mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('screenshot-permission-denied', {
-              message: 'Screen recording permission is required to capture screenshots. Please grant permission in System Settings.',
-              timestamp: Date.now()
-            });
-          }
-        }
-        
-        if (sources && sources.length > 0) {
-          const timestamp = new Date().toISOString();
-          
-          // Capture and upload screenshots from all displays
-          // Use Promise.allSettled to ensure all screenshots are attempted even if some fail
-          const uploadPromises = sources.map(async (source, index) => {
-            try {
-              // Validate thumbnail exists and is valid
-              if (!source || !source.thumbnail) {
-                logWarn('BG-UPLOAD', `No thumbnail available for screen ${index + 1} (${source?.name || 'Unknown'})`);
-                return { success: false, screenIndex: index + 1, error: 'No thumbnail available' };
-              }
-              
-              // Get thumbnail size for validation
-              const thumbnailSize = source.thumbnail.getSize();
-              if (!thumbnailSize || thumbnailSize.width === 0 || thumbnailSize.height === 0) {
-                logWarn('BG-UPLOAD', `Invalid thumbnail size for screen ${index + 1}: ${thumbnailSize?.width || 0}x${thumbnailSize?.height || 0}`);
-                return { success: false, screenIndex: index + 1, error: 'Invalid thumbnail size' };
-              }
-              
-              // Convert thumbnail to data URL
-              const screenshotData = source.thumbnail.toDataURL('image/png');
-              if (!screenshotData || screenshotData.length === 0 || !screenshotData.startsWith('data:image/')) {
-                logWarn('BG-UPLOAD', `Invalid screenshot data format for screen ${index + 1}`);
-                return { success: false, screenIndex: index + 1, error: 'Invalid screenshot data format' };
-              }
-              
-              logInfo('BG-UPLOAD', `Screen ${index + 1} (${source.name || `Screen ${index + 1}`}): thumbnail ${thumbnailSize.width}x${thumbnailSize.height}, data length: ${screenshotData.length}`);
-              
-              // Get app name for this specific screen/display
-              // screenIndex from desktopCapturer is 1-based, but display index is 0-based
-              let appNameForScreen = null;
-              try {
-                const displayIndex = index; // desktopCapturer index is 0-based, matches display index
-                appNameForScreen = await getActiveAppNameForDisplay(displayIndex);
-                logInfo('BG-UPLOAD', `App name for screen ${index + 1} (display ${displayIndex}): ${appNameForScreen || 'Unknown'}`);
-              } catch (error) {
-                logWarn('BG-UPLOAD', `Failed to get app name for screen ${index + 1}: ${error.message}`);
-              }
-              
-              const result = await handleScreenshotUpload({
-                userEmail: currentUserEmail,
-                sessionId: currentSessionId,
-                screenshotData,
-                timestamp,
-                isIdle: isUserIdle,
-                contextLabel: 'BG-UPLOAD',
-                screenIndex: index + 1,
-                screenName: source.name || `Screen ${index + 1}`,
-                appName: appNameForScreen // Pass the screen-specific app name
-              });
-              
-              if (result && result.ok) {
-                logInfo('BG-UPLOAD', `Successfully queued screenshot for screen ${index + 1} (${source.name || `Screen ${index + 1}`})`);
-                return { success: true, screenIndex: index + 1 };
-              } else {
-                logWarn('BG-UPLOAD', `Failed to queue screenshot for screen ${index + 1}: ${result?.error || 'Unknown error'}`);
-                return { success: false, screenIndex: index + 1, error: result?.error || 'Unknown error' };
-              }
-            } catch (error) {
-              logError('BG-UPLOAD', `Error capturing screenshot for screen ${index + 1}:`, error);
-              return { success: false, screenIndex: index + 1, error: error.message };
-            }
-          });
-          
-          // Wait for all screenshots to complete (using allSettled so failures don't stop others)
-          const results = await Promise.allSettled(uploadPromises);
-          const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
-          const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value?.success)).length;
-          
-          logInfo('BG-UPLOAD', `Screenshot capture complete: ${successful} successful, ${failed} failed out of ${sources.length} screen(s)`);
-          
-          // Log any failures for debugging
-          results.forEach((result, index) => {
-            if (result.status === 'rejected') {
-              logError('BG-UPLOAD', `Screen ${index + 1} capture rejected:`, result.reason);
-            } else if (result.value && !result.value.success) {
-              logWarn('BG-UPLOAD', `Screen ${index + 1} capture failed: ${result.value.error}`);
-            }
-          });
-        } else {
-          logWarn('BG-UPLOAD', 'No screen sources found');
-        }
+        await backgroundCaptureScreenshots();
       } catch (error) {
         const errorMessage = error?.message || String(error) || 'Unknown error';
         const errorStack = error?.stack || 'No stack trace available';
@@ -3474,6 +3462,43 @@ ipcMain.handle('capture-all-screens', async () => {
   try {
     const displays = screen.getAllDisplays();
     const screenshots = [];
+    const displayLookup = new Map();
+    displays.forEach((display, idx) => {
+      const idKey = String(display.id);
+      const nameKey = (display.name || `Screen ${idx + 1}`).toLowerCase();
+      displayLookup.set(idKey, {
+        index: idx,
+        name: display.name || `Screen ${idx + 1}`,
+        nameKey,
+      });
+    });
+    const resolveSourceScreenMeta = (source, fallbackIndex) => {
+      let screenIndex = fallbackIndex;
+      let screenName = source?.name || `Screen ${fallbackIndex}`;
+
+      // 1) Try display_id (Electron 25+)
+      const displayId =
+        (typeof source?.display_id === 'string' && source.display_id) ||
+        (typeof source?.id === 'string' && source.id.includes(':') ? source.id.split(':')[1] : null);
+      if (displayId && displayLookup.has(displayId)) {
+        const { index, name } = displayLookup.get(displayId);
+        return { screenIndex: index + 1, screenName: name || screenName };
+      }
+
+      // 2) Try matching by name (e.g., "Screen 1", "DISPLAY1")
+      const name = (source?.name || '').toLowerCase().trim();
+      const nameMatch = name.match(/(\d+)/);
+      if (nameMatch) {
+        const numericIdx = parseInt(nameMatch[1], 10);
+        if (!Number.isNaN(numericIdx) && displays[numericIdx - 1]) {
+          const mapped = displays[numericIdx - 1];
+          const mappedName = mapped.name || `Screen ${numericIdx}`;
+          return { screenIndex: numericIdx, screenName: mappedName };
+        }
+      }
+      // 3) Fallback to provided order
+      return { screenIndex, screenName };
+    };
     
     logInfo('IPC', `[capture-all-screens] Detected ${displays.length} display(s)`);
     displays.forEach((display, idx) => {
@@ -3695,10 +3720,12 @@ ipcMain.handle('capture-all-screens', async () => {
     // Map each source to a screenshot object with dataURL and name
     for (const source of sources) {
       try {
+        const fallbackIndex = screenshots.length + 1;
+        const { screenIndex, screenName } = resolveSourceScreenMeta(source, fallbackIndex);
         screenshots.push({
           dataURL: source.thumbnail.toDataURL('image/png'),
-          name: source.name || `Screen ${screenshots.length + 1}`,
-          screenIndex: screenshots.length + 1
+          name: screenName,
+          screenIndex
         });
       } catch (thumbError) {
         logError('IPC', `[capture-all-screens] Failed to convert thumbnail to dataURL for source ${source.id}: ${thumbError.message}`);
