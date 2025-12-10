@@ -48,7 +48,7 @@ export default function ClientOverview({
         </div>
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <OverviewCard title="Total team members" value={metrics.totalMembers.toString()} />
         <OverviewCard title="Currently working" value={metrics.currentlyWorking.toString()} tone="positive" />
         <OverviewCard title="Currently offline" value={metrics.offlineMembers.toString()} />
@@ -94,10 +94,10 @@ export default function ClientOverview({
                     <td className="px-4 py-3"><StatusBadge status={member.status} /></td>
                     <td className="px-4 py-3 text-foreground">{member.lastActiveLabel}</td>
                     <td className="px-4 py-3 text-right">
-                      <Link
-                        href={`/reports/${encodeURIComponent(clientEmail)}?freelancer=${encodeURIComponent(member.email)}`}
-                        className="inline-flex items-center rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                      >
+                    <Link
+                      href={`/reports/${encodeURIComponent(clientEmail)}?freelancer=${encodeURIComponent(member.email)}`}
+                      className="inline-flex w-full items-center justify-center rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 md:w-auto"
+                    >
                         View report
                       </Link>
                     </td>
@@ -168,4 +168,3 @@ function StatusBadge({ status }: { status: MemberStatus }) {
     </span>
   );
 }
-
