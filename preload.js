@@ -125,3 +125,15 @@ contextBridge.exposeInMainWorld('ipc', {
     return () => ipcRenderer.removeListener(channel, handler);
   }
 });
+
+// Listen for main process console logs and forward them to renderer console
+// This allows main process console.log to appear in DevTools (Ctrl+Shift+I)
+ipcRenderer.on('main-console-log', (_event, argsArray) => {
+  // argsArray is an array of arguments sent from main process
+  // Spread them to console.log so they appear in DevTools
+  if (Array.isArray(argsArray)) {
+    console.log(...argsArray);
+  } else {
+    console.log(argsArray);
+  }
+});

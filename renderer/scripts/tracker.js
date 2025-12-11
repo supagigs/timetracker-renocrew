@@ -255,12 +255,9 @@ document.addEventListener('DOMContentLoaded', () => {
         idleTracker.startTracking();
       }
       
-      // Delay the very first screenshot to avoid multi-monitor misrouting (5-7s window)
-      const FIRST_CAPTURE_DELAY_MS = 6000; // ~6 seconds
-      setTimeout(() => {
-        captureScreenshot();
-        startScreenshotCapture();
-      }, FIRST_CAPTURE_DELAY_MS);
+      // Start background screenshot capture system
+      // The background system has its own initial delay (200ms) to ensure displays are initialized
+      startScreenshotCapture();
     }
   }
 
