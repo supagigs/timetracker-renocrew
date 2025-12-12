@@ -246,7 +246,11 @@ function sendToRendererConsole(...args) {
 function log(level, context, message, ...args) {
   const ts = new Date().toISOString();
   const lvl = level.toUpperCase();
-  console.log(`[${ts}] [${lvl}] [${context}] ${message}`, ...args);
+  const logMessage = `[${ts}] [${lvl}] [${context}] ${message}`;
+  // Log to main process console
+  console.log(logMessage, ...args);
+  // Also send to renderer console (DevTools)
+  sendToRendererConsole(logMessage, ...args);
 }
 function logInfo(context, message, ...args) { log('info', context, message, ...args); }
 function logWarn(context, message, ...args) { log('warn', context, message, ...args); }
@@ -1447,7 +1451,7 @@ async function ensureMacPermissionsOnStartup() {
   return { screenRecordingStatus, accessibilityStatus, screenPrompted, accessibilityPrompted };
 }
 
-// Get app name for a specific display by finding the frontmost window on that display
+/*// Get app name for a specific display by finding the frontmost window on that display
 async function getActiveAppNameForDisplay(displayIndex = 0) {
   if (process.platform !== 'darwin') {
     // On non-macOS, just return the frontmost app
@@ -1456,6 +1460,11 @@ async function getActiveAppNameForDisplay(displayIndex = 0) {
   
   try {
     const allDisplays = screen.getAllDisplays();
+    // ADD THESE LOGS HERE
+    sendToRendererConsole('ActiveWindow', `Total displays: ${allDisplays.length}`);
+    allDisplays.forEach((d, i) => {
+      sendToRendererConsole('ActiveWindow', `Display ${i+1} bounds: ${JSON.stringify(d.bounds)}`);
+    });
     if (displayIndex < 0 || displayIndex >= allDisplays.length) {
       logWarn('ActiveWindow', `Invalid display index ${displayIndex}, using primary display`);
       return await getActiveAppName();
@@ -1465,7 +1474,7 @@ async function getActiveAppNameForDisplay(displayIndex = 0) {
     const displayCenterX = targetDisplay.bounds.x + (targetDisplay.bounds.width / 2);
     const displayCenterY = targetDisplay.bounds.y + (targetDisplay.bounds.height / 2);
     
-    logInfo('ActiveWindow', `Getting app name for display ${displayIndex + 1} at center (${displayCenterX}, ${displayCenterY})`);
+    sendToRendererConsole('ActiveWindow',  `Target display ${displayIndex + 1} center: x=${displayCenterX}, y=${displayCenterY}, bounds=${JSON.stringify(targetDisplay.bounds)}`);
     
     // Try to use @paymoapp/active-window first (better macOS handling), then active-win
     const accessibilityStatus = await checkMacOSAccessibilityPermission();
@@ -1501,7 +1510,89 @@ async function getActiveAppNameForDisplay(displayIndex = 0) {
     // Fallback to regular getActiveAppName
     return await getActiveAppName();
   }
+}*/
+//Remove if doesn't work
+async function getActiveAppNameForDisplay(displayIndex = 0) {
+  try {
+    const displays = screen.getAllDisplays();
+    const display = displays[displayIndex];
+
+    if (!display) {
+      sendToRendererConsole('[ActiveWindow]', `Invalid displayIndex ${displayIndex}`);
+      return null;
+    }
+
+    sendToRendererConsole('[ActiveWindow]', `Checking active window for display ${displayIndex + 1}, id=${display.id}`);
+
+    // 1. Get active window from active-win
+    if (!activeWindowModule) {
+      activeWindowModule = await import('active-win');
+    }
+    const activeWinFn = (activeWindowModule && activeWindowModule.activeWindow) ||
+                        (activeWindowModule && activeWindowModule.default) ||
+                        activeWindowModule;
+    
+    if (typeof activeWinFn !== 'function') {
+      sendToRendererConsole('[ActiveWindow]', `active-win export is not a function`);
+      return null;
+    }
+
+    const aw = await activeWinFn();
+    if (!aw) {
+      sendToRendererConsole('[ActiveWindow]', `active-win returned NULL`);
+      return null;
+    }
+
+    sendToRendererConsole('[ActiveWindow]', 
+      `active-win: owner=${aw.owner?.name}, title=${aw.title}, bounds=${JSON.stringify(aw.bounds)}`);
+
+    // 2. Find center point of the active window
+    const winCenter = {
+      x: aw.bounds.x + aw.bounds.width / 2,
+      y: aw.bounds.y + aw.bounds.height / 2
+    };
+
+    sendToRendererConsole('[ActiveWindow]', 
+      `Window center: (${winCenter.x}, ${winCenter.y})`);
+
+    // 3. Check if window falls inside the target display
+    const b = display.bounds;
+    const isOnDisplay =
+      winCenter.x >= b.x &&
+      winCenter.x <= b.x + b.width &&
+      winCenter.y >= b.y &&
+      winCenter.y <= b.y + b.height;
+
+    sendToRendererConsole('[ActiveWindow]', 
+      `Is window on display ${displayIndex + 1}? ${isOnDisplay}`);
+
+    // If not on this display → return null
+    if (!isOnDisplay) return null;
+
+    // 4. Build readable app name
+    const owner = aw.owner?.name || null;
+    const title = aw.title || null;
+
+    let finalName = null;
+
+    if (owner && title && owner !== title) {
+      finalName = `${owner} - ${title}`;
+    } else {
+      finalName = owner || title || null;
+    }
+
+    sendToRendererConsole('[ActiveWindow]', 
+      `Returning app name for display ${displayIndex + 1}: ${finalName}`);
+
+    return finalName;
+
+  } catch (err) {
+    sendToRendererConsole('[ActiveWindow]', 
+      `Error in getActiveAppNameForDisplay: ${err.message}`);
+    return null;
+  }
 }
+
 
 // Get app name for a specific display using AppleScript
 async function getActiveAppNameForDisplayViaAppleScript(displayIndex, targetDisplay) {
