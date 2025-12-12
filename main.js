@@ -2188,7 +2188,7 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
     // Use display bounds directly to position toast (not workArea, as suggested)
     // Position in bottom-right corner with 20px margin
     const x = targetDisplay.bounds.x + targetDisplay.bounds.width - TOAST_WIDTH - 20;
-    const y = targetDisplay.bounds.y + targetDisplay.bounds.height - TOAST_HEIGHT - 20;
+    const y = targetDisplay.bounds.y + targetDisplay.bounds.height - TOAST_HEIGHT - 25;
     newToastWin.setPosition(x, y);
     
     sendToRendererConsole("Toast display bounds:", targetDisplay.bounds);
