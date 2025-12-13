@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { format } from 'date-fns';
 
 type Screenshot = {
@@ -18,71 +18,137 @@ type ScreenshotGridProps = {
 
 function formatDateTime(dateString: string): string {
   let dateStr = dateString.trim();
-
   const hasTimezone = /[Z+-]\d{2}:?\d{2}$/.test(dateStr) || dateStr.endsWith('Z');
-
   if (!hasTimezone && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(dateStr)) {
     dateStr = `${dateStr}Z`;
   }
-
   const date = new Date(dateStr);
   return format(date, 'MM/dd/yyyy, HH:mm:ss');
 }
 
-function FloatingViewer({ screenshot, onClose }: { screenshot: Screenshot; onClose: () => void }) {
-  useEffect(() => {
-    const escHandler = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', escHandler);
-    return () => window.removeEventListener('keydown', escHandler);
-  }, [onClose]);
-
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, []);
-
-  const appLabel = screenshot.app_name ?? 'Screenshot Preview';
+/* --------------------------------------------------
+   FLOATING VIEWER (FULLSCREEN PREVIEW)
+-------------------------------------------------- */
+function FloatingViewer({
+  screenshots,
+  index,
+  onClose,
+  setIndex,
+}: {
+  screenshots: Screenshot[];
+  index: number;
+  onClose: () => void;
+  setIndex: (i: number) => void;
+}) {
+  const screenshot = screenshots[index];
   const isIdle = Boolean(screenshot.captured_idle);
 
+  const goNext = useCallback(() => {
+    const nextIndex = (index + 1) % screenshots.length;
+    console.log("goNext()", { index, nextIndex });
+    setIndex(nextIndex);
+  }, [index, screenshots.length, setIndex]);
+
+  const goPrev = useCallback(() => {
+    const prevIndex = (index - 1 + screenshots.length) % screenshots.length;
+    console.log("goPrev()", { index, prevIndex });
+    setIndex(prevIndex);
+  }, [index, screenshots.length, setIndex]);
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "ArrowRight") goNext();
+      if (event.key === "ArrowLeft") goPrev();
+      if (event.key === "Escape") onClose();
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [goNext, goPrev, onClose]);
+
+  useEffect(() => {
+    const p = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = p; };
+  }, []);
+
   return (
-    <div className="pip-overlay" aria-hidden>
-      <div
-        className={`pip-overlay-content relative ${
-          isIdle ? 'border-4 border-rose-400' : ''
-        }`}
+    <div
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[99999]"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      {/* CLOSE BUTTON */}
+      <button
+        onClick={onClose}
+        className="absolute top-6 right-8 text-white text-4xl font-bold hover:text-red-400"
       >
-        {isIdle ? (
-          <span className="absolute right-4 top-4 rounded-full bg-rose-500 px-3 py-1 text-xs font-semibold text-white shadow">
-            Idle capture
+        ✕
+      </button>
+
+      {/* LEFT ARROW */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          goPrev();
+        }}
+        className="absolute left-12 top-1/2 -translate-y-1/2 text-white text-6xl px-4 py-2 rounded-full bg-black/40 hover:bg-black/70"
+      >
+        ‹
+      </button>
+
+      {/* IMAGE WRAPPER */}
+      <div
+        className={`relative max-w-[80%] max-h-[80%] flex flex-col items-center ${
+          isIdle ? 'border-4 border-rose-500' : ''
+        } rounded-xl overflow-hidden shadow-2xl bg-black/20 p-4`}
+      >
+        {isIdle && (
+          <span className="absolute top-4 right-4 bg-rose-500 text-white rounded-full px-3 py-1 text-xs font-bold shadow">
+            Idle Capture
           </span>
-        ) : null}
+        )}
+
         <img
           src={screenshot.screenshot_data}
-          alt={`Screenshot ${screenshot.id}`}
-          className="pip-overlay-image"
+          alt="Screenshot"
+          className="max-h-[70vh] w-auto object-contain"
           draggable={false}
-          loading="lazy"
         />
-        <div className="mt-3 text-sm font-medium text-foreground">App: {appLabel}</div>
+
+        {/* BOTTOM COUNTER */}
+        <div className="mt-3 text-white text-sm font-medium opacity-80">
+          {index + 1} / {screenshots.length}
+        </div>
+        <div className="text-white text-xs mt-1 opacity-60">
+          App: {screenshot.app_name ?? "Unknown App"}
+        </div>
       </div>
+
+      {/* RIGHT ARROW */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          goNext();
+        }}
+        className="absolute right-12 top-1/2 -translate-y-1/2 text-white text-6xl px-4 py-2 rounded-full bg-black/40 hover:bg-black/70"
+      >
+        ›
+      </button>
     </div>
   );
 }
 
+/* --------------------------------------------------
+   SCREENSHOT GRID (THUMBNAILS)
+-------------------------------------------------- */
 export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
-  const [activeScreenshot, setActiveScreenshot] = useState<Screenshot | null>(null);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   if (screenshots.length === 0) {
     return (
-      <p className="rounded-xl border border-border bg-card p-6 text-center text-muted-foreground">
+      <p className="rounded-xl border bg-card p-6 text-center text-muted-foreground">
         No screenshots available for this session.
       </p>
     );
@@ -91,59 +157,49 @@ export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
   return (
     <>
       <div className="screenshot-grid">
-        {screenshots.map((shot) => {
+        {screenshots.map((shot, idx) => {
           const formattedDate = formatDateTime(shot.captured_at);
-          const alt = `Screenshot ${shot.id} captured at ${formattedDate}`;
-          const appLabel = shot.app_name ?? 'Unknown app';
-          const cardClasses = [
-            'flex flex-col overflow-hidden rounded-xl border border-border bg-card p-3 shadow-sm transition hover:shadow-md',
-          ];
-          if (shot.captured_idle) {
-            cardClasses.push('border-rose-400 shadow-[0_0_0_3px_rgba(244,114,182,0.25)]');
-          }
 
           return (
             <div
               key={shot.id}
-              className={cardClasses.join(' ')}
-              onMouseEnter={() => setActiveScreenshot(shot)}
-              onMouseLeave={() =>
-                setActiveScreenshot((prev) => (prev?.id === shot.id ? null : prev))
-              }
-              onClick={() => setActiveScreenshot(shot)}
+              onClick={() => setActiveIndex(idx)}
+              className={`flex flex-col overflow-hidden rounded-xl border bg-card p-3 shadow hover:shadow-md transition cursor-pointer ${
+                shot.captured_idle ? 'border-rose-400 shadow-[0_0_0_3px_rgba(244,114,182,0.25)]' : ''
+              }`}
             >
-              <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-muted flex-shrink-0">
+              <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-muted">
                 <img
                   src={shot.screenshot_data}
-                  alt={alt}
                   className="absolute inset-0 h-full w-full object-contain"
-                  loading="lazy"
                   draggable={false}
                 />
               </div>
+
               <div className="mt-2 text-xs text-muted-foreground">{formattedDate}</div>
-              {shot.captured_idle ? (
+
+              {shot.captured_idle && (
                 <span className="mt-1 inline-flex h-5 items-center rounded-full bg-rose-100 px-2 text-[10px] font-semibold uppercase tracking-wide text-rose-600">
                   Idle capture
                 </span>
-              ) : null}
-              <div className="mt-1 text-xs font-medium text-foreground">App: {appLabel}</div>
+              )}
+
+              <div className="mt-1 text-xs font-medium">
+                App: {shot.app_name ?? 'Unknown app'}
+              </div>
             </div>
           );
         })}
       </div>
 
-      {activeScreenshot ? (
+      {activeIndex !== null && (
         <FloatingViewer
-          key={activeScreenshot.id}
-          screenshot={activeScreenshot}
-          onClose={() => setActiveScreenshot(null)}
+          screenshots={screenshots}
+          index={activeIndex}
+          setIndex={setActiveIndex}
+          onClose={() => setActiveIndex(null)}
         />
-      ) : null}
+      )}
     </>
   );
 }
-
-
-
-
