@@ -1511,84 +1511,54 @@ async function getActiveAppNameForDisplay(displayIndex = 0) {
     return await getActiveAppName();
   }
 }*/
+
+function intersectionArea(a, b) {
+  const x = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const y = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  return x * y;
+}
+
 //Remove if doesn't work
-async function getActiveAppNameForDisplay(displayIndex = 0) {
+async function getAppNameForDisplay(displayIndex) {
   try {
     const displays = screen.getAllDisplays();
     const display = displays[displayIndex];
+    if (!display) return null;
 
-    if (!display) {
-      sendToRendererConsole('[ActiveWindow]', `Invalid displayIndex ${displayIndex}`);
+    // macOS: no reliable per-display app info without native addon
+    if (process.platform === 'darwin') {
       return null;
     }
 
-    sendToRendererConsole('[ActiveWindow]', `Checking active window for display ${displayIndex + 1}, id=${display.id}`);
+    // You already use this elsewhere — reuse it
+    const windows = getWindowsSnapshot();
+    if (!windows || !windows.length) return null;
 
-    // 1. Get active window from active-win
-    if (!activeWindowModule) {
-      activeWindowModule = await import('active-win');
-    }
-    const activeWinFn = (activeWindowModule && activeWindowModule.activeWindow) ||
-                        (activeWindowModule && activeWindowModule.default) ||
-                        activeWindowModule;
-    
-    if (typeof activeWinFn !== 'function') {
-      sendToRendererConsole('[ActiveWindow]', `active-win export is not a function`);
-      return null;
-    }
+    let bestMatch = null;
+    let maxArea = 0;
 
-    const aw = await activeWinFn();
-    if (!aw) {
-      sendToRendererConsole('[ActiveWindow]', `active-win returned NULL`);
-      return null;
+    for (const win of windows) {
+      if (!win.bounds || win.isMinimized) continue;
+
+      const area = intersectionArea(display.bounds, win.bounds);
+      if (area > maxArea) {
+        maxArea = area;
+        bestMatch = win;
+      }
     }
 
-    sendToRendererConsole('[ActiveWindow]', 
-      `active-win: owner=${aw.owner?.name}, title=${aw.title}, bounds=${JSON.stringify(aw.bounds)}`);
+    if (!bestMatch) return null;
 
-    // 2. Find center point of the active window
-    const winCenter = {
-      x: aw.bounds.x + aw.bounds.width / 2,
-      y: aw.bounds.y + aw.bounds.height / 2
-    };
-
-    sendToRendererConsole('[ActiveWindow]', 
-      `Window center: (${winCenter.x}, ${winCenter.y})`);
-
-    // 3. Check if window falls inside the target display
-    const b = display.bounds;
-    const isOnDisplay =
-      winCenter.x >= b.x &&
-      winCenter.x <= b.x + b.width &&
-      winCenter.y >= b.y &&
-      winCenter.y <= b.y + b.height;
-
-    sendToRendererConsole('[ActiveWindow]', 
-      `Is window on display ${displayIndex + 1}? ${isOnDisplay}`);
-
-    // If not on this display → return null
-    if (!isOnDisplay) return null;
-
-    // 4. Build readable app name
-    const owner = aw.owner?.name || null;
-    const title = aw.title || null;
-
-    let finalName = null;
+    const owner = bestMatch.processName || bestMatch.executable || null;
+    const title = bestMatch.title || null;
 
     if (owner && title && owner !== title) {
-      finalName = `${owner} - ${title}`;
-    } else {
-      finalName = owner || title || null;
+      return `${owner} - ${title}`;
     }
+    return owner || title || null;
 
-    sendToRendererConsole('[ActiveWindow]', 
-      `Returning app name for display ${displayIndex + 1}: ${finalName}`);
-
-    return finalName;
-
-  } catch (err) {
-    sendToRendererConsole('[ActiveWindow]', 
-      `Error in getActiveAppNameForDisplay: ${err.message}`);
+  } catch (e) {
+    logWarn('ActiveWindow', e.message);
     return null;
   }
 }
@@ -2648,7 +2618,20 @@ async function addScreenshotToBatch(uploadData) {
         // If we have screenIndex, try to get app name for that specific display
         if (screenIndex && screenIndex > 0) {
           const displayIndex = screenIndex - 1; // screenIndex is 1-based, convert to 0-based display index
-          capturedAppName = await getActiveAppNameForDisplay(displayIndex) || 'Unknown';
+          let appName = null;
+
+          if (screenIndex && screenIndex > 0) {
+            const displayIndex = screenIndex - 1;
+
+            appName =
+              await getAppNameForDisplay(displayIndex) ||
+              await getActiveAppName();
+          } else {
+            appName = await getActiveAppName();
+          }
+
+appName ||= 'Unknown';
+
         } else {
           // Fallback to regular getActiveAppName for single screen or unknown screen
           capturedAppName = await getActiveAppName() || 'Unknown';
@@ -3338,6 +3321,19 @@ ipcMain.on('update-idle-state', (_event, isIdle) => {
     logError('IPC', `Failed to update idle state: ${e?.message || e}`);
   }
 });
+
+
+function intersectionArea(a, b) {
+  const x = Math.max(
+    0,
+    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)
+  );
+  const y = Math.max(
+    0,
+    Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)
+  );
+  return x * y;
+}
 
 // ============ Time tracking IPC handlers (used by preload.js) ============
 

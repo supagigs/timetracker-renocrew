@@ -333,7 +333,7 @@ document.addEventListener('DOMContentLoaded', () => {
       workStartTime = new Date().toISOString();
       StorageService.setItem('workStartTime', workStartTime);
       // Take an immediate screenshot on resume so short post-break segments are captured
-      captureScreenshot();
+      //captureScreenshot();
       startScreenshotCapture();
       
       // Resume idle tracking
