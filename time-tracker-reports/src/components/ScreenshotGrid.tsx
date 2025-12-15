@@ -87,23 +87,32 @@ function FloatingViewer({
         ✕
       </button>
 
-      {/* LEFT ARROW */}
       <button
         onClick={(e) => {
           e.stopPropagation();
           goPrev();
         }}
-        className="absolute left-12 top-1/2 -translate-y-1/2 text-white text-6xl px-4 py-2 rounded-full bg-black/40 hover:bg-black/70"
-      >
-        ‹
+        className="absolute left-12 top-1/2 -translate-y-1/2 text-white rounded-full bg-black/40 hover:bg-black/70 flex items-center justify-center w-16 h-16"
+        >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 16 16"
+          className="w-9 h-9"
+          fill="currentColor"
+        >
+          <path
+            fillRule="evenodd"
+            d="M1 8a7 7 0 1 0 14 0A7 7 0 0 0 1 8m15 0A8 8 0 1 1 0 8a8 8 0 0 1 16 0m-4.5-.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5z"
+          />
+        </svg>
       </button>
 
       {/* IMAGE WRAPPER */}
       <div
-        className={`relative max-w-[80%] max-h-[80%] flex flex-col items-center ${
+        className={`relative w-full h-full max-w-[100vw] max-h-[100vh] flex flex-col items-center justify-center ${
           isIdle ? 'border-4 border-rose-500' : ''
-        } rounded-xl overflow-hidden shadow-2xl bg-black/20 p-4`}
-      >
+        } rounded-none bg-transparent`}
+        >
         {isIdle && (
           <span className="absolute top-4 right-4 bg-rose-500 text-white rounded-full px-3 py-1 text-xs font-bold shadow">
             Idle Capture
@@ -113,7 +122,7 @@ function FloatingViewer({
         <img
           src={screenshot.screenshot_data}
           alt="Screenshot"
-          className="max-h-[70vh] w-auto object-contain"
+          className="max-h-[90vh] max-w-[95vw] object-contain"
           draggable={false}
         />
 
@@ -128,14 +137,24 @@ function FloatingViewer({
 
       {/* RIGHT ARROW */}
       <button
-        onClick={(e) => {
-          e.stopPropagation();
-          goNext();
-        }}
-        className="absolute right-12 top-1/2 -translate-y-1/2 text-white text-6xl px-4 py-2 rounded-full bg-black/40 hover:bg-black/70"
+      onClick={(e) => {
+        e.stopPropagation();
+        goNext();
+      }}
+      className="absolute right-12 top-1/2 -translate-y-1/2 text-white rounded-full bg-black/40 hover:bg-black/70 flex items-center justify-center w-16 h-16"
       >
-        ›
-      </button>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 16 16"
+        className="w-9 h-9"
+        fill="currentColor"
+      >
+        <path
+          fillRule="evenodd"
+          d="M1 8a7 7 0 1 0 14 0A7 7 0 0 0 1 8m15 0A8 8 0 1 1 0 8a8 8 0 0 1 16 0M4.5 7.5a.5.5 0 0 0 0 1h5.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3a.5.5 0 1 0-.708.708L10.293 7.5z"
+        />
+      </svg>
+    </button>
     </div>
   );
 }
