@@ -117,50 +117,72 @@ async function backgroundCaptureScreenshots() {
     };
 
     const timestamp = new Date().toISOString();
-    const contextAppName = await getActiveAppName();
+    //const contextAppName = await getActiveAppName();
     const isIdle = isUserIdle;
 
     const uploadPromises = sources.map(async (source, index) => {
-      if (!source || !source.thumbnail) {
-        logWarn('BG-UPLOAD', `No thumbnail/source for screen ${index + 1}. Skipping.`);
+      const screenIndex = index + 1;
+    
+      try {
+        const dataUrl = source.thumbnail.toDataURL();
+    
+        // Resolve display info
+        const displays = screen.getAllDisplays();
+        const display = displays[index];
+        const displayId = display ? String(display.id) : null;
+        const screenName = display
+          ? `Display ${index + 1} (${display.bounds.width}x${display.bounds.height})`
+          : `Screen ${screenIndex}`;
+    
+        // 🔥 IMPORTANT: resolve app name PER SCREEN
+        let appNameForScreen = null;
+    
+        // Windows / Linux → true per-display resolution
+        if (process.platform !== 'darwin') {
+          try {
+            appNameForScreen = await getAppNameForDisplay(index);
+          } catch (e) {
+            logWarn('BG-UPLOAD', `Per-display app detection failed for screen ${screenIndex}: ${e.message}`);
+          }
+        }
+    
+        // macOS OR fallback → global foreground app
+        if (!appNameForScreen) {
+          appNameForScreen = await getActiveAppName();
+        }
+    
+        appNameForScreen ||= 'Unknown';
+    
+        logInfo(
+          'BG-UPLOAD',
+          `Screen ${screenIndex}: resolved app = "${appNameForScreen}"`
+        );
+    
+        const uploadData = {
+          userEmail: currentUserEmail,
+          sessionId: currentSessionId,
+          screenshotData: dataUrl,
+          timestamp,
+          isIdle,
+          contextLabel: 'BG-UPLOAD',
+          screenIndex,
+          screenName,
+          appName: appNameForScreen,
+          displayId
+        };
+    
+        return addScreenshotToBatch(uploadData);
+    
+      } catch (err) {
+        logError(
+          'BG-UPLOAD',
+          `Failed to process screenshot for screen ${screenIndex}: ${err.message}`,
+          err
+        );
         return null;
       }
-
-      logInfo('BG-UPLOAD', `Processing source ${index + 1}: "${source.name}"`);
-      const { screenIndex, screenName, displayId, display } = resolveSourceScreenMeta(source, index + 1);
-      
-      const finalDisplayId = displayId || (display ? String(display.id) : null);
-      logInfo('BG-UPLOAD', `  → Mapped to: screenIndex=${screenIndex}, screenName="${screenName}", displayId=${finalDisplayId}`);
-      
-      if (display) {
-        logInfo('BG-UPLOAD', `  → Display bounds: (${display.bounds.x}, ${display.bounds.y}, ${display.bounds.width}, ${display.bounds.height})`);
-      }
-      
-      const base64Data = source.thumbnail.toPNG().toString('base64');
-      const imageBuffer = Buffer.from(base64Data, 'base64');
-      const dataUrl = `data:image/png;base64,${base64Data}`;
-      sendToRendererConsole(`Screenshot for display ${display ? display.id : 'unknown'}: size = ${imageBuffer.length}`);
-      logInfo('BG-UPLOAD', `  → Screenshot captured: ${(base64Data.length / 1024).toFixed(2)} KB (base64)`);
-
-      // Note: Toast will be queued later in addScreenshotToBatch() via showToastNotification()
-      // This ensures the toast has the proper filePath and is only created once per screenshot
-
-      const uploadData = {
-        userEmail: currentUserEmail,
-        sessionId: currentSessionId,
-        screenshotData: dataUrl,
-        timestamp,
-        isIdle,
-        contextLabel: 'BG-UPLOAD',
-        appName: contextAppName,
-        screenIndex,
-        screenName,
-        displayId: displayId || (display ? String(display.id) : null),
-      };
-
-      return handleScreenshotUpload(uploadData);
     });
-
+    
     await Promise.allSettled(uploadPromises);
     logInfo('BG-UPLOAD', `Completed processing ${sources.length} screen(s)`);
     logInfo('BG-UPLOAD', '═══════════════════════════════════════════════════════════');
