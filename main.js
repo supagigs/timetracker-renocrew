@@ -3345,18 +3345,6 @@ ipcMain.on('update-idle-state', (_event, isIdle) => {
 });
 
 
-function intersectionArea(a, b) {
-  const x = Math.max(
-    0,
-    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)
-  );
-  const y = Math.max(
-    0,
-    Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)
-  );
-  return x * y;
-}
-
 // ============ Time tracking IPC handlers (used by preload.js) ============
 
 function broadcastTimeTrackingUpdate() {
