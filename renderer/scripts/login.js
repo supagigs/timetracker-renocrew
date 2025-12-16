@@ -40,9 +40,6 @@ function initializeLoginPage() {
   // Clear any stored email to ensure fresh login
   StorageService.removeItem('userEmail');
   
-  // // Force reset email field immediately
-  // forceResetEmailField();
-  
   // Ensure email field is editable
   const emailInput = document.getElementById('email');
   const loginBtn = document.getElementById('loginBtn');
@@ -63,25 +60,15 @@ function initializeLoginPage() {
     emailInput.removeAttribute('readonly');
     emailInput.removeAttribute('disabled');
     
-    // Hide category dropdown initially
+    // Hide category dropdown and projects section – we no longer ask for user type
     const categoryGroup = document.getElementById('categoryGroup');
-    const categorySelect = document.getElementById('category');
     const projectsGroup = document.getElementById('projectsGroup');
     if (categoryGroup) {
       categoryGroup.style.display = 'none';
     }
-    if (categorySelect) {
-      categorySelect.value = '';
-      // Add event listener for category change
-      categorySelect.addEventListener('change', handleCategoryChange);
-    }
     if (projectsGroup) {
       projectsGroup.style.display = 'none';
     }
-    
-    // Initialize projects array
-    window.userProjects = [];
-    updateProjectsDisplay();
     
     // Add event listener to check if user exists when email is entered
     emailInput.addEventListener('blur', async function() {
@@ -304,14 +291,8 @@ function updateProjectsDisplay() {
 
 // Check if user exists to show/hide category dropdown
 async function checkUserExists(email) {
-  const categoryGroup = document.getElementById('categoryGroup');
-  const categorySelect = document.getElementById('category');
-  const projectsGroup = document.getElementById('projectsGroup');
-  
-  if (!categoryGroup || !categorySelect) {
-    return;
-  }
-  
+  // We no longer show or require categories or projects during login/signup,
+  // but we keep this function minimal to avoid breaking existing wiring.
   try {
     if (!window.supabase) {
       return;
@@ -346,24 +327,8 @@ async function checkUserExists(email) {
       return;
     }
     
-    // Show category dropdown only for new users
-    if (!existingUser) {
-      categoryGroup.style.display = 'block';
-      categorySelect.required = true;
-      console.log('New user detected, showing category dropdown');
-    } else {
-      categoryGroup.style.display = 'none';
-      categorySelect.value = '';
-      categorySelect.required = false;
-      // Hide projects group for existing users
-      if (projectsGroup) {
-        projectsGroup.style.display = 'none';
-      }
-      // Clear projects array
-      window.userProjects = [];
-      updateProjectsDisplay();
-      console.log('Existing user detected, hiding category dropdown');
-    }
+    // Previously we showed a category dropdown for new users.
+    // Now every user is treated as a Freelancer, so no extra UI is needed here.
   } catch (err) {
     console.error('Error checking user existence:', err);
     // On error, hide the dropdown to be safe
@@ -379,8 +344,6 @@ async function checkUserExists(email) {
 async function handleLogin() {
   const emailInput = document.getElementById('email');
   const email = emailInput.value.trim();
-  const categorySelect = document.getElementById('category');
-  const categoryGroup = document.getElementById('categoryGroup');
   
   // Validate email
   if (!email) {
@@ -437,43 +400,15 @@ async function handleLogin() {
     }
 
     if (!existingUser) {
-      // New user - validate category
-      const category = categorySelect ? categorySelect.value.trim() : '';
-      if (!category) {
-        NotificationService.showError('Please select a category (Client or Freelancer)', 5000, true, true);
-        loginBtn.disabled = false;
-        loginBtn.textContent = originalText;
-        categoryGroup.style.display = 'block';
-        categorySelect.focus();
-        return;
-      }
-      
-      // Validate projects for Clients
-      if (category === 'Client') {
-        const projects = window.userProjects || [];
-        if (projects.length === 0) {
-          NotificationService.showError('Please add at least one project');
-          loginBtn.disabled = false;
-          loginBtn.textContent = originalText;
-          const projectsGroup = document.getElementById('projectsGroup');
-          if (projectsGroup) {
-            projectsGroup.style.display = 'block';
-          }
-          const newProjectInput = document.getElementById('newProjectInput');
-          if (newProjectInput) {
-            newProjectInput.focus();
-          }
-          return;
-        }
-      }
-      
-      // Create new user with category
-      console.log('Creating new user with email:', email, 'and category:', category);
+      // New user – we no longer distinguish between Client and Freelancer.
+      // Every account is treated as a Freelancer.
+      const category = 'Freelancer';
+      console.log('Creating new user with email:', email, 'as single role:', category);
       const { error: insertError } = await SupabaseService.handleRequest(() =>
         window.supabase.from('users').insert([{ 
           email,
           display_name: null, // Explicitly set to null, will be updated when user sets display name
-          category: category // Add category
+          category: category // Always store as 'Freelancer'
         }])
       );
       
@@ -484,83 +419,11 @@ async function handleLogin() {
       
       console.log('User created successfully');
       
-      // Save projects if user is a Client
-      console.log('Category:', category);
-      console.log('userProjects:', window.userProjects);
-      console.log('userProjects length:', window.userProjects?.length);
-      
-      if (category === 'Client' && window.userProjects && window.userProjects.length > 0) {
-        console.log('✅ Saving projects for Client:', window.userProjects);
-        // Normalize and deduplicate project names (case-insensitive, trimmed)
-        const uniqueProjects = Array.from(
-          new Map(
-            window.userProjects.map(p => [p.trim().toLowerCase(), p.trim()])
-          ).values()
-        );
-        const projects = uniqueProjects.map(projectName => ({
-          user_email: email,
-          project_name: projectName
-        }));
-        
-        console.log('Projects data to insert:', JSON.stringify(projects, null, 2));
-        console.log('Supabase client available:', !!window.supabase);
-        console.log('Projects table exists check...');
-        
-        // Try direct insert without wrapper first to see raw error
-        try {
-          const { data: projectsData, error: projectsError } = await window.supabase
-            .from('projects')
-            .upsert(projects, { onConflict: 'user_email,project_name', ignoreDuplicates: true })
-            .select();
-          
-          if (projectsError) {
-            console.error('❌ Error saving projects:', projectsError);
-            console.error('Error code:', projectsError.code);
-            console.error('Error message:', projectsError.message);
-            console.error('Error details:', JSON.stringify(projectsError, null, 2));
-            console.error('Error hint:', projectsError.hint);
-            
-            // Show detailed error message
-            const errorMsg = projectsError.message || 'Failed to save projects';
-            const errorCode = projectsError.code || 'UNKNOWN';
-            NotificationService.showError(`User created but failed to save projects: ${errorMsg} (Code: ${errorCode}). Check console for details.`);
-            
-            // If it's an RLS error, provide specific guidance
-            if (projectsError.code === '42501' || projectsError.message?.includes('permission') || projectsError.message?.includes('policy')) {
-              console.error('⚠️ RLS Policy Error - Run the fix migration: database-migration-projects-fix-rls.sql');
-              NotificationService.showError('RLS policy error. Please run database-migration-projects-fix-rls.sql in Supabase SQL Editor.');
-            }
-          } else {
-            console.log('✅ Projects saved successfully:', projectsData);
-            console.log('Number of projects saved:', projectsData?.length || 0);
-            
-            // Verify projects were saved
-            const { data: verifyData, error: verifyError } = await window.supabase
-              .from('projects')
-              .select('*')
-              .eq('user_email', email);
-            
-            if (verifyError) {
-              console.error('Error verifying projects:', verifyError);
-            } else {
-              console.log('✅ Verified projects in database:', verifyData);
-              if (verifyData && verifyData.length > 0) {
-                NotificationService.showSuccess(`Successfully saved ${verifyData.length} project(s)!`);
-              }
-            }
-          }
-        } catch (err) {
-          console.error('❌ Exception saving projects:', err);
-          console.error('Exception stack:', err.stack);
-          NotificationService.showError(`Exception saving projects: ${err.message}`);
-        }
-      }
-      
       NotificationService.showNewUserCreated(email);
       
-      // Store user email and category
+      // Store user email and single user type
       StorageService.setItem('userEmail', email);
-      StorageService.setItem('userCategory', category);
+      StorageService.setItem('userCategory', 'Freelancer');
       if (window.electronAPI?.setUserLoggedIn) {
         window.electronAPI.setUserLoggedIn(true).catch(err => console.error('Failed to update logged-in state:', err));
       }
@@ -576,11 +439,9 @@ async function handleLogin() {
     } else {
       NotificationService.showLoginSuccess(email);
       
-      // Store user email and category
+      // Store user email and treat all users as the single Freelancer role
       StorageService.setItem('userEmail', email);
-      if (existingUser.category) {
-        StorageService.setItem('userCategory', existingUser.category);
-      }
+      StorageService.setItem('userCategory', 'Freelancer');
       if (window.electronAPI?.setUserLoggedIn) {
         window.electronAPI.setUserLoggedIn(true).catch(err => console.error('Failed to update logged-in state:', err));
       }

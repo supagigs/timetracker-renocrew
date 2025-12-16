@@ -1,5 +1,4 @@
 import activeWin from 'active-win';
-import { screen } from 'electron';
 
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
