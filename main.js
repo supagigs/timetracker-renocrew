@@ -190,38 +190,24 @@ async function backgroundCaptureScreenshots() {
       const screenIndex = index + 1;
     
       try {
-        // Convert thumbnail to base64 image
         const dataUrl = source.thumbnail.toDataURL();
     
-        // Resolve display metadata
         const displays = screen.getAllDisplays();
         const display = displays[index];
         const displayId = display ? String(display.id) : null;
-    
         const screenName = display
           ? `Display ${screenIndex} (${display.bounds.width}x${display.bounds.height})`
           : `Screen ${screenIndex}`;
     
-        /**
-         * Resolve the app PER SCREEN using visibility instead of focus.
-         *
-         * This ensures:
-         * - Different screens can show different apps
-         * - Same timestamp screenshots are attributed correctly
-         */
+        // ✅ MOST VISIBLE WINDOW PER SCREEN
         let appNameForScreen = await getMostVisibleAppForDisplay(index);
-    
-        // Safety fallback
-        if (!appNameForScreen) {
-          appNameForScreen = 'Unknown';
-        }
+        appNameForScreen ||= 'Unknown';
     
         logInfo(
           'BG-UPLOAD',
-          `Screen ${screenIndex}: most visible app = "${appNameForScreen}"`
+          `Screen ${screenIndex}: visible app = "${appNameForScreen}"`
         );
     
-        // Queue screenshot for batch upload
         return addScreenshotToBatch({
           userEmail: currentUserEmail,
           sessionId: currentSessionId,
@@ -235,12 +221,8 @@ async function backgroundCaptureScreenshots() {
           displayId
         });
     
-      } catch (error) {
-        logError(
-          'BG-UPLOAD',
-          `Failed to process screenshot for screen ${screenIndex}`,
-          error
-        );
+      } catch (err) {
+        logError('BG-UPLOAD', err.message, err);
         return null;
       }
     });    
@@ -1234,88 +1216,50 @@ async function checkScreenRecordingPermission() {
   }
 }
 
-/**
- * Calculates the visible intersection area between two rectangles.
- * Used to determine how much of a window is visible on a display.
- *
- * @param {Object} a - Rectangle A { x, y, width, height }
- * @param {Object} b - Rectangle B { x, y, width, height }
- * @returns {number} - Area of overlap in pixels
- */
 function intersectionArea(a, b) {
-  const xOverlap = Math.max(
-    0,
-    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)
-  );
-
-  const yOverlap = Math.max(
-    0,
-    Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)
-  );
-
-  return xOverlap * yOverlap;
+  const x = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const y = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  return x * y;
 }
 
-/**
- * Returns the application that is MOST VISIBLE on a given display.
- *
- * IMPORTANT:
- * - This does NOT rely on OS focus / active window
- * - It looks at ALL visible windows
- * - The window with the largest overlap area on the display wins
- *
- * This enables true multi-monitor attribution.
- *
- * @param {number} displayIndex - Zero-based index of the display
- * @returns {Promise<string|null>} - Resolved app name (with title if available)
- */
 export async function getMostVisibleAppForDisplay(displayIndex) {
   try {
-    // Fetch all connected displays
     const displays = screen.getAllDisplays();
     const display = displays[displayIndex];
-
     if (!display) return null;
 
     const displayBounds = display.bounds;
 
-    // Fetch ALL visible windows on the system
-    // active-win provides bounds, title, owner, etc.
+    // Get ALL visible windows (not just active)
     const windows = await activeWin.getWindows();
 
-    let bestMatch = null;
-    let maxVisibleArea = 0;
+    let best = null;
+    let maxArea = 0;
 
     for (const win of windows) {
-      // Skip invalid windows
       if (!win.bounds) continue;
       if (!win.owner?.name) continue;
 
-      // Calculate how much of this window is visible on the display
-      const visibleArea = intersectionArea(win.bounds, displayBounds);
+      const area = intersectionArea(win.bounds, displayBounds);
 
-      // Track the window with the largest visible area
-      if (visibleArea > maxVisibleArea) {
-        maxVisibleArea = visibleArea;
-        bestMatch = win;
+      if (area > maxArea) {
+        maxArea = area;
+        best = win;
       }
     }
 
-    // No window overlaps this display
-    if (!bestMatch) return null;
+    if (!best) return null;
 
-    const ownerName = bestMatch.owner.name;
-    const windowTitle = bestMatch.title;
+    const owner = best.owner.name;
+    const title = best.title;
 
-    // Combine app name + window title for better context
-    if (windowTitle && windowTitle !== ownerName) {
-      return `${ownerName} - ${windowTitle}`;
+    if (title && title !== owner) {
+      return `${owner} - ${title}`;
     }
 
-    return ownerName;
-
-  } catch (error) {
-    logWarn('VISIBLE-APP', `Failed to resolve visible app: ${error.message}`);
+    return owner;
+  } catch (err) {
+    logWarn('VISIBLE-APP', err.message);
     return null;
   }
 }
