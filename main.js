@@ -1,6 +1,3 @@
-import activeWin from 'active-win';
-import { screen } from 'electron';
-
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
   try {
@@ -123,7 +120,7 @@ async function backgroundCaptureScreenshots() {
     //const contextAppName = await getActiveAppName();
     const isIdle = isUserIdle;
 
-    /* const uploadPromises = sources.map(async (source, index) => {
+    const uploadPromises = sources.map(async (source, index) => {
       const screenIndex = index + 1;
     
       try {
@@ -184,49 +181,8 @@ async function backgroundCaptureScreenshots() {
         );
         return null;
       }
-    }); */
-
-    const uploadPromises = sources.map(async (source, index) => {
-      const screenIndex = index + 1;
+    });
     
-      try {
-        const dataUrl = source.thumbnail.toDataURL();
-    
-        const displays = screen.getAllDisplays();
-        const display = displays[index];
-        const displayId = display ? String(display.id) : null;
-        const screenName = display
-          ? `Display ${screenIndex} (${display.bounds.width}x${display.bounds.height})`
-          : `Screen ${screenIndex}`;
-    
-        // ✅ MOST VISIBLE WINDOW PER SCREEN
-        let appNameForScreen = await getMostVisibleAppForDisplay(index);
-        appNameForScreen ||= 'Unknown';
-    
-        logInfo(
-          'BG-UPLOAD',
-          `Screen ${screenIndex}: visible app = "${appNameForScreen}"`
-        );
-    
-        return addScreenshotToBatch({
-          userEmail: currentUserEmail,
-          sessionId: currentSessionId,
-          screenshotData: dataUrl,
-          timestamp,
-          isIdle,
-          contextLabel: 'BG-UPLOAD',
-          screenIndex,
-          screenName,
-          appName: appNameForScreen,
-          displayId
-        });
-    
-      } catch (err) {
-        logError('BG-UPLOAD', err.message, err);
-        return null;
-      }
-    });    
-  
     await Promise.allSettled(uploadPromises);
     logInfo('BG-UPLOAD', `Completed processing ${sources.length} screen(s)`);
     logInfo('BG-UPLOAD', '═══════════════════════════════════════════════════════════');
@@ -1216,54 +1172,6 @@ async function checkScreenRecordingPermission() {
   }
 }
 
-function intersectionArea(a, b) {
-  const x = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
-  const y = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
-  return x * y;
-}
-
-export async function getMostVisibleAppForDisplay(displayIndex) {
-  try {
-    const displays = screen.getAllDisplays();
-    const display = displays[displayIndex];
-    if (!display) return null;
-
-    const displayBounds = display.bounds;
-
-    // Get ALL visible windows (not just active)
-    const windows = await activeWin.getWindows();
-
-    let best = null;
-    let maxArea = 0;
-
-    for (const win of windows) {
-      if (!win.bounds) continue;
-      if (!win.owner?.name) continue;
-
-      const area = intersectionArea(win.bounds, displayBounds);
-
-      if (area > maxArea) {
-        maxArea = area;
-        best = win;
-      }
-    }
-
-    if (!best) return null;
-
-    const owner = best.owner.name;
-    const title = best.title;
-
-    if (title && title !== owner) {
-      return `${owner} - ${title}`;
-    }
-
-    return owner;
-  } catch (err) {
-    logWarn('VISIBLE-APP', err.message);
-    return null;
-  }
-}
-
 // Show comprehensive first-launch permissions dialog (macOS only, shown once)
 async function showFirstLaunchPermissionsDialog() {
   if (process.platform !== 'darwin') {
@@ -1564,6 +1472,67 @@ async function ensureMacPermissionsOnStartup() {
 
   return { screenRecordingStatus, accessibilityStatus, screenPrompted, accessibilityPrompted };
 }
+
+/*// Get app name for a specific display by finding the frontmost window on that display
+async function getActiveAppNameForDisplay(displayIndex = 0) {
+  if (process.platform !== 'darwin') {
+    // On non-macOS, just return the frontmost app
+    return await getActiveAppName();
+  }
+  
+  try {
+    const allDisplays = screen.getAllDisplays();
+    // ADD THESE LOGS HERE
+    sendToRendererConsole('ActiveWindow', `Total displays: ${allDisplays.length}`);
+    allDisplays.forEach((d, i) => {
+      sendToRendererConsole('ActiveWindow', `Display ${i+1} bounds: ${JSON.stringify(d.bounds)}`);
+    });
+    if (displayIndex < 0 || displayIndex >= allDisplays.length) {
+      logWarn('ActiveWindow', `Invalid display index ${displayIndex}, using primary display`);
+      return await getActiveAppName();
+    }
+    
+    const targetDisplay = allDisplays[displayIndex];
+    const displayCenterX = targetDisplay.bounds.x + (targetDisplay.bounds.width / 2);
+    const displayCenterY = targetDisplay.bounds.y + (targetDisplay.bounds.height / 2);
+    
+    sendToRendererConsole('ActiveWindow',  `Target display ${displayIndex + 1} center: x=${displayCenterX}, y=${displayCenterY}, bounds=${JSON.stringify(targetDisplay.bounds)}`);
+    
+    // Try to use @paymoapp/active-window first (better macOS handling), then active-win
+    const accessibilityStatus = await checkMacOSAccessibilityPermission();
+    if (accessibilityStatus === 'authorized') {
+      try {
+        const { result, provider } = await getActiveWindowDetails(true);
+        if (result && result.bounds) {
+          // Check if the window is on the target display
+          const windowCenterX = result.bounds.x + (result.bounds.width / 2);
+          const windowCenterY = result.bounds.y + (result.bounds.height / 2);
+          
+          // Check if window center is within the target display bounds
+          if (windowCenterX >= targetDisplay.bounds.x &&
+              windowCenterX < targetDisplay.bounds.x + targetDisplay.bounds.width &&
+              windowCenterY >= targetDisplay.bounds.y &&
+              windowCenterY < targetDisplay.bounds.y + targetDisplay.bounds.height) {
+            // Window is on target display, process it
+            return processActiveWindowResult(result);
+          } else {
+            // Window is on a different display, try AppleScript to get windows on target display
+            logInfo('ActiveWindow', `${provider || 'active window provider'} window is on different display, using AppleScript for display ${displayIndex + 1}`);
+          }
+        }
+      } catch (error) {
+        logWarn('ActiveWindow', `Active window provider failed for display ${displayIndex + 1}, using AppleScript: ${error.message}`);
+      }
+    }
+    
+    // Fallback to AppleScript to get windows on the target display
+    return await getActiveAppNameForDisplayViaAppleScript(displayIndex, targetDisplay);
+  } catch (error) {
+    logWarn('ActiveWindow', `Error getting app name for display ${displayIndex + 1}: ${error.message}`);
+    // Fallback to regular getActiveAppName
+    return await getActiveAppName();
+  }
+}*/
 
 function intersectionArea(a, b) {
   const x = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
