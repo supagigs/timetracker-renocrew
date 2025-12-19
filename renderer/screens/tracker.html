@@ -6,12 +6,12 @@
   <title>Time Tracker - Active Session</title>
   <link rel="stylesheet" href="../styles/common.css">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self';
-                 connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
-                 script-src 'self' https://cdn.jsdelivr.net;
-                 style-src 'self' 'unsafe-inline';
-                 img-src 'self' data: blob:;
-                 media-src 'self' data: blob:;">
+      content="default-src 'self';
+               connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
+               script-src 'self' https://cdn.jsdelivr.net;
+               style-src 'self' 'unsafe-inline';
+               img-src 'self' data: blob: https://*.supabase.co;
+               media-src 'self' data: blob:;">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="../scripts/supabaseClient.js"></script>
@@ -71,6 +71,32 @@
         <button id="clockOutBtn" class="btn-danger">Clock Out</button>
       </div>
     </div>
+  </br>
+
+<!-- Last Screenshot Section -->
+<div class="last-screenshot-container">
+  <h2 class="last-screenshot-title">Last Uploaded Screenshot</h2>
+  <div class="screenshot-display-wrapper">
+    <div class="screenshot-display">
+      <img
+        id="lastScreenshot"
+        class="screenshot-image"
+        src=""
+        alt="Last Screenshot"
+        style="display: none;"
+      />
+      <p
+        id="noScreenshotText"
+        class="screenshot-placeholder"
+      >
+        <span class="placeholder-content">
+          No screenshot captured yet
+        </span>
+      </p>
+    </div>
+  </div>
+</div>
+
 
     <!-- Statistics Table -->
     <div class="stats-section">

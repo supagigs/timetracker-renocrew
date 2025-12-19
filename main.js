@@ -986,8 +986,11 @@ function createWindow() {
 }
   
   const windowOptions = {
-    width: 900,
+    width: 900,     // width:420 for compact sizing
     height: 700,
+  //minWidth: 420,
+  //minHeight: 650,
+  //resizable: false,   //for locing screen size
     show: false, // do not show up until ready
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

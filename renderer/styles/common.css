@@ -1057,6 +1057,7 @@ select:disabled {
 
 .timer-section,
 .stats-section,
+.screenshots-section,
 .chart-section,
 .summary-section,
 .screenshots-section,
@@ -1667,6 +1668,84 @@ select:disabled {
   font-size: 16px;
   font-weight: bold;
 }
+
+/* ============ LAST SCREENSHOT SECTION ============ */
+.last-screenshot-container {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.96),
+    rgba(248, 250, 252, 0.92)
+  );
+  border-radius: 20px;
+  padding: 18px 20px;
+  margin: 20px 0;
+  box-shadow:
+    0 18px 40px rgba(15, 23, 42, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+/* Wrapper */
+.screenshot-display-wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.screenshot-display {
+  position: relative;
+  width: 100%;
+  border-radius: 14px;
+  background: transparent;
+}
+
+/* Screenshot image */
+.screenshot-image {
+  width: 100%;
+  height: auto;
+  display: none;
+  object-fit: contain;
+  border-radius: 14px;
+}
+
+
+.screenshot-image[style*="display: block"] {
+  background: #020617;
+}
+
+.screenshot-image[style*="display: block"] {
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.screenshot-display:has(.screenshot-image[style*="display: block"]) {
+  background: #020617;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.8);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+/* Placeholder */
+.screenshot-placeholder {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 999px;
+  background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.placeholder-content {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .last-screenshot-container {
+    padding: 14px 16px;
+  }
+}
+
 
 @keyframes slideInRight {
   from {

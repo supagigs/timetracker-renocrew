@@ -1333,7 +1333,9 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Starting background screenshot capture...');
     const email = StorageService.getItem('userEmail');
     const sessionId = currentSessionId || 'temp-session';
-    
+    // Wait 1.5s to ensure Supabase is fully initialized
+    setTimeout(showLastScreenshot, 1500);
+
     // Start background screenshot capture in main process
     window.electronAPI.startBackgroundScreenshots(email, sessionId)
       .then(() => {
@@ -1741,3 +1743,45 @@ document.addEventListener('DOMContentLoaded', () => {
   timerInterval = setInterval(updateTimer, 1000);
 });
 
+async function showLastScreenshot() {
+  try {
+    const email = StorageService.getItem('userEmail');
+    
+    if (!email || !window.supabase) {
+      console.warn('showLastScreenshot: Email or Supabase not available');
+      return;
+    }
+
+    const { data, error } = await window.supabase
+      .from('screenshots')
+      .select('screenshot_data, captured_at, app_name')
+      .eq('user_email', email) 
+      .order('captured_at', { ascending: false })
+      .limit(1);
+    
+    if (error) {
+      console.error('Query error in showLast  Screenshot:', error);
+      return;
+    }
+    
+    if (!data || data.length === 0) {
+      console.log('No screenshots found yet');
+      return;
+    }
+    
+    const img = document.getElementById('lastScreenshot');
+    const placeholder = document.getElementById('noScreenshotText');
+    
+    if (img && placeholder) {
+      img.src = data[0].screenshot_data;
+      img.style.display = 'block';
+      placeholder.style.display = 'none';
+      
+      if (data[0].app_name) {
+        console.log('Screenshot from app:', data[0].app_name);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load last screenshot:', err);
+  }
+}
