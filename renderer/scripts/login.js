@@ -60,7 +60,7 @@ function initializeLoginPage() {
     emailInput.removeAttribute('readonly');
     emailInput.removeAttribute('disabled');
     
-    // Hide category dropdown and projects section – we no longer ask for user type
+    // Hide category dropdown and projects section (no longer used with Frappe auth)
     const categoryGroup = document.getElementById('categoryGroup');
     const projectsGroup = document.getElementById('projectsGroup');
     if (categoryGroup) {
@@ -70,26 +70,31 @@ function initializeLoginPage() {
       projectsGroup.style.display = 'none';
     }
     
-    // Add event listener to check if user exists when email is entered
-    emailInput.addEventListener('blur', async function() {
-      const email = emailInput.value.trim();
-      if (email && ValidationService.validateEmail(email)) {
-        await checkUserExists(email);
-      } else {
-        // Hide category dropdown if email is invalid or empty
-        if (categoryGroup) {
-          categoryGroup.style.display = 'none';
+    // Add Enter key support - move to password field when Enter is pressed in email
+    emailInput.addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const passwordInput = document.getElementById('password');
+        if (passwordInput) {
+          passwordInput.focus();
         }
       }
     });
     
+    // Handle Enter key in password field to trigger login
+    const passwordInput = document.getElementById('password');
+    if (passwordInput) {
+      passwordInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handleLogin();
+        }
+      });
+    }
+    
     // Remove any existing event listeners to prevent duplicates
-    emailInput.removeEventListener('keypress', handleEnterKey);
     emailInput.removeEventListener('click', handleEmailClick);
     emailInput.removeEventListener('mousedown', handleEmailMouseDown);
-    
-    // Add Enter key support
-    emailInput.addEventListener('keypress', handleEnterKey);
     
     // Add click event to ensure field is clickable
     emailInput.addEventListener('click', handleEmailClick);
@@ -131,12 +136,6 @@ function initializeLoginPage() {
   }
 }
 
-// Separate event handler functions to prevent duplicate listeners
-function handleEnterKey(e) {
-  if (e.key === 'Enter') {
-    handleLogin();
-  }
-}
 
 function handleEmailClick() {
   console.log('Email input clicked');
@@ -289,61 +288,14 @@ function updateProjectsDisplay() {
   projectsList.appendChild(container);
 }
 
-// Check if user exists to show/hide category dropdown
-async function checkUserExists(email) {
-  // We no longer show or require categories or projects during login/signup,
-  // but we keep this function minimal to avoid breaking existing wiring.
-  try {
-    if (!window.supabase) {
-      return;
-    }
-    
-    const { data: existingUser, error } = await SupabaseService.handleRequest(() =>
-      window.supabase
-        .from('users')
-        .select('email')
-        .eq('email', email)
-        .maybeSingle()
-    );
-    
-    if (error && error.code !== 'PGRST116') {
-      console.error('Error checking user:', error);
-      console.error('Error details:', {
-        message: error.message,
-        code: error.code,
-        hint: error.hint,
-        details: error.details,
-        status: error.status,
-        statusCode: error.statusCode
-      });
-      console.error('Full error object:', JSON.stringify(error, null, 2));
-      
-      // Check if it's an RLS policy error
-      if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy') || error.statusCode === 556) {
-        console.error('⚠️ RLS Policy Error - The users table RLS policies need to be fixed.');
-        console.error('⚠️ Please run database-migration-users-fix-rls.sql in Supabase SQL Editor.');
-        NotificationService.showError('Database permission error. Please check console for details.');
-      }
-      return;
-    }
-    
-    // Previously we showed a category dropdown for new users.
-    // Now every user is treated as a Freelancer, so no extra UI is needed here.
-  } catch (err) {
-    console.error('Error checking user existence:', err);
-    // On error, hide the dropdown to be safe
-    if (categoryGroup) {
-      categoryGroup.style.display = 'none';
-    }
-    if (projectsGroup) {
-      projectsGroup.style.display = 'none';
-    }
-  }
-}
+// checkUserExists function removed - no longer needed with Frappe authentication
 
 async function handleLogin() {
   const emailInput = document.getElementById('email');
+  const passwordInput = document.getElementById('password');
+  const errorMessageEl = document.getElementById('errorMessage');
   const email = emailInput.value.trim();
+  const password = passwordInput.value;
   
   // Validate email
   if (!email) {
@@ -358,6 +310,19 @@ async function handleLogin() {
     return;
   }
 
+  // Validate password
+  if (!password) {
+    NotificationService.showError('Please enter your password');
+    passwordInput.focus();
+    return;
+  }
+
+  // Hide error message
+  if (errorMessageEl) {
+    errorMessageEl.style.display = 'none';
+    errorMessageEl.textContent = '';
+  }
+
   // Show loading state
   const loginBtn = document.getElementById('loginBtn');
   const originalText = loginBtn.textContent;
@@ -365,146 +330,127 @@ async function handleLogin() {
   loginBtn.innerHTML = '<span class="loading"></span> Logging in...';
 
   try {
-    // Check if Supabase client is available
-    if (!window.supabase) {
-      throw new Error('Database connection not configured. Please check your environment variables.');
+    // Check if auth API is available
+    if (!window.auth || !window.auth.login) {
+      throw new Error('Authentication service not available. Please restart the application.');
     }
 
-    // Check if user exists
-    const { data: existingUser, error } = await SupabaseService.handleRequest(() =>
-      window.supabase
-        .from('users')
-        .select('*')
-        .eq('email', email)
-        .maybeSingle() // Use maybeSingle instead of single to avoid error when no rows found
-    );
+    // Attempt Frappe login
+    console.log('Attempting Frappe login for:', email);
+    const result = await window.auth.login(email, password);
 
-    if (error && error.code !== 'PGRST116') {
-      console.error('Login error details:', {
-        message: error.message,
-        code: error.code,
-        hint: error.hint,
-        details: error.details,
-        status: error.status,
-        statusCode: error.statusCode
-      });
-      console.error('Full error object:', JSON.stringify(error, null, 2));
+    if (!result.success) {
+      const errorMsg = result.error || 'Invalid credentials. Please check your email and password.';
+      console.error('Frappe login failed:', errorMsg);
       
-      // Check if it's an RLS policy error
-      if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy') || error.statusCode === 556) {
-        console.error('⚠️ RLS Policy Error - The users table RLS policies need to be fixed.');
-        console.error('⚠️ Please run database-migration-users-fix-rls.sql in Supabase SQL Editor.');
-        NotificationService.showError('Database permission error. Please check console for details.');
+      // Show error message
+      if (errorMessageEl) {
+        errorMessageEl.textContent = errorMsg;
+        errorMessageEl.style.display = 'block';
+      } else {
+        NotificationService.showError(errorMsg);
       }
-      throw error;
+      
+      passwordInput.value = '';
+      passwordInput.focus();
+      return;
     }
 
-    if (!existingUser) {
-      // New user – we no longer distinguish between Client and Freelancer.
-      // Every account is treated as a Freelancer.
-      const category = 'Freelancer';
-      console.log('Creating new user with email:', email, 'as single role:', category);
-      const { error: insertError } = await SupabaseService.handleRequest(() =>
-        window.supabase.from('users').insert([{ 
-          email,
-          display_name: null, // Explicitly set to null, will be updated when user sets display name
-          category: category // Always store as 'Freelancer'
-        }])
-      );
-      
-      if (insertError) {
-        console.error('Error creating user:', insertError);
-        throw insertError;
+    console.log('Frappe login successful for:', email);
+    NotificationService.showLoginSuccess(email);
+    
+    // Store user email (always treat as Freelancer since we removed client concept)
+    StorageService.setItem('userEmail', email);
+    StorageService.setItem('userCategory', 'Freelancer');
+    
+    if (window.electronAPI?.setUserLoggedIn) {
+      window.electronAPI.setUserLoggedIn(true).catch(err => console.error('Failed to update logged-in state:', err));
+    }
+    
+    if (window.SessionSync) {
+      window.SessionSync.setEmail(email);
+      window.SessionSync.updateAppState(true);
+    }
+    
+    // Check for display name:
+    // 1) Try to load from Supabase users table
+    // 2) Fallback to localStorage
+    let displayName = StorageService.getItem('displayName');
+
+    try {
+      if (window.supabase) {
+        // Look up existing user by email
+        const { data: existingUser, error } = await SupabaseService.handleRequest(() =>
+          window.supabase
+            .from('users')
+            .select('id, email, display_name, category')
+            .eq('email', email)
+            .maybeSingle()
+        );
+
+        if (error && error.code !== 'PGRST116') {
+          console.error('Error loading user profile from Supabase:', error);
+        }
+
+        let userRow = existingUser || null;
+
+        // If user does not exist yet in Supabase, create a basic record
+        if (!userRow) {
+          console.log('No Supabase user found for email, creating profile row:', email);
+          const { data: inserted, error: insertError } = await SupabaseService.handleRequest(() =>
+            window.supabase
+              .from('users')
+              .insert([{
+                email,
+                display_name: null,
+                category: 'Freelancer'
+              }])
+              .select('id, email, display_name, category')
+              .maybeSingle()
+          );
+
+          if (insertError) {
+            console.error('Error creating user profile in Supabase:', insertError);
+          } else {
+            userRow = inserted || null;
+          }
+        }
+
+        // If Supabase has a display_name, use it and cache locally
+        if (userRow && userRow.display_name && userRow.display_name.trim() !== '') {
+          displayName = userRow.display_name.trim();
+          StorageService.setItem('displayName', displayName);
+        }
       }
-      
-      console.log('User created successfully');
-      
-      NotificationService.showNewUserCreated(email);
-      
-      // Store user email and single user type
-      StorageService.setItem('userEmail', email);
-      StorageService.setItem('userCategory', 'Freelancer');
-      if (window.electronAPI?.setUserLoggedIn) {
-        window.electronAPI.setUserLoggedIn(true).catch(err => console.error('Failed to update logged-in state:', err));
-      }
-      if (window.SessionSync) {
-        window.SessionSync.setEmail(email);
-        window.SessionSync.updateAppState(true);
-      }
-      
-      // Navigate to display name screen for new users
+    } catch (profileError) {
+      console.error('Error syncing display name with Supabase:', profileError);
+      // Non-fatal – we still fallback to local storage check below
+    }
+
+    // Final decision: if we have a display name now, go to home; otherwise ask for it once
+    if (displayName && displayName.trim() !== '') {
+      setTimeout(() => {
+        window.location.href = './home.html';
+      }, 1000);
+    } else {
       setTimeout(() => {
         window.location.href = './displayName.html';
       }, 1000);
-    } else {
-      NotificationService.showLoginSuccess(email);
-      
-      // Store user email and treat all users as the single Freelancer role
-      StorageService.setItem('userEmail', email);
-      StorageService.setItem('userCategory', 'Freelancer');
-      if (window.electronAPI?.setUserLoggedIn) {
-        window.electronAPI.setUserLoggedIn(true).catch(err => console.error('Failed to update logged-in state:', err));
-      }
-      
-      // Check if user has display name
-      if (existingUser.display_name && existingUser.display_name.trim() !== '') {
-        // Store display name and go directly to home
-        StorageService.setItem('displayName', existingUser.display_name);
-        setTimeout(() => {
-          window.location.href = './home.html';
-        }, 1000);
-      } else {
-        // User exists but no display name in database
-        console.log('User exists but no display name found in database');
-        
-        // Check if we have a local display name that we can sync
-        const localName = StorageService.getItem('displayName');
-        if (localName && localName.trim() !== '') {
-          console.log('Found local display name, attempting to sync:', localName);
-          try {
-            const { data, error } = await SupabaseService.handleRequest(() =>
-              supabase
-                .from('users')
-                .update({ display_name: localName })
-                .eq('email', email)
-                .select()
-            );
-            
-            if (error) {
-              console.error('Error syncing local display name:', error);
-              throw error;
-            }
-            
-            console.log('Local display name synced successfully:', data);
-            StorageService.setItem('displayName', localName);
-            setTimeout(() => {
-              window.location.href = './home.html';
-            }, 500);
-          } catch (error) {
-            console.error('Failed to sync local display name:', error);
-            // If sync fails, go to display name screen to re-enter
-            setTimeout(() => {
-              window.location.href = './displayName.html';
-            }, 500);
-          }
-        } else {
-          // No display name anywhere, go to display name screen
-          console.log('No display name found locally or in database, redirecting to display name screen');
-          setTimeout(() => {
-            window.location.href = './displayName.html';
-          }, 1000);
-        }
-      }
-
-      if (window.SessionSync) {
-        window.SessionSync.setEmail(email);
-        window.SessionSync.updateAppState(true);
-      }
     }
 
   } catch (err) {
     console.error('Login error:', err);
-    NotificationService.showError('Login failed. Please try again.');
+    const errorMsg = err.message || 'Login failed. Please try again.';
+    
+    if (errorMessageEl) {
+      errorMessageEl.textContent = errorMsg;
+      errorMessageEl.style.display = 'block';
+    } else {
+      NotificationService.showError(errorMsg);
+    }
+    
+    passwordInput.value = '';
+    passwordInput.focus();
   } finally {
     // Reset button state
     loginBtn.disabled = false;

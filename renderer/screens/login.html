@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="../styles/common.css">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
-                 connect-src 'self' https://*.supabase.co wss://*.supabase.co;
+                 connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
                  script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
                  style-src 'self' 'unsafe-inline';
                  img-src 'self' data: blob:;
@@ -53,49 +53,30 @@
             placeholder="your@email.com"
             required
             class="auth-input"
+            autocomplete="username"
           >
         </div>
 
-        <!-- Category dropdown (only shown for new users) -->
-        <div id="categoryGroup" class="auth-field-group" style="display: none;">
-          <label for="category">Select your category</label>
-          <select id="category" class="auth-select">
-            <option value="">-- Select Category --</option>
-            <option value="Client">Client</option>
-            <option value="Freelancer">Freelancer</option>
-          </select>
+        <label for="password" class="sr-only">Password</label>
+        <div class="auth-input-group">
+          <input
+            type="password"
+            id="password"
+            placeholder="Password"
+            required
+            class="auth-input"
+            autocomplete="current-password"
+          >
         </div>
 
-        <!-- Projects section (only shown for Clients) -->
-        <div id="projectsGroup" class="auth-field-group" style="display: none;">
-          <label for="newProjectInput">Add Projects (you can add multiple)</label>
-          <div class="auth-inline-fields">
-            <input
-              type="text"
-              id="newProjectInput"
-              placeholder="Enter project name"
-              class="auth-input"
-              onkeypress="if(event.key === 'Enter'){ event.preventDefault(); addProject(); }"
-            >
-            <button
-              type="button"
-              onclick="addProject()"
-              class="btn-secondary auth-secondary-btn"
-            >
-              Add Project
-            </button>
-          </div>
-          <div id="projectsList" class="project-chip-container">
-            <!-- Selected projects will be displayed here -->
-          </div>
-        </div>
+        <div id="errorMessage" class="auth-error-message" style="display: none;"></div>
 
-        <button id="loginBtn" class="btn-primary auth-submit">Login / Sign Up</button>
+        <button id="loginBtn" class="btn-primary auth-submit">Login</button>
       </div>
     </div>
 
     <p class="auth-helper-text">
-      Enter your email to get started. We’ll create an account or log you in instantly.
+      Enter your Frappe credentials to log in.
     </p>
 
     <p class="auth-footer-text">

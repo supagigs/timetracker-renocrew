@@ -1,5 +1,3 @@
-import 'dotenv/config';
-
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
   try {
@@ -195,6 +193,8 @@ async function backgroundCaptureScreenshots() {
 }
 
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences } = require('electron');
+const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
+const { getUserProjects: frappeGetUserProjects, setLoggers: setFrappeServiceLoggers } = require('./frappeService');
 const path = require('path');
 const fs = require('fs');
 const { execSync, exec } = require('child_process');
@@ -209,6 +209,15 @@ const envPath = app?.isPackaged
   ? path.join(process.resourcesPath, '.env')
   : path.join(__dirname, '.env');
 require('dotenv').config({ path: envPath });
+
+// Validate Frappe configuration on startup
+if (!process.env.FRAPPE_URL) {
+  console.error('⚠️  WARNING: FRAPPE_URL is not set in .env file');
+  console.error(`   Looking for .env at: ${envPath}`);
+  console.error('   Please add FRAPPE_URL=https://your-frappe-instance.com to your .env file');
+} else {
+  console.log(`✓ FRAPPE_URL configured: ${process.env.FRAPPE_URL}`);
+}
 
 const resolveScreenshotsDir = (ensure = true) => {
   const baseDir = app.isPackaged
@@ -279,6 +288,10 @@ function log(level, context, message, ...args) {
 function logInfo(context, message, ...args) { log('info', context, message, ...args); }
 function logWarn(context, message, ...args) { log('warn', context, message, ...args); }
 function logError(context, message, ...args) { log('error', context, message, ...args); }
+
+// Set up logging for Frappe modules (after log functions are defined)
+setFrappeAuthLoggers({ logInfo, logError, logWarn });
+setFrappeServiceLoggers({ logInfo, logError });
 
 // ============ macOS PERMISSIONS HELPER ============
 // Check Accessibility permission on macOS using native API without triggering prompts
@@ -3240,6 +3253,47 @@ async function getScreenshotInterval(userEmail, sessionId) {
 
 
 // ============ IPC HANDLERS ============
+
+// ============ FRAPPE AUTHENTICATION IPC HANDLERS ============
+ipcMain.handle('auth:login', async (event, { email, password }) => {
+  try {
+    const result = await frappeLogin(email, password);
+    return result;
+  } catch (error) {
+    logError('IPC', `Frappe login error: ${error.message}`, error);
+    return { success: false, error: error.message || 'Login failed' };
+  }
+});
+
+ipcMain.handle('auth:logout', async () => {
+  try {
+    await frappeLogout();
+    return { success: true };
+  } catch (error) {
+    logError('IPC', `Frappe logout error: ${error.message}`, error);
+    return { success: false, error: error.message || 'Logout failed' };
+  }
+});
+
+ipcMain.handle('auth:me', async () => {
+  try {
+    const userEmail = await frappeGetCurrentUser();
+    return userEmail;
+  } catch (error) {
+    logError('IPC', `Frappe getCurrentUser error: ${error.message}`, error);
+    return null;
+  }
+});
+
+ipcMain.handle('frappe:get-user-projects', async () => {
+  try {
+    const projects = await frappeGetUserProjects();
+    return projects;
+  } catch (error) {
+    logError('IPC', `Frappe getProjects error: ${error.message}`, error);
+    return [];
+  }
+});
 
 // existing handler
 ipcMain.handle('set-user-logged-in', async (event, flag) => {

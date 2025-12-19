@@ -6,6 +6,22 @@ contextBridge.exposeInMainWorld('env', {
   REPORTS_URL: process.env.REPORTS_URL || process.env.NEXTJS_REPORTS_URL || ''
 });
 
+contextBridge.exposeInMainWorld('auth', {
+  login: (email, password) =>
+    ipcRenderer.invoke('auth:login', { email, password }),
+
+  logout: () =>
+    ipcRenderer.invoke('auth:logout'),
+
+  me: () =>
+    ipcRenderer.invoke('auth:me'),
+});
+
+contextBridge.exposeInMainWorld('frappe', {
+  getUserProjects: () =>
+    ipcRenderer.invoke('frappe:get-user-projects'),
+});
+
 contextBridge.exposeInMainWorld('electronAPI', {
   startBackgroundScreenshots: (userEmail, sessionId) =>
     ipcRenderer.invoke('start-background-screenshots', userEmail, sessionId),

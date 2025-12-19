@@ -77,68 +77,52 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateDateTime();
   setInterval(updateDateTime, 1000);
 
-  // Load assigned projects for Freelancers
+  // Load assigned projects from Frappe
   async function loadAssignedProjects() {
     try {
-      if (!window.supabase) {
-        NotificationService.showError('Database connection not available.');
-        return;
-      }
-
-      const { data: assignments, error } = await SupabaseService.handleRequest(() =>
-        window.supabase
-          .from('project_assignments')
-          .select(`
-            project_id,
-            projects (
-              id,
-              project_name,
-              user_email
-            )
-          `)
-          .eq('freelancer_email', email)
-      );
-
-      if (error) {
-        console.error('Error loading assigned projects:', error);
-        
-        // Check if the error is because the table doesn't exist
-        if (error.code === 'PGRST205' || error.message?.includes('Could not find the table')) {
-          console.warn('project_assignments table does not exist. Please run the database migration.');
-          // Show user-friendly message instead of error
-          projectSelect.classList.add('hidden');
-          noProjectsMessage.textContent = 'Project assignments feature is not set up. Please contact your administrator to run the database migration.';
-          noProjectsMessage.classList.add('show');
-          startSessionBtn.disabled = true;
-        } else {
-          NotificationService.showError('Failed to load assigned projects.');
-        }
-        return;
-      }
-
-      if (!assignments || assignments.length === 0) {
+      if (!window.frappe || !window.frappe.getUserProjects) {
+        NotificationService.showError('Frappe service not available.');
         projectSelect.classList.add('hidden');
+        noProjectsMessage.textContent = 'Unable to connect to Frappe. Please restart the application.';
         noProjectsMessage.classList.add('show');
         startSessionBtn.disabled = true;
         return;
       }
 
-      // Populate dropdown
+      console.log('Fetching projects from Frappe...');
+      const projects = await window.frappe.getUserProjects();
+      
+      console.log('Projects received from Frappe:', projects);
+      console.log('Number of projects:', projects?.length || 0);
+
+      if (!projects || projects.length === 0) {
+        console.warn('No projects found for user');
+        projectSelect.classList.add('hidden');
+        noProjectsMessage.textContent = 'No projects assigned to you in Frappe. Please contact your administrator.';
+        noProjectsMessage.classList.add('show');
+        startSessionBtn.disabled = true;
+        return;
+      }
+
+      // Populate dropdown with Frappe projects
       projectSelect.innerHTML = '<option value="">Select a project...</option>';
-      assignments.forEach(assignment => {
-        if (assignment.projects) {
-          const option = document.createElement('option');
-          option.value = assignment.projects.id;
-          option.textContent = assignment.projects.project_name;
-          projectSelect.appendChild(option);
-        }
+      projects.forEach(project => {
+        const option = document.createElement('option');
+        option.value = project.id; // Frappe project ID (usually the name field)
+        option.textContent = project.name; // Project name
+        projectSelect.appendChild(option);
       });
 
       projectSelect.classList.remove('hidden');
       noProjectsMessage.classList.remove('show');
+      console.log(`Loaded ${projects.length} project(s) from Frappe`);
     } catch (error) {
       console.error('Error in loadAssignedProjects:', error);
-      NotificationService.showError('An error occurred while loading projects.');
+      NotificationService.showError('An error occurred while loading projects from Frappe.');
+      projectSelect.classList.add('hidden');
+      noProjectsMessage.textContent = 'Failed to load projects. Please try again later.';
+      noProjectsMessage.classList.add('show');
+      startSessionBtn.disabled = true;
     }
   }
 

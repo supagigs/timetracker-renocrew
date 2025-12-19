@@ -3,100 +3,35 @@
     return;
   }
 
+  // SessionSync is now a no-op since we're using Frappe authentication
+  // This keeps the API available for backward compatibility but doesn't try to sync with Supabase
   const SessionSync = {
     email: null,
     channel: null,
     logoutHandler: null,
 
-    get client() {
-      return window.supabase || null;
-    },
-
     setEmail(email) {
+      // Store email but don't subscribe to Supabase channels
       if (!email || typeof email !== 'string') {
         return;
       }
       const normalized = email.trim().toLowerCase();
-      if (this.email === normalized) {
-        return;
-      }
       this.email = normalized;
-      this.subscribe();
+      // No-op: Previously subscribed to Supabase realtime channels
     },
 
     async updateAppState(loggedIn) {
-      if (!this.client || !this.email) {
-        return;
-      }
-
-      try {
-        const { data: existing, error: fetchError } = await this.client
-          .from('user_sessions')
-          .select('web_logged_in, app_logged_in')
-          .eq('email', this.email)
-          .maybeSingle();
-
-        if (fetchError) {
-          throw fetchError;
-        }
-
-        const payload = {
-          email: this.email,
-          app_logged_in: !!loggedIn,
-          web_logged_in: existing?.web_logged_in ?? false,
-          updated_at: new Date().toISOString(),
-        };
-
-        const { error: upsertError } = await this.client
-          .from('user_sessions')
-          .upsert(payload);
-
-        if (upsertError) {
-          throw upsertError;
-        }
-      } catch (error) {
-        console.error('[SessionSync] Failed to update app session state:', error);
-      }
+      // No-op: Previously synced session state with Supabase user_sessions table
+      // With Frappe, session management is handled server-side
+      return Promise.resolve();
     },
 
     subscribe() {
-      if (!this.client || !this.email) {
-        return;
-      }
-
-      if (this.channel) {
-        this.client.removeChannel(this.channel);
-        this.channel = null;
-      }
-
-      this.channel = this.client
-        .channel(`user-session-app-${this.email}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'user_sessions',
-            filter: `email=eq.${this.email}`,
-          },
-          (payload) => {
-            const oldWeb = payload.old?.web_logged_in ?? null;
-            const newWeb = payload.new?.web_logged_in ?? null;
-
-            if (newWeb === false && oldWeb !== newWeb) {
-              this.triggerRemoteLogout('web');
-            }
-          },
-        );
-
-      this.channel.subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR') {
-          console.error('[SessionSync] Channel error:', err);
-        }
-      });
+      // No-op: Previously subscribed to Supabase realtime channels
     },
 
     triggerRemoteLogout(source) {
+      // Still dispatch event in case other code listens for it
       if (typeof this.logoutHandler === 'function') {
         try {
           this.logoutHandler(source);
@@ -117,9 +52,7 @@
     },
 
     clear() {
-      if (this.channel && this.client) {
-        this.client.removeChannel(this.channel);
-      }
+      // No-op: Previously cleaned up Supabase channels
       this.channel = null;
       this.email = null;
     },

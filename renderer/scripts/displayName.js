@@ -49,33 +49,51 @@ document.addEventListener('DOMContentLoaded', () => {
     saveBtn.innerHTML = '<span class="loading"></span> Saving...';
 
     try {
-      // Check if Supabase client is available
-      if (!window.supabase) {
-        throw new Error('Database connection not configured. Please check your environment variables.');
+      // Prefer saving to Supabase users table when available so display name
+      // is persisted across machines. Fall back to local-only storage if Supabase
+      // is not configured.
+      let savedToDatabase = false;
+
+      if (window.supabase) {
+        try {
+          console.log('Updating Supabase display name for email:', email, 'name:', displayName);
+          const { data, error } = await SupabaseService.handleRequest(() =>
+            window.supabase
+              .from('users')
+              .upsert(
+                {
+                  email,
+                  display_name: displayName,
+                  category: 'Freelancer',
+                },
+                { onConflict: 'email' }
+              )
+              .select('email, display_name')
+              .maybeSingle()
+          );
+
+          if (error) {
+            console.error('Error updating display name in Supabase:', error);
+          } else {
+            console.log('Display name updated in Supabase:', data);
+            savedToDatabase = true;
+          }
+        } catch (dbError) {
+          console.error('Exception while updating display name in Supabase:', dbError);
+        }
+      } else {
+        console.warn('Supabase client not available; saving display name locally only.');
       }
 
-      // Update user with display name using proper error handling
-      console.log('Updating display name for email:', email, 'with name:', displayName);
-      const { data, error } = await SupabaseService.handleRequest(() =>
-        supabase
-          .from('users')
-          .update({ display_name: displayName })
-          .eq('email', email)
-          .select()
-      );
-
-      if (error) {
-        console.error('Error updating display name:', error);
-        throw error;
-      }
-
-      console.log('Display name updated successfully:', data);
-      
-      // Store display name locally using StorageService
+      // Always cache locally so subsequent logins on this device skip this screen
       StorageService.setItem('displayName', displayName);
-      
+
+      if (!savedToDatabase) {
+        console.warn('Display name may not be saved in the remote database; using local storage.');
+      }
+
       NotificationService.showDisplayNameSaved();
-      
+
       // Go to home page
       setTimeout(() => {
         window.location.href = 'home.html';
