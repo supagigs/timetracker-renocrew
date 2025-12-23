@@ -1361,6 +1361,30 @@ select:disabled {
   padding: 12px;
 }
 
+.timesheet-detail-row {
+  margin-bottom: 16px;
+}
+
+.timesheet-detail-row:last-child {
+  margin-bottom: 0;
+}
+
+.timesheet-detail-label {
+  display: block;
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 0.9rem;
+}
+
+.timesheet-detail-row input[readonly],
+.timesheet-detail-row input[disabled] {
+  background-color: #f3f4f6;
+  color: var(--text-primary);
+  cursor: not-allowed;
+  opacity: 0.9;
+}
+
 .no-projects-message {
   display: none;
   color: var(--warning);

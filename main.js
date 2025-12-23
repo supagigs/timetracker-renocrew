@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
   try {
@@ -194,12 +196,14 @@ async function backgroundCaptureScreenshots() {
 
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences } = require('electron');
 const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
-const { getUserProjects: frappeGetUserProjects, setLoggers: setFrappeServiceLoggers } = require('./frappeService');
+const { getUserProjects: frappeGetUserProjects, setLoggers: setFrappeServiceLoggers, createTimesheet } = require('./frappeService');
 const path = require('path');
 const fs = require('fs');
 const { execSync, exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
+const { getMyTasksForProject } = require('./frappeService');
+
 
 if (process.platform === 'win32') {
   app.setAppUserModelId("Supagigs Time Tracker");
@@ -3267,6 +3271,11 @@ ipcMain.handle('auth:login', async (event, { email, password }) => {
 
 ipcMain.handle('auth:logout', async () => {
   try {
+    // STOP timer globally
+    isTimerActive = false;
+    currentSessionId = null;
+
+    forceStopAllTimers();
     await frappeLogout();
     return { success: true };
   } catch (error) {
@@ -3274,6 +3283,14 @@ ipcMain.handle('auth:logout', async () => {
     return { success: false, error: error.message || 'Logout failed' };
   }
 });
+
+function forceStopAllTimers() {
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('force-stop-timer');
+    }
+  });
+}
 
 ipcMain.handle('auth:me', async () => {
   try {
@@ -3294,6 +3311,17 @@ ipcMain.handle('frappe:get-user-projects', async () => {
     return [];
   }
 });
+
+ipcMain.handle('frappe:create-timesheet', async (_e, payload) => {
+  return await createTimesheet(payload);
+});
+
+ipcMain.handle(
+  'frappe:get-tasks-for-project',
+  async (_event, projectId) => {
+    return await getMyTasksForProject(projectId);
+  }
+);
 
 // existing handler
 ipcMain.handle('set-user-logged-in', async (event, flag) => {

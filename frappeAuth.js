@@ -70,6 +70,8 @@ async function logout() {
   } catch (err) {
     if (logError) logError('Frappe', 'Logout error:', err);
     // Don't throw - logout should always succeed from app perspective
+  } finally {
+    clearFrappeSession();
   }
 }
 

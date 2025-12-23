@@ -4,6 +4,10 @@ const { wrapper } = require('axios-cookiejar-support');
 
 const jar = new CookieJar();
 
+function clearFrappeSession() {
+  jar.removeAllCookiesSync();
+}
+
 // Get and validate FRAPPE_URL
 function getFrappeBaseURL() {
   const frappeUrl = process.env.FRAPPE_URL;
@@ -44,5 +48,11 @@ function createFrappeClient() {
   );
 }
 
-module.exports = { jar, getFrappeBaseURL, createFrappeClient };
+module.exports = {
+  jar,
+  getFrappeBaseURL,
+  createFrappeClient,
+  clearFrappeSession
+};
+
 

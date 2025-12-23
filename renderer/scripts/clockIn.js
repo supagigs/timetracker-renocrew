@@ -126,7 +126,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // Start session button
+  // Project selection change handler - redirect to task selection
+  projectSelect.addEventListener('change', () => {
+    if (projectSelect.value) {
+      const selectedProjectId = projectSelect.value;
+      const selectedProjectName = projectSelect.options[projectSelect.selectedIndex].textContent;
+      
+      // Store project info
+      StorageService.setItem('selectedProjectId', selectedProjectId);
+      StorageService.setItem('selectedProjectName', selectedProjectName);
+      
+      // Redirect to task selection screen
+      window.location.href = `selectTask.html?projectId=${selectedProjectId}`;
+    }
+  });
+
+  // Start session button (kept for backward compatibility, but should redirect to task selection)
   startSessionBtn.addEventListener('click', async () => {
     // Validate project selection for Freelancers
     if (isFreelancer) {
@@ -136,9 +151,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         projectSelect.focus();
         return;
       }
+      
+      const selectedProjectName = projectSelect.options[projectSelect.selectedIndex].textContent;
       StorageService.setItem('selectedProjectId', selectedProjectId);
+      StorageService.setItem('selectedProjectName', selectedProjectName);
+      
+      // Redirect to task selection screen
+      window.location.href = `selectTask.html?projectId=${selectedProjectId}`;
+      return;
     }
 
+    // For non-freelancers (if any), proceed with old flow
     try {
       // Create session record immediately in database
       const sessionStartTime = new Date().toISOString();
@@ -151,11 +174,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         active_duration: 0,
         session_date: today
       };
-
-      // Add project_id for Freelancers
-      if (isFreelancer && projectSelect.value) {
-        sessionData.project_id = parseInt(projectSelect.value);
-      }
 
       console.log('Creating session with data:', sessionData);
 
@@ -174,8 +192,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (data && data[0]) {
         const sessionId = data[0].id;
         console.log('Session created with ID:', sessionId);
-        console.log('Created session data:', data[0]);
-        console.log('Session project_id:', data[0].project_id);
         
         // Store session data including the database ID
         StorageService.setItem('sessionStartTime', sessionStartTime);

@@ -371,6 +371,26 @@ async function handleLogin() {
       window.SessionSync.setEmail(email);
       window.SessionSync.updateAppState(true);
     }
+
+    // 🛡️ Crash recovery: Check for and close any ghost running timers left from crashes
+    // This prevents overlap errors and cleans up orphaned time logs
+    if (window.frappe && window.frappe.recoverRunningTimers) {
+      try {
+        // Get employee ID first
+        const employeeResult = await window.frappe.getEmployeeId(email);
+        if (employeeResult && employeeResult.success && employeeResult.employeeId) {
+          console.log('Running crash recovery for employee:', employeeResult.employeeId);
+          const recoveryResult = await window.frappe.recoverRunningTimers(employeeResult.employeeId);
+          if (recoveryResult && recoveryResult.success && recoveryResult.recovered > 0) {
+            console.log(`Crash recovery completed: ${recoveryResult.message}`);
+            NotificationService.showInfo(`Recovered ${recoveryResult.recovered} timer(s) from previous session`);
+          }
+        }
+      } catch (recoveryError) {
+        console.error('Error during crash recovery:', recoveryError);
+        // Don't block login if recovery fails
+      }
+    }
     
     // Check for display name:
     // 1) Try to load from Supabase users table

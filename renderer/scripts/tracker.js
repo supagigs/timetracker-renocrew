@@ -40,6 +40,28 @@ document.addEventListener('DOMContentLoaded', () => {
   
   let projectTimeData = new Map(); // Store project times: projectId -> {name, time, currentSessionTime}
 
+
+    // 🔥 Force-stop timer from main process (logout / remote logout / safety reset)
+    if (window.electronAPI && window.electronAPI.onForceStopTimer) {
+      window.electronAPI.onForceStopTimer(() => {
+        console.warn('Force-stopping timer from main process');
+  
+        StorageService.removeItem('isActive');
+        StorageService.removeItem('currentSessionId');
+        StorageService.removeItem('sessionStartTime');
+        StorageService.removeItem('workStartTime');
+        StorageService.removeItem('breakStartTime');
+        StorageService.removeItem('idleStartTime');
+  
+        stopScreenshotCapture();
+  
+        // Reset in-memory flags
+        isActive = false;
+        isOnBreak = false;
+        isIdle = false;
+      });
+    }
+  
   // Initialize
   init();
 
@@ -53,6 +75,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function init() {
+    // 🔐 Safety: never auto-restore timer after logout
+    const wasLoggedOut = StorageService.getItem('userLoggedOut') === 'true';
+    if (wasLoggedOut) {
+      StorageService.removeItem('isActive');
+      StorageService.removeItem('currentSessionId');
+      StorageService.removeItem('sessionStartTime');
+      StorageService.removeItem('workStartTime');
+      StorageService.removeItem('breakStartTime');
+      StorageService.removeItem('idleStartTime');
+      StorageService.removeItem('userLoggedOut');
+    }
+
     const email = StorageService.getItem('userEmail');
     if (!email) {
       alert('No user email found. Please login again.');
@@ -68,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load session data
     sessionStartTime = StorageService.getItem('sessionStartTime');
-    currentSessionId = StorageService.getItem('currentSessionId');
+    currentSessionId = StorageService.getItem('frappeTimesheetId');
     workStartTime = StorageService.getItem('workStartTime');
     isActive = StorageService.getItem('isActive') === 'true';
     isOnBreak = StorageService.getItem('isOnBreak') === 'true';
@@ -255,9 +289,12 @@ document.addEventListener('DOMContentLoaded', () => {
         idleTracker.startTracking();
       }
       
-      // Start background screenshot capture system
-      // The background system has its own initial delay (200ms) to ensure displays are initialized
-      startScreenshotCapture();
+      // Delay the very first screenshot to avoid multi-monitor misrouting (5-7s window)
+      const FIRST_CAPTURE_DELAY_MS = 6000; // ~6 seconds
+      setTimeout(() => {
+        captureScreenshot();
+        startScreenshotCapture();
+      }, FIRST_CAPTURE_DELAY_MS);
     }
   }
 
@@ -333,7 +370,7 @@ document.addEventListener('DOMContentLoaded', () => {
       workStartTime = new Date().toISOString();
       StorageService.setItem('workStartTime', workStartTime);
       // Take an immediate screenshot on resume so short post-break segments are captured
-      //captureScreenshot();
+      captureScreenshot();
       startScreenshotCapture();
       
       // Resume idle tracking
@@ -484,23 +521,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const today = new Date().toISOString().split('T')[0];
     let selectedProjectId = StorageService.getItem('selectedProjectId');
 
-    // If project_id is not in storage, try to get it from the existing session
-    if (!selectedProjectId && currentSessionId) {
-      try {
-        const { data: existingSession } = await window.supabase
-          .from('time_sessions')
-          .select('project_id')
-          .eq('id', parseInt(currentSessionId))
-          .single();
-        
-        if (existingSession && existingSession.project_id) {
-          selectedProjectId = existingSession.project_id.toString();
-          console.log('Retrieved project_id from existing session:', selectedProjectId);
-        }
-      } catch (err) {
-        console.log('Could not retrieve project_id from existing session:', err);
-      }
-    }
+    console.warn('Skipping Supabase session lookup for Frappe timesheet ID');
 
     console.log('Saving session with data:', {
       currentSessionId,
@@ -538,7 +559,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const { data, error } = await window.supabase
           .from('time_sessions')
           .update(updateData)
-          .eq('id', parseInt(currentSessionId))
+          .eq('id', (currentSessionId))
           .select();
 
         if (error) {
@@ -567,12 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
           session_date: today
         };
 
-        // Include project_id if available (for Freelancers)
-        if (selectedProjectId) {
-          insertData.project_id = parseInt(selectedProjectId);
-          console.log('Including project_id in insert:', insertData.project_id);
-        }
-
+        console.warn('Skipping project_id insert for Supabase (Frappe project)');
         console.log('Inserting new session with data:', insertData);
 
         const { data, error } = await window.supabase
@@ -861,11 +877,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // If not in storage, try to get from current session
       let projectId = selectedProjectId;
       if (!projectId && currentSessionId) {
-        const { data: session } = await window.supabase
-          .from('time_sessions')
-          .select('project_id')
-          .eq('id', parseInt(currentSessionId))
-          .maybeSingle();
+        return;
         
         if (session && session.project_id) {
           projectId = session.project_id.toString();
@@ -879,31 +891,8 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // Fetch project name
-      const { data: project, error } = await SupabaseService.handleRequest(() =>
-        window.supabase
-          .from('projects')
-          .select('project_name')
-          .eq('id', parseInt(projectId))
-          .maybeSingle()
-      );
 
-      if (error) {
-        console.error('Error loading project name:', error);
-        if (projectNameSection) {
-          projectNameSection.style.display = 'none';
-        }
-        return;
-      }
-
-      if (project && project.project_name && projectNameDisplay && projectNameSection) {
-        projectNameDisplay.textContent = project.project_name;
-        projectNameSection.style.display = 'block';
-      } else {
-        if (projectNameSection) {
-          projectNameSection.style.display = 'none';
-        }
-      }
+      
     } catch (error) {
       console.error('Error in loadProjectName:', error);
       if (projectNameSection) {
@@ -952,7 +941,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (sessions) {
         sessions.forEach(session => {
           // Skip current session if it's in the results (shouldn't happen since we filter by end_time, but just in case)
-          if (currentSessionId && session.id === parseInt(currentSessionId)) {
+          if (currentSessionId && session.id === (currentSessionId)) {
             return;
           }
 
@@ -1191,7 +1180,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const currentSessionId = StorageService.getItem('currentSessionId');
       if (selectedProjectId && isActive && !isOnBreak && !isIdle && workStartTime) {
         // Check if current session is already in the fetched sessions
-        const currentSessionInList = sessionList.find(s => s.id === parseInt(currentSessionId));
+        const currentSessionInList = sessionList.find(s => s.id === (currentSessionId));
         
         // Only add current time if session is not in the list (not saved yet) or if it's been updated since last save
         if (!currentSessionInList || (currentSessionInList && currentSessionInList.project_id === parseInt(selectedProjectId))) {
@@ -1516,6 +1505,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
+      StorageService.setItem('userLoggedOut', 'true');
       if (isActive && sessionStartTime) {
         console.log('Saving active session before logout...');
 

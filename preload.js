@@ -20,7 +20,15 @@ contextBridge.exposeInMainWorld('auth', {
 contextBridge.exposeInMainWorld('frappe', {
   getUserProjects: () =>
     ipcRenderer.invoke('frappe:get-user-projects'),
+
+  getTasksForProject: (projectId) =>
+    ipcRenderer.invoke('frappe:get-tasks-for-project', projectId),
+
+  createTimesheet: (payload) =>
+    ipcRenderer.invoke('frappe:create-timesheet', payload),
+
 });
+
 
 contextBridge.exposeInMainWorld('electronAPI', {
   startBackgroundScreenshots: (userEmail, sessionId) =>
@@ -29,6 +37,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('stop-background-screenshots'),
   isBackgroundScreenshotsActive: () =>
     ipcRenderer.invoke('is-background-screenshots-active'),
+  onForceStopTimer: (callback) =>
+    ipcRenderer.on('force-stop-timer', callback),
 
   saveActiveSession: () =>
     ipcRenderer.invoke('save-active-session'),
