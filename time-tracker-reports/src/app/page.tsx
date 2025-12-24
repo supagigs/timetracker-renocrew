@@ -25,6 +25,7 @@ const NEW_USER_MESSAGE = "Please sign up first from the desktop time tracker app
 export default function Home() {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginPending, setLoginPending] = useState(false);
   const [loginSuccess, setLoginSuccess] = useState("");
@@ -73,8 +74,8 @@ export default function Home() {
   }, [supabase, updateWebSession]);
 
   const loginButtonDisabled = useMemo(
-    () => loginPending || !EMAIL_REGEX.test(loginEmail),
-    [loginPending, loginEmail],
+    () => loginPending || !EMAIL_REGEX.test(loginEmail) || !loginPassword.trim(),
+    [loginPending, loginEmail, loginPassword],
   );
 
   const handleLogin = async (event: FormEvent) => {
@@ -87,12 +88,17 @@ export default function Home() {
       return;
     }
 
+    if (!loginPassword.trim()) {
+      setLoginError("Password is required.");
+      return;
+    }
+
     setLoginPending(true);
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: loginEmail }),
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
       });
 
       const payload = await response.json();
@@ -168,6 +174,19 @@ export default function Home() {
                 className="mt-1 w-full rounded-lg border border-border bg-white px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
                 placeholder="you@example.com"
                 autoComplete="email"
+                suppressHydrationWarning
+              />
+            </label>
+
+            <label className="block">
+              <span className="text-sm font-medium text-foreground">Password</span>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-border bg-white px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+                placeholder="Enter your password"
+                autoComplete="current-password"
                 suppressHydrationWarning
               />
             </label>

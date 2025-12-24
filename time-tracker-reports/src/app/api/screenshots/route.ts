@@ -3,7 +3,7 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
 type Screenshot = {
   id: number;
-  session_id: number;
+  session_id: string | null; // Changed to string to support Frappe timesheet IDs (e.g., "TS-2025-00043")
   screenshot_data: string;
   captured_at: string;
   app_name: string | null;
@@ -30,8 +30,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const sessionId = parseInt(sessionIdParam, 10);
-    if (isNaN(sessionId)) {
+    // session_id is now TEXT, so use it directly as string (supports both Frappe IDs and Supabase session IDs)
+    const sessionId = sessionIdParam.trim();
+    if (!sessionId) {
       return NextResponse.json(
         { error: 'Invalid sessionId' },
         { status: 400 }
@@ -49,7 +50,7 @@ export async function GET(request: NextRequest) {
             : 'id, session_id, screenshot_data, captured_at'
         )
         .eq('user_email', email)
-        .eq('session_id', sessionId)
+        .eq('session_id', sessionId) // session_id is now TEXT, use directly
         .order('captured_at', { ascending: true })
         .limit(500);
 

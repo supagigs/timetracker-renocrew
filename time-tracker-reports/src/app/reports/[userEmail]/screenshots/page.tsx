@@ -19,7 +19,7 @@ type TimeSession = {
 
 type Screenshot = {
   id: number;
-  session_id: number;
+  session_id: string | null; // Changed to string to support Frappe timesheet IDs (e.g., "TS-2025-00043")
   screenshot_data: string;
   captured_at: string;
   app_name: string | null;
@@ -46,7 +46,7 @@ async function fetchSessionsInRange(userEmail: string, dateRange: DateRange): Pr
   return (data ?? []) as TimeSession[];
 }
 
-async function fetchScreenshots(userEmail: string, sessionId?: number): Promise<Screenshot[]> {
+async function fetchScreenshots(userEmail: string, sessionId?: string | number): Promise<Screenshot[]> {
   const supabase = createServerSupabaseClient();
 
   const buildQuery = (includeMeta: boolean) =>

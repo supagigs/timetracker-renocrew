@@ -2469,13 +2469,28 @@ async function insertScreenshotToDatabase(
     );
   }
 
+  // Normalize sessionId: store as string (can be Frappe timesheet ID or Supabase session ID)
+  // session_id is now TEXT to support both Frappe timesheet IDs (e.g., "TS-2025-00043") 
+  // and Supabase time_sessions.id (stored as string)
+  // 'temp-session' placeholder should be null
+  let normalizedSessionId = null;
+  if (sessionId && sessionId !== 'temp-session') {
+    // Convert to string if it's a number, otherwise use as-is
+    normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : String(sessionId);
+    // Empty strings should be null
+    if (normalizedSessionId === '') {
+      normalizedSessionId = null;
+    }
+  }
+
   // First try the legacy schema that uses user_email (most common)
   try {
     // Build insert object with only the columns we know exist
+    // screenshot_data stores the Supabase storage bucket public URL, not base64 data
     const insertData = {
       user_email: normalizedEmail,
-      session_id: sessionId,
-      screenshot_data: publicUrl,
+      session_id: normalizedSessionId, // Use normalized session ID (null if invalid)
+      screenshot_data: publicUrl, // Storage bucket public URL
       captured_at: timestamp,
       // Attempt to set captured_idle when the column exists; fallback logic below will retry without it if missing
       captured_idle: Boolean(isIdle)
@@ -2507,10 +2522,11 @@ async function insertScreenshotToDatabase(
           `Optional column missing, retrying without it: ${errorMsg}`
         );
         // Retry with minimal required columns only
+        // screenshot_data stores the Supabase storage bucket public URL
         const minimalInsert = {
           user_email: normalizedEmail,
-          session_id: sessionId,
-          screenshot_data: publicUrl,
+          session_id: normalizedSessionId, // Use normalized session ID (null if invalid)
+          screenshot_data: publicUrl, // Storage bucket public URL
           captured_at: timestamp
         };
         const { error: retryErr } = await supabase.from('screenshots').insert(minimalInsert);
@@ -2587,16 +2603,54 @@ async function insertScreenshotToDatabase(
 
     const userId = userRow.id;
 
-    const { error: dbErr } = await supabase.from('screenshots').insert({
+    // screenshot_data stores the Supabase storage bucket public URL, not base64 data
+    let insertPayload = {
       user_id: userId,
-      session_id: sessionId,
-      screenshot_data: publicUrl,
-      captured_at: timestamp,
-      app_name: appName,
-      captured_idle: Boolean(isIdle)
-    });
+      session_id: normalizedSessionId, // Use normalized session ID (null if invalid)
+      screenshot_data: publicUrl, // Storage bucket public URL
+      captured_at: timestamp
+    };
+    
+    // Add optional fields if they exist
+    if (appName) {
+      insertPayload.app_name = appName;
+    }
+    insertPayload.captured_idle = Boolean(isIdle);
+    
+    const { error: dbErr } = await supabase.from('screenshots').insert(insertPayload);
 
     if (dbErr) {
+      const errorMsg = String(dbErr.message || '');
+      
+      // If error is about optional columns, retry without them
+      if (errorMsg.includes('column "captured_idle"') || errorMsg.includes('column "app_name"') || 
+          errorMsg.includes('column captured_idle does not exist') || errorMsg.includes('column app_name does not exist')) {
+        logWarn(
+          'DB',
+          `Optional column missing, retrying without it: ${errorMsg}`
+        );
+        const minimalPayload = {
+          user_id: userId,
+          session_id: normalizedSessionId,
+          screenshot_data: publicUrl,
+          captured_at: timestamp
+        };
+        const { error: retryErr } = await supabase.from('screenshots').insert(minimalPayload);
+        if (retryErr) {
+          logError(
+            'DB',
+            `Failed to insert screenshot even with minimal columns: ${retryErr.message}`,
+            retryErr
+          );
+          throw retryErr;
+        }
+        logInfo(
+          'DB',
+          `Inserted screenshot row using user_id=${userId} (minimal columns)`
+        );
+        return;
+      }
+      
       logError(
         'DB',
         `Failed to insert screenshot for user_id ${userId}: ${dbErr.message}`,

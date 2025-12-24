@@ -228,11 +228,12 @@ document.addEventListener('DOMContentLoaded', () => {
       console.log(`Attempting query with limit: ${limit}, date range: ${startTime.toISOString()} to ${endTime.toISOString()}`);
       
       // Skip date filtering to avoid timeout issues - just query without date filter
-      console.log(`Query params: session_id=${sessionId} (parsed: ${parseInt(sessionId)}), user_email=${email}`);
+      // session_id is now TEXT, so use it directly as string (supports both Frappe IDs and Supabase session IDs)
+      console.log(`Query params: session_id=${sessionId}, user_email=${email}`);
       
       const baseQuery = window.supabase
         .from('screenshots')
-        .eq('session_id', parseInt(sessionId))
+        .eq('session_id', sessionId) // session_id is now TEXT, use directly
         .eq('user_email', email)
         .order('captured_at', { ascending: true });
 
@@ -591,7 +592,7 @@ document.addEventListener('DOMContentLoaded', () => {
         img.src = `file://${screenshot.filePath}`;
         img.alt = 'Local Screenshot';
       } else {
-        // For database screenshots, use base64 data
+        // For database screenshots, screenshot_data contains the Supabase storage URL
         img.src = screenshot.screenshot_data;
         img.alt = 'Screenshot';
       }

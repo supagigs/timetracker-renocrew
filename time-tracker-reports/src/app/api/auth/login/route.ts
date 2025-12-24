@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
+import { frappeLogin } from '@/lib/frappeClient';
 
 type UserRecord = {
   id: number;
@@ -15,6 +16,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const email: string = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const password: string = typeof body.password === 'string' ? body.password : '';
 
     if (!EMAIL_REGEX.test(email)) {
       return NextResponse.json(
@@ -23,6 +25,24 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!password) {
+      return NextResponse.json(
+        { error: 'Password is required.' },
+        { status: 400 },
+      );
+    }
+
+    // Authenticate with Frappe first
+    const frappeAuthResult = await frappeLogin(email, password);
+    
+    if (!frappeAuthResult.success) {
+      return NextResponse.json(
+        { error: frappeAuthResult.error || 'Invalid login credentials.' },
+        { status: 401 },
+      );
+    }
+
+    // After successful Frappe authentication, get user profile from Supabase
     const supabase = createServerSupabaseClient();
 
     const { data: user, error: userError } = await supabase
@@ -33,27 +53,29 @@ export async function POST(request: Request) {
 
     if (userError) {
       console.error('[auth/login] Failed to fetch user:', userError);
-      return NextResponse.json(
-        { error: 'Unable to verify user at the moment. Please try again later.' },
-        { status: 500 },
-      );
+      // Even if Supabase lookup fails, we can still return success since Frappe auth worked
+      // The user exists in Frappe, which is the source of truth
+      return NextResponse.json({
+        user: {
+          email: email,
+          displayName: null,
+          category: null,
+          createdAt: null,
+          projects: [],
+        },
+      });
     }
 
-    if (!user) {
-      return NextResponse.json(
-        { error: 'Account not found. Please sign up first.' },
-        { status: 404 },
-      );
-    }
-
-    const projects = await fetchUserProjects(supabase, user);
+    // If user doesn't exist in Supabase, create a basic record (optional)
+    // For now, we'll just return what we have
+    const projects = user ? await fetchUserProjects(supabase, user) : [];
 
     return NextResponse.json({
       user: {
-        email: user.email,
-        displayName: user.display_name,
-        category: user.category,
-        createdAt: user.created_at,
+        email: user?.email || email,
+        displayName: user?.display_name || null,
+        category: user?.category || null,
+        createdAt: user?.created_at || null,
         projects,
       },
     });

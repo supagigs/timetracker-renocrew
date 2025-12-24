@@ -547,12 +547,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Include project_id if available (for Freelancers)
         // Always include it if it was set, even if cleared from storage
-        if (selectedProjectId) {
-          updateData.project_id = parseInt(selectedProjectId);
-          console.log('Including project_id in update:', updateData.project_id);
-        } else {
-          console.log('No project_id available for this session');
-        }
+        
 
         console.log('Updating session with data:', updateData);
 
@@ -669,7 +664,9 @@ document.addEventListener('DOMContentLoaded', () => {
       // Update project chart and times if user is freelancer
       const userCategory = StorageService.getItem('userCategory');
       if (userCategory === 'Freelancer') {
-        loadProjectDistributionChart();
+        if (typeof loadProjectDistributionChart === 'function') {
+          loadProjectDistributionChart();
+        }
         updateProjectTimes();
       }
     }
@@ -909,67 +906,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // Fetch all completed time sessions with project_id for today (only those with end_time)
-      const { data: sessions, error } = await SupabaseService.handleRequest(() =>
-        window.supabase
-          .from('time_sessions')
-          .select(`
-            project_id,
-            active_duration,
-            end_time,
-            projects (
-              id,
-              project_name
-            )
-          `)
-          .eq('user_email', email)
-          .eq('session_date', today)
-          .not('project_id', 'is', null)
-          .not('end_time', 'is', null) // Only completed sessions
-      );
-
-      if (error) {
-        console.error('Error loading project times:', error);
-        return;
-      }
-
+      // ❌ Projects now come from Frappe, not Supabase
+      // Supabase project_id and projects table no longer exist
+      // Skip loading project times from Supabase since we're using Frappe
+      console.warn('Skipping loadProjectTimes: Supabase projects not used (using Frappe)');
+      
       // Reset the map
       projectTimeData.clear();
-
-      // Aggregate time by project from completed sessions
-      // Exclude current session if it exists in the results
-      if (sessions) {
-        sessions.forEach(session => {
-          // Skip current session if it's in the results (shouldn't happen since we filter by end_time, but just in case)
-          if (currentSessionId && session.id === (currentSessionId)) {
-            return;
-          }
-
-          if (session.projects && session.project_id) {
-            const projectId = session.project_id;
-            const projectName = session.projects.project_name || 'Untitled project';
-            const activeDuration = Number(session.active_duration) || 0;
-
-            if (projectTimeData.has(projectId)) {
-              const existing = projectTimeData.get(projectId);
-              const existingTime = Number(existing?.time) || 0;
-              const existingCurrentSession = Number(existing?.currentSessionTime) || 0;
-
-              projectTimeData.set(projectId, {
-                name: projectName,
-                time: existingTime + activeDuration,
-                currentSessionTime: existingCurrentSession,
-              });
-            } else {
-              projectTimeData.set(projectId, {
-                name: projectName,
-                time: activeDuration,
-                currentSessionTime: 0,
-              });
-            }
-          }
-        });
-      }
 
       // Now add current session time if active
       updateProjectTimes();
@@ -1095,228 +1038,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function loadProjectDistributionChart() {
-    try {
-      const email = StorageService.getItem('userEmail');
-      const today = new Date().toISOString().split('T')[0];
-      if (!email || !window.supabase) {
-        return;
-      }
+     // ❌ Projects now come from Frappe, not Supabase
+  // Supabase project_id no longer exists in this flow
 
-      // Fetch all time sessions with project_id for this user
-      const { data: sessions, error } = await SupabaseService.handleRequest(() =>
-        window.supabase
-          .from('time_sessions')
-          .select(`
-            id,
-            project_id,
-            active_duration,
-            projects (
-              id,
-              project_name
-            )
-          `)
-          .eq('user_email', email)
-          .eq('session_date', today)
-          .not('project_id', 'is', null)
-      );
+  console.warn(
+    'Skipping loadProjectDistributionChart: Supabase projects not used'
+  );
 
-      if (error) {
-        console.error('Error loading project distribution:', error);
-        return;
-      }
-
-      const projectChartSection = document.getElementById('projectChartSection');
-      const sessionList = Array.isArray(sessions) ? sessions : [];
-
-      // Aggregate time by project
-      const projectTimeMap = new Map();
-      
-      sessionList.forEach(session => {
-          if (session.projects && session.project_id) {
-            const projectId = session.project_id;
-            const projectName = session.projects.project_name || 'Untitled project';
-          const activeDuration = Number(session.active_duration) || 0;
-
-          if (projectTimeMap.has(projectId)) {
-            projectTimeMap.set(projectId, {
-              name: projectName,
-              time: projectTimeMap.get(projectId).time + activeDuration
-            });
-          } else {
-            projectTimeMap.set(projectId, {
-              name: projectName,
-              time: activeDuration
-            });
-          }
-        }
-      });
-
-      // Convert to arrays for chart
-      const projectNames = [];
-      const projectTimes = [];
-      const colors = [
-        '#3B82F6', // Blue
-        '#10B981', // Green
-        '#F59E0B', // Amber
-        '#EF4444', // Red
-        '#8B5CF6', // Purple
-        '#EC4899', // Pink
-        '#06B6D4', // Cyan
-        '#F97316', // Orange
-        '#84CC16', // Lime
-        '#6366F1'  // Indigo
-      ];
-
-      projectTimeMap.forEach((value, key) => {
-        // Only include projects with time > 0
-        if (value.time > 0) {
-          projectNames.push(value.name);
-          projectTimes.push(value.time);
-        }
-      });
-
-      // Add current active session time if it has a project and hasn't been saved yet
-      const selectedProjectId = StorageService.getItem('selectedProjectId');
-      const currentSessionId = StorageService.getItem('currentSessionId');
-      if (selectedProjectId && isActive && !isOnBreak && !isIdle && workStartTime) {
-        // Check if current session is already in the fetched sessions
-        const currentSessionInList = sessionList.find(s => s.id === (currentSessionId));
-        
-        // Only add current time if session is not in the list (not saved yet) or if it's been updated since last save
-        if (!currentSessionInList || (currentSessionInList && currentSessionInList.project_id === parseInt(selectedProjectId))) {
-          const now = new Date();
-          const currentWorkTime = Math.floor((now - new Date(workStartTime)) / 1000);
-          const totalCurrentTime = totalActiveDuration + currentWorkTime;
-          
-          // If session exists in list, subtract its saved time to avoid double counting
-          const savedTime = currentSessionInList ? (currentSessionInList.active_duration || 0) : 0;
-          const additionalTime = totalCurrentTime - savedTime;
-          
-          if (additionalTime > 0) {
-            // Find project name from sessions or fetch it
-            let projectName = null;
-            const existingSession = sessionList.find(s => s.project_id === parseInt(selectedProjectId));
-            if (existingSession && existingSession.projects) {
-              projectName = existingSession.projects.project_name;
-            } else {
-              // Fetch project name if not in sessions
-              const { data: projectData } = await SupabaseService.handleRequest(() =>
-                window.supabase
-                  .from('projects')
-                  .select('project_name')
-                  .eq('id', parseInt(selectedProjectId))
-                  .maybeSingle()
-              );
-              if (projectData) {
-                projectName = projectData.project_name;
-              }
-            }
-            
-            if (projectName) {
-              const existingIndex = projectNames.indexOf(projectName);
-              
-              if (existingIndex >= 0) {
-                projectTimes[existingIndex] += additionalTime;
-              } else {
-                projectNames.push(projectName);
-                projectTimes.push(additionalTime);
-              }
-            }
-          }
-        }
-      }
-
-      // Filter out any projects with zero or negative time after adding current session
-      const validProjects = [];
-      const validTimes = [];
-      const validNames = [];
-      
-      for (let i = 0; i < projectTimes.length; i++) {
-        if (projectTimes[i] > 0) {
-          validProjects.push(i);
-          validTimes.push(projectTimes[i]);
-          validNames.push(projectNames[i]);
-        }
-      }
-
-      if (validNames.length === 0) {
-        if (projectChartSection) {
-          projectChartSection.style.display = 'none';
-        }
-        return;
-      }
-
-      // Show chart section
-      if (projectChartSection) {
-        projectChartSection.style.display = 'block';
-      }
-
-      // Format times for display (convert seconds to hours)
-      const formattedTimes = validTimes.map(time => {
-        const hours = Math.floor(time / 3600);
-        const minutes = Math.floor((time % 3600) / 60);
-        return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-      });
-
-      const chartData = {
-        labels: validNames.map((name, index) => `${name} (${formattedTimes[index]})`),
-        datasets: [{
-          data: validTimes,
-          backgroundColor: colors.slice(0, validNames.length),
-          borderWidth: 2,
-          borderColor: '#ffffff'
-        }]
-      };
-
-      const ctx = document.getElementById('projectChart').getContext('2d');
-
-      if (projectChart) {
-        // Update existing chart
-        projectChart.data = chartData;
-        projectChart.update();
-      } else {
-        // Create new chart
-        projectChart = new Chart(ctx, {
-          type: 'pie',
-          data: chartData,
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: {
-                position: 'bottom',
-                labels: {
-                  padding: 15,
-                  font: {
-                    size: 12
-                  }
-                }
-              },
-              tooltip: {
-                callbacks: {
-                  label: function(context) {
-                    const label = context.label || '';
-                    const value = context.parsed || 0;
-                    const hours = Math.floor(value / 3600);
-                    const minutes = Math.floor((value % 3600) / 60);
-                    const seconds = value % 60;
-                    const timeString = hours > 0 
-                      ? `${hours}h ${minutes}m ${seconds}s`
-                      : minutes > 0 
-                        ? `${minutes}m ${seconds}s`
-                        : `${seconds}s`;
-                    return `${label.split(' (')[0]}: ${timeString}`;
-                  }
-                }
-              }
-            }
-          }
-        });
-      }
-    } catch (error) {
-      console.error('Error in loadProjectDistributionChart:', error);
-    }
-  }
+  return;
+}
 
   function startScreenshotCapture() {
     console.log('Starting background screenshot capture...');
