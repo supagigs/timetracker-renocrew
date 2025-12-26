@@ -56,7 +56,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (window.supabase) {
         try {
-          console.log('Updating Supabase display name for email:', email, 'name:', displayName);
+          // Fetch company from Frappe if available
+          let company = null;
+          if (window.auth && window.auth.getUserCompany) {
+            try {
+              const companyResult = await window.auth.getUserCompany(email);
+              if (companyResult && companyResult.success) {
+                company = companyResult.company || null;
+              }
+            } catch (companyError) {
+              console.error('Error fetching company from Frappe:', companyError);
+              // Non-fatal - continue without company
+            }
+          }
+
+          console.log('Updating Supabase display name for email:', email, 'name:', displayName, 'company:', company);
           const { data, error } = await SupabaseService.handleRequest(() =>
             window.supabase
               .from('users')
@@ -64,7 +78,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 {
                   email,
                   display_name: displayName,
-                  category: 'Freelancer',
+                  role: 'Freelancer',
+                  company: company,
                 },
                 { onConflict: 'email' }
               )

@@ -10,7 +10,7 @@ import { WEB_USER_STORAGE_KEY } from "@/lib/constants";
 type StoredUser = {
   email: string;
   displayName: string | null;
-  category: "Client" | "Freelancer" | null;
+  role: "Client" | "Freelancer" | null;
   projects?: string[];
 };
 
@@ -43,7 +43,7 @@ export default function PostLoginPage() {
     <DashboardShell
       userName={displayName ?? null}
       userEmail={effectiveEmail}
-      userRole={storedUser?.category ?? null}
+      userRole={storedUser?.role ?? null}
       showBreadcrumb={false}
       showAccountControls={Boolean(storedUser)}
     >

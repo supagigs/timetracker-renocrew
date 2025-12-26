@@ -117,12 +117,14 @@ function buildMonthlySummary(sessions: TimeSession[], dateRange: DateRange) {
 }
 
 function buildProjectSummary(sessions: TimeSession[]) {
-  const projectMap = new Map<number, { name: string; totalSeconds: number }>();
+  // Use frappe_project_id instead of project_id since projects table join was removed
+  const projectMap = new Map<string, { name: string; totalSeconds: number }>();
 
   sessions.forEach((session) => {
-    if (session.project_id && session.projects) {
-      const projectId = session.project_id;
-      const projectName = session.projects.project_name || 'Untitled project';
+    // Use frappe_project_id if available, otherwise skip
+    const projectId = (session as any).frappe_project_id;
+    if (projectId) {
+      const projectName = projectId || 'Untitled project';
       const activeDuration = session.active_duration ?? 0;
 
       if (projectMap.has(projectId)) {
@@ -141,8 +143,8 @@ function buildProjectSummary(sessions: TimeSession[]) {
   });
 
   return Array.from(projectMap.entries())
-    .map(([id, data]) => ({
-      id,
+    .map(([id, data], index) => ({
+      id: index + 1, // Use index as numeric ID since frappe_project_id is a string
       name: data.name,
       totalHours: data.totalSeconds / 3600,
       totalSeconds: data.totalSeconds,
@@ -153,17 +155,11 @@ function buildProjectSummary(sessions: TimeSession[]) {
 async function fetchSessionsInRange(userEmail: string, dateRange: DateRange): Promise<TimeSession[]> {
   const supabase = createServerSupabaseClient();
 
+  // Note: projects table join removed - time_sessions no longer has project_id foreign key
+  // Project information is stored in frappe_project_id column if needed
   const { data, error } = await supabase
     .from('time_sessions')
-    .select(
-      `
-        *,
-        projects (
-          id,
-          project_name
-        )
-      `,
-    )
+    .select('*')
     .eq('user_email', userEmail)
     .gte('session_date', dateRange.start)
     .lte('session_date', dateRange.end)
@@ -203,8 +199,8 @@ export default async function ReportsAnalyticsPage({
     );
   }
 
-  const isClient = profile.category === 'Client';
-  const isFreelancer = profile.category === 'Freelancer';
+  const isClient = profile.role === 'Client';
+  const isFreelancer = profile.role === 'Freelancer';
 
   const requestedFreelancer = (() => {
     const value = resolvedSearchParams?.freelancer;
@@ -240,7 +236,7 @@ export default async function ReportsAnalyticsPage({
     <DashboardShell
       userName={profile.displayName || profile.email}
       userEmail={profile.email}
-      userRole={profile.category}
+      userRole={profile.role}
     >
       <ReportsRealtimeWatcher userEmail={targetEmail} />
       <div className="space-y-6">

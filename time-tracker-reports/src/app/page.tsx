@@ -5,16 +5,14 @@ import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard";
-import { createSupabaseBrowserClient } from "@/lib/supabaseBrowser";
-import { setUserSessionState } from "@/lib/userSessions";
 import { WEB_USER_STORAGE_KEY } from "@/lib/constants";
 
-type Category = "Client" | "Freelancer" | null;
+type Role = "Client" | "Freelancer" | null;
 
 type AuthenticatedUser = {
   email: string;
   displayName: string | null;
-  category: Category;
+  role: Role;
   createdAt?: string;
   projects: string[];
 };
@@ -31,17 +29,65 @@ export default function Home() {
   const [loginSuccess, setLoginSuccess] = useState("");
 
   const router = useRouter();
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
 
   const updateWebSession = useCallback(
     async (email: string, loggedIn: boolean) => {
       try {
-        await setUserSessionState(supabase, email, { web_logged_in: loggedIn });
-      } catch (error) {
-        console.error("[page] Failed to update web session state:", error);
+        const res = await fetch('/api/session/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email,
+            web_logged_in: loggedIn,
+          }),
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`API failed: ${res.status} ${text}`);
+        }
+
+        // Some APIs return no body
+        const text = await res.text();
+        if (!text) {
+          console.warn('[page] updateWebSession: empty response');
+          return;
+        }
+
+        const data = JSON.parse(text);
+
+        if (!data || Object.keys(data).length === 0) {
+          console.warn('[page] updateWebSession: empty JSON payload');
+          return;
+        }
+
+        // Success - data contains the updated session state
+        console.log('[page] updateWebSession: success', data);
+      } catch (err) {
+        // Log the real failure with full context
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorStack = err instanceof Error ? err.stack : undefined;
+        
+        // Check if it's an authentication error
+        const isAuthError = errorMessage.includes('authentication') || 
+                            errorMessage.includes('API key') || 
+                            errorMessage.includes('SUPABASE_SERVICE_ROLE_KEY');
+        
+        if (isAuthError) {
+          console.error(
+            '[page] Failed to update web session state - Authentication Error:', 
+            errorMessage,
+            '\n💡 Hint: Check your .env.local file and ensure SUPABASE_SERVICE_ROLE_KEY is set correctly.'
+          );
+        } else {
+          console.warn('[page] Failed to update web session state (non-critical):', errorMessage);
+        }
+        
+        // Don't throw - this is a non-critical operation
+        // The app should continue to work even if session state update fails
       }
     },
-    [supabase],
+    [],
   );
 
   useEffect(() => {
@@ -62,7 +108,7 @@ export default function Home() {
     }
 
     const normalized = normalizeUser(saved);
-    const isClientUser = normalized.category === "Client";
+    const isClientUser = normalized.role === "Client";
 
     const restoreSession = () => {
       setUser({ ...normalized, projects: normalized.projects ?? [] });
@@ -71,7 +117,7 @@ export default function Home() {
     };
 
     restoreSession();
-  }, [supabase, updateWebSession]);
+  }, [updateWebSession]);
 
   const loginButtonDisabled = useMemo(
     () => loginPending || !EMAIL_REGEX.test(loginEmail) || !loginPassword.trim(),
@@ -140,7 +186,7 @@ export default function Home() {
     <DashboardShell
       userName={user?.displayName || user?.email || null}
       userEmail={user?.email || null}
-      userRole={user?.category || null}
+      userRole={user?.role || null}
       showBreadcrumb={false}
       showAccountControls={false}
       showSidebar={false}
@@ -222,7 +268,7 @@ const normalizeUser = (raw: RawUserPayload | null | undefined): AuthenticatedUse
 
   const email = (raw.email ?? "").toLowerCase();
   const displayName = raw.displayName ?? raw.display_name ?? null;
-  const category = normalizeCategory(raw.category);
+  const role = normalizeRole(raw.role);
 
   const projects = Array.isArray(raw.projects)
     ? Array.from(
@@ -237,7 +283,7 @@ const normalizeUser = (raw: RawUserPayload | null | undefined): AuthenticatedUse
   return {
     email,
     displayName,
-    category,
+    role,
     createdAt: raw.createdAt,
     projects,
   };
@@ -248,12 +294,12 @@ type RawUserPayload = Partial<AuthenticatedUser> & {
   projects?: string[] | null;
 };
 
-const normalizeCategory = (category: Category | string | null | undefined): Category => {
-  if (!category) {
+const normalizeRole = (role: Role | string | null | undefined): Role => {
+  if (!role) {
     return null;
   }
 
-  const normalized = category.toString().trim().toLowerCase();
+  const normalized = role.toString().trim().toLowerCase();
 
   if (normalized === "client") {
     return "Client";

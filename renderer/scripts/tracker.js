@@ -102,7 +102,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load session data
     sessionStartTime = StorageService.getItem('sessionStartTime');
-    currentSessionId = StorageService.getItem('frappeTimesheetId');
+    // IMPORTANT: Always prefer Frappe timesheet ID over Supabase session ID
+    // Frappe timesheet IDs are like "TS-2025-00043" and should be used for storage paths
+    // Supabase session IDs are numeric (e.g., "37") and are only for internal tracking
+    const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
+    const supabaseSessionId = StorageService.getItem('supabaseSessionId');
+    // Use Frappe timesheet ID if available, otherwise fall back to Supabase session ID
+    // This ensures we use Frappe ID for screenshots when available
+    currentSessionId = frappeTimesheetId || supabaseSessionId;
     workStartTime = StorageService.getItem('workStartTime');
     isActive = StorageService.getItem('isActive') === 'true';
     isOnBreak = StorageService.getItem('isOnBreak') === 'true';
@@ -289,12 +296,8 @@ document.addEventListener('DOMContentLoaded', () => {
         idleTracker.startTracking();
       }
       
-      // Delay the very first screenshot to avoid multi-monitor misrouting (5-7s window)
-      const FIRST_CAPTURE_DELAY_MS = 6000; // ~6 seconds
-      setTimeout(() => {
-        captureScreenshot();
-        startScreenshotCapture();
-      }, FIRST_CAPTURE_DELAY_MS);
+      // Start background screenshot capture immediately (first screenshot at 0 seconds)
+      startScreenshotCapture();
     }
   }
 
@@ -535,8 +538,17 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     try {
-      if (currentSessionId) {
-        // Update existing session
+      // Check if we have a Supabase session ID (integer) or Frappe timesheet ID (string)
+      const supabaseSessionId = StorageService.getItem('supabaseSessionId');
+      const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
+      
+      // Prefer Supabase session ID for updates (it's an integer)
+      // If currentSessionId is a number, use it; otherwise use supabaseSessionId
+      const sessionIdToUpdate = supabaseSessionId || 
+        (currentSessionId && !isNaN(parseInt(currentSessionId)) && isFinite(parseInt(currentSessionId)) ? currentSessionId : null);
+      
+      if (sessionIdToUpdate) {
+        // Update existing Supabase session
         const updateData = {
           end_time: new Date().toISOString(),
           break_duration: breakDuration,
@@ -545,16 +557,25 @@ document.addEventListener('DOMContentLoaded', () => {
           break_count: breakCountVal
         };
 
-        // Include project_id if available (for Freelancers)
-        // Always include it if it was set, even if cleared from storage
-        
+        // Add Frappe IDs if available
+        if (frappeTimesheetId) {
+          updateData.frappe_timesheet_id = frappeTimesheetId;
+        }
+        const selectedProjectId = StorageService.getItem('selectedProjectId');
+        const selectedTaskId = StorageService.getItem('selectedTaskId');
+        if (selectedProjectId) {
+          updateData.frappe_project_id = selectedProjectId;
+        }
+        if (selectedTaskId) {
+          updateData.frappe_task_id = selectedTaskId;
+        }
 
-        console.log('Updating session with data:', updateData);
+        console.log('Updating Supabase session with data:', updateData);
 
         const { data, error } = await window.supabase
           .from('time_sessions')
           .update(updateData)
-          .eq('id', (currentSessionId))
+          .eq('id', parseInt(sessionIdToUpdate))
           .select();
 
         if (error) {
@@ -570,8 +591,12 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
       } else {
-        // Fallback: create new session (shouldn't happen with new flow)
-        console.warn('No currentSessionId found, creating new session');
+        // Fallback: create new session (shouldn't happen with new flow, but handle it)
+        console.warn('No Supabase session ID found, creating new session');
+        const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
+        const selectedProjectId = StorageService.getItem('selectedProjectId');
+        const selectedTaskId = StorageService.getItem('selectedTaskId');
+        
         const insertData = {
           user_email: email,
           start_time: sessionStartTime ? (sessionStartTime instanceof Date ? sessionStartTime.toISOString() : sessionStartTime) : new Date().toISOString(),
@@ -583,7 +608,17 @@ document.addEventListener('DOMContentLoaded', () => {
           session_date: today
         };
 
-        console.warn('Skipping project_id insert for Supabase (Frappe project)');
+        // Add Frappe IDs if available
+        if (frappeTimesheetId) {
+          insertData.frappe_timesheet_id = frappeTimesheetId;
+        }
+        if (selectedProjectId) {
+          insertData.frappe_project_id = selectedProjectId;
+        }
+        if (selectedTaskId) {
+          insertData.frappe_task_id = selectedTaskId;
+        }
+
         console.log('Inserting new session with data:', insertData);
 
         const { data, error } = await window.supabase
@@ -1052,9 +1087,16 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Starting background screenshot capture...');
     const email = StorageService.getItem('userEmail');
     const sessionId = currentSessionId || 'temp-session';
+    // Get Frappe project and task IDs from storage
+    const frappeProjectId = StorageService.getItem('selectedProjectId');
+    const frappeTaskId = StorageService.getItem('selectedTaskId');
+    
+    console.log('Screenshot capture - sessionId:', sessionId);
+    console.log('Screenshot capture - frappeProjectId from storage:', frappeProjectId);
+    console.log('Screenshot capture - frappeTaskId from storage:', frappeTaskId);
     
     // Start background screenshot capture in main process
-    window.electronAPI.startBackgroundScreenshots(email, sessionId)
+    window.electronAPI.startBackgroundScreenshots(email, sessionId, frappeProjectId, frappeTaskId)
       .then(() => {
         console.log('Background screenshot capture started successfully');
       })
@@ -1172,14 +1214,34 @@ document.addEventListener('DOMContentLoaded', () => {
                               (screenshot.displayIndex !== undefined) ? screenshot.displayIndex + 1 :
                               i + 1;
           
+          // Get Frappe project and task IDs from storage
+          const frappeProjectId = StorageService.getItem('selectedProjectId');
+          const frappeTaskId = StorageService.getItem('selectedTaskId');
+          // Get Frappe timesheet ID - ALWAYS prefer it over Supabase session ID for storage path
+          // This ensures screenshots are stored under Frappe timesheet ID folders (e.g., TS-2025-00043)
+          const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
+          
+          // IMPORTANT: Always use Frappe timesheet ID if available, even if currentSessionId is set
+          // currentSessionId might be a numeric Supabase session ID, but we want Frappe ID for storage
+          const sessionIdForUpload = frappeTimesheetId || currentSessionId || 'temp-session';
+          
+          // Log which ID we're using for debugging
+          if (frappeTimesheetId) {
+            console.log(`Using Frappe timesheet ID for screenshot: ${frappeTimesheetId}`);
+          } else if (currentSessionId) {
+            console.warn(`Frappe timesheet ID not found, using currentSessionId: ${currentSessionId} (this may be a numeric Supabase ID)`);
+          }
+          
           window.electronAPI.queueScreenshotUpload({
             userEmail: email,
-            sessionId: currentSessionId || 'temp-session',
+            sessionId: sessionIdForUpload, // Use Frappe timesheet ID if available, otherwise currentSessionId
             screenshotData: screenshot.dataURL,
             timestamp: baseTimestamp, // Keep original ISO format
             isIdle,
             screenIndex: screenIndex,
             screenName: screenshot.name,
+            frappeProjectId: frappeProjectId || null,
+            frappeTaskId: frappeTaskId || null,
           }).then(res => {
             if (!res?.ok) {
               console.error(`queueScreenshotUpload failed for screen ${screenIndex}:`, res?.error);

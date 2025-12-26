@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
-import { frappeLogin } from '@/lib/frappeClient';
+import { frappeLogin, getFrappeCurrentUserRoleProfile, getFrappeUserCompany } from '@/lib/frappeClient';
 
 type UserRecord = {
   id: number;
   email: string;
   display_name: string | null;
-  category: 'Client' | 'Freelancer' | null;
+  role: 'Client' | 'Freelancer' | null;
   created_at: string;
 };
 
@@ -42,43 +42,118 @@ export async function POST(request: Request) {
       );
     }
 
-    // After successful Frappe authentication, get user profile from Supabase
+    // Check user role profile to determine if user is a client
+    // Use session-based auth (recommended) - role_profile_name is the correct field
+    const userProfile = await getFrappeCurrentUserRoleProfile();
+    const roleProfile = userProfile?.role_profile || null;
+    const isClient = roleProfile === 'SuperAdmin';
+
+    // Get company from Frappe using the email we already have
+    const { getFrappeCompanyForUser } = await import('@/lib/frappeClient');
+    const company = await getFrappeCompanyForUser(email);
+
+    // After successful Frappe authentication, get or create user profile in Supabase
     const supabase = createServerSupabaseClient();
 
-    const { data: user, error: userError } = await supabase
+    // Try to get existing user from Supabase
+    const { data: existingUser, error: userError } = await supabase
       .from('users')
-      .select('id, email, display_name, category, created_at')
+      .select('id, email, display_name, role, company, created_at')
       .ilike('email', email)
       .maybeSingle();
 
-    if (userError) {
+    if (userError && userError.code !== 'PGRST116') {
       console.error('[auth/login] Failed to fetch user:', userError);
-      // Even if Supabase lookup fails, we can still return success since Frappe auth worked
-      // The user exists in Frappe, which is the source of truth
-      return NextResponse.json({
-        user: {
-          email: email,
-          displayName: null,
-          category: null,
-          createdAt: null,
-          projects: [],
-        },
-      });
     }
 
-    // If user doesn't exist in Supabase, create a basic record (optional)
-    // For now, we'll just return what we have
+    let user = existingUser;
+
+    // Determine role based on Frappe role
+    const userRole: 'Client' | 'Freelancer' = isClient ? 'Client' : 'Freelancer';
+
+    // If user doesn't exist in Supabase, create a basic record
+    // This ensures the user exists in Supabase for the reports to work
+    if (!user) {
+      console.log('[auth/login] User not found in Supabase, creating profile for:', email);
+      const { data: insertedUser, error: insertError } = await supabase
+        .from('users')
+        .insert({
+          email: email,
+          display_name: null,
+          role: userRole,
+          company: company || null,
+        })
+        .select('id, email, display_name, role, company, created_at')
+        .maybeSingle();
+
+      if (insertError) {
+        console.error('[auth/login] Failed to create user in Supabase:', insertError);
+        // Still return success since Frappe auth worked, but with limited data
+        return NextResponse.json({
+          user: {
+            email: email,
+            displayName: null,
+            role: userRole,
+            createdAt: null,
+            projects: [],
+          },
+        });
+      }
+
+      user = insertedUser;
+    } else if (user.role !== userRole || user.company !== company) {
+      // Update role and/or company if they have changed (e.g., role or company was updated in Frappe)
+      const updateData: { role?: string; company?: string | null } = {};
+      if (user.role !== userRole) {
+        updateData.role = userRole;
+      }
+      if (user.company !== company) {
+        updateData.company = company || null;
+      }
+      
+      const { data: updatedUser, error: updateError } = await supabase
+        .from('users')
+        .update(updateData)
+        .eq('id', user.id)
+        .select('id, email, display_name, role, company, created_at')
+        .maybeSingle();
+
+      if (!updateError && updatedUser) {
+        user = updatedUser;
+      }
+    }
+
+    // Fetch projects (will return empty array if projects table doesn't exist or user has none)
     const projects = user ? await fetchUserProjects(supabase, user) : [];
 
-    return NextResponse.json({
+    // Sync user context from Frappe and cache it
+    try {
+      await syncUserContextFromFrappe();
+    } catch (contextError) {
+      console.warn('[auth/login] Failed to sync user context from Frappe:', contextError);
+      // Non-fatal - continue with login
+    }
+
+    // Create response with user data
+    const response = NextResponse.json({
       user: {
         email: user?.email || email,
         displayName: user?.display_name || null,
-        category: user?.category || null,
+        role: user?.role || null,
         createdAt: user?.created_at || null,
         projects,
       },
     });
+
+    // Set email cookie for middleware authentication
+    response.cookies.set('user_email', user?.email || email, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+    });
+
+    return response;
   } catch (error) {
     console.error('[auth/login] Unexpected error:', error);
     return NextResponse.json(

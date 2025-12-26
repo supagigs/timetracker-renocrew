@@ -4,8 +4,8 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 type SignupPayload = {
   email: string;
   displayName?: string;
-  // Category is no longer chosen by the user – all accounts are treated as freelancers.
-  category?: 'Freelancer';
+  // Role is no longer chosen by the user – all accounts are treated as freelancers.
+  role?: 'Freelancer';
   projects: string[];
 };
 
@@ -52,9 +52,9 @@ export async function POST(request: Request) {
         email: payload.email,
         display_name: payload.displayName ?? null,
         // Force the single user type for all new accounts
-        category: 'Freelancer',
+        role: 'Freelancer',
       })
-      .select('id, email, display_name, category, created_at')
+      .select('id, email, display_name, role, created_at')
       .single();
 
     if (insertError || !insertedUser) {
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
       user: {
         email: insertedUser.email,
         displayName: insertedUser.display_name,
-        category: insertedUser.category,
+        role: insertedUser.role,
         createdAt: insertedUser.created_at,
         projects: savedProjects,
       },
@@ -93,8 +93,8 @@ function normalizePayload(raw: Partial<SignupPayload>): SignupPayload {
   const displayName = typeof raw.displayName === 'string' && raw.displayName.trim().length > 0
     ? raw.displayName.trim()
     : undefined;
-  // Ignore any category provided by callers – everything is treated as 'Freelancer'.
-  const category: SignupPayload['category'] = 'Freelancer';
+  // Ignore any role provided by callers – everything is treated as 'Freelancer'.
+  const role: SignupPayload['role'] = 'Freelancer';
   const projectsInput = Array.isArray(raw.projects) ? raw.projects : [];
 
   const projects = Array.from(new Set(
@@ -104,7 +104,7 @@ function normalizePayload(raw: Partial<SignupPayload>): SignupPayload {
       .filter((project) => project.length > 0),
   ));
 
-  return { email, displayName, category, projects };
+  return { email, displayName, role, projects };
 }
 
 async function upsertProjects(

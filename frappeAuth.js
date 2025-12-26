@@ -88,5 +88,180 @@ async function getCurrentUser() {
   }
 }
 
-module.exports = { login, logout, getCurrentUser, setLoggers };
+async function getUserCompany(userEmail) {
+  try {
+    if (!userEmail) {
+      return null;
+    }
+
+    // Frappe/ERPNext stores company on Employee doctype, not User doctype
+    // Employee has user_id field that links to User email
+    // This is the correct and clean solution (ERPNext best practice)
+
+    // First, try with API key authentication (has broader permissions)
+    const apiKey = process.env.FRAPPE_API_KEY;
+    const apiSecret = process.env.FRAPPE_API_SECRET;
+    
+    if (apiKey && apiSecret) {
+      try {
+        const frappeApiKey = createFrappeClient(true); // Use API key auth
+        const company = await tryGetCompanyFromEmployee(frappeApiKey, userEmail);
+        if (company) {
+          if (logInfo) logInfo('Frappe', `Company for user ${userEmail} (via API key from Employee): ${company}`);
+          return company;
+        }
+      } catch (apiKeyErr) {
+        const errorMsg = apiKeyErr.response?.data?.exception || apiKeyErr.message || 'Unknown error';
+        if (logWarn) logWarn('Frappe', `API key auth failed, trying session-based: ${errorMsg}`);
+      }
+    }
+
+    // Fallback: Try with session-based authentication
+    const frappe = createFrappeClient(false); // Use session-based auth
+    const company = await tryGetCompanyFromEmployee(frappe, userEmail);
+    if (company) {
+      if (logInfo) logInfo('Frappe', `Company for user ${userEmail} (via session from Employee): ${company}`);
+      return company;
+    }
+
+    if (logWarn) logWarn('Frappe', `No company found for user ${userEmail} in Employee doctype`);
+    return null;
+  } catch (err) {
+    if (logError) logError('Frappe', 'Error getting user company:', err);
+    return null;
+  }
+}
+
+// Helper function to get company from Employee doctype
+// This is the ERPNext best practice - company is stored on Employee, not User
+// Employee has user_id field that links to User email
+async function tryGetCompanyFromEmployee(frappe, userEmail) {
+  try {
+    // Try resource API first
+    const employeeRes = await frappe.get('/api/resource/Employee', {
+      params: {
+        fields: JSON.stringify(['company']),
+        filters: JSON.stringify([['user_id', '=', userEmail]]),
+        limit_page_length: 1,
+      },
+    });
+
+    const employees = employeeRes?.data?.data || [];
+    if (employees.length > 0) {
+      const company = employees[0]?.company || null;
+      if (company) {
+        return company;
+      }
+    }
+
+    // If resource API doesn't work, try method endpoint
+    try {
+      const methodRes = await frappe.get('/api/method/frappe.client.get_value', {
+        params: {
+          doctype: 'Employee',
+          filters: JSON.stringify({ user_id: userEmail }),
+          fieldname: 'company',
+        },
+      });
+
+      if (methodRes?.data?.message) {
+        const company = methodRes.data.message;
+        if (company) {
+          return company;
+        }
+      }
+    } catch (methodErr) {
+      // Method endpoint failed, but we already tried resource API
+      if (logWarn) logWarn('Frappe', `Method endpoint failed for Employee: ${methodErr.message}`);
+    }
+  } catch (employeeErr) {
+    if (logWarn) logWarn('Frappe', `Could not get company from Employee doctype: ${employeeErr.message}`);
+  }
+  return null;
+}
+
+async function getUserRoleProfile(userEmail) {
+  try {
+    if (!userEmail) {
+      return null;
+    }
+
+    // Frappe stores role_profile_name on User doctype
+    // This is the correct way to check for Role Profile (not roles list)
+
+    // First, try with API key authentication (has broader permissions)
+    const apiKey = process.env.FRAPPE_API_KEY;
+    const apiSecret = process.env.FRAPPE_API_SECRET;
+    
+    if (apiKey && apiSecret) {
+      try {
+        const frappeApiKey = createFrappeClient(true); // Use API key auth
+        
+        // Try method endpoint first (if whitelisted method exists)
+        try {
+          const methodRes = await frappeApiKey.get('/api/method/get_user_role_profile_by_email', {
+            params: {
+              email: userEmail,
+            },
+          });
+
+          if (methodRes?.data?.message) {
+            const roleProfile = methodRes.data.message || null;
+            if (logInfo) logInfo('Frappe', `Role profile for user ${userEmail} (via API key method): ${roleProfile || 'None'}`);
+            return roleProfile;
+          }
+        } catch (methodErr) {
+          // Method endpoint not available, fallback to resource API
+          if (logWarn) logWarn('Frappe', `Method endpoint failed, trying resource API: ${methodErr.message}`);
+        }
+
+        // Fallback: Query User doctype directly with API key
+        const res = await frappeApiKey.get('/api/resource/User', {
+          params: {
+            fields: JSON.stringify(['name', 'role_profile_name']),
+            filters: JSON.stringify([['name', '=', userEmail]]),
+            limit_page_length: 1,
+          },
+        });
+
+        const users = res?.data?.data || [];
+        if (users.length > 0) {
+          const roleProfile = users[0]?.role_profile_name || null;
+          if (logInfo) logInfo('Frappe', `Role profile for user ${userEmail} (via API key resource): ${roleProfile || 'None'}`);
+          return roleProfile;
+        }
+      } catch (apiKeyErr) {
+        const errorMsg = apiKeyErr.response?.data?.exception || apiKeyErr.message || 'Unknown error';
+        if (logWarn) logWarn('Frappe', `API key auth failed, trying session-based: ${errorMsg}`);
+      }
+    }
+
+    // Fallback: Try with session-based authentication
+    const frappe = createFrappeClient(false); // Use session-based auth
+    
+    // Query User doctype directly
+    const res = await frappe.get('/api/resource/User', {
+      params: {
+        fields: JSON.stringify(['name', 'role_profile_name']),
+        filters: JSON.stringify([['name', '=', userEmail]]),
+        limit_page_length: 1,
+      },
+    });
+
+    const users = res?.data?.data || [];
+    if (users.length > 0) {
+      const roleProfile = users[0]?.role_profile_name || null;
+      if (logInfo) logInfo('Frappe', `Role profile for user ${userEmail} (via session): ${roleProfile || 'None'}`);
+      return roleProfile;
+    }
+
+    if (logWarn) logWarn('Frappe', `No role profile found for user ${userEmail}`);
+    return null;
+  } catch (err) {
+    if (logError) logError('Frappe', 'Error getting user role profile:', err);
+    return null;
+  }
+}
+
+module.exports = { login, logout, getCurrentUser, getUserCompany, getUserRoleProfile, setLoggers };
 

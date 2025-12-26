@@ -7,6 +7,7 @@ import ClientOverview from '@/components/ClientOverview';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { DashboardShell } from '@/components/dashboard';
 import { fetchFreelancerProjects, type ProjectRecord } from '@/lib/projects';
+import { fetchUserProfile } from '@/lib/userProfile';
 import { redirect } from 'next/navigation';
 
 type TimeSession = {
@@ -47,22 +48,38 @@ async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]>
 
   console.log('Fetching sessions for:', { userEmail, startDate: startDateStr, endDate: endDateStr });
 
-  const { data, error } = await supabase
+  // Try user_email first (legacy schema), fallback to user_id if needed
+  let { data, error } = await supabase
     .from('time_sessions')
-    .select(`
-      *,
-      projects (
-        id,
-        project_name
-      )
-    `)
+    .select('*')
     .eq('user_email', userEmail)
     .gte('session_date', startDateStr)
     .lte('session_date', endDateStr)
     .order('start_time', { ascending: false });
 
+  // If user_email column doesn't exist, try user_id by looking up user first
+  if (error && (error.message?.includes('column "user_email"') || error.code === '42703')) {
+    const { data: userData } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', userEmail)
+      .maybeSingle();
+
+    if (userData?.id) {
+      const result = await supabase
+        .from('time_sessions')
+        .select('*')
+        .eq('user_id', userData.id)
+        .gte('session_date', startDateStr)
+        .lte('session_date', endDateStr)
+        .order('start_time', { ascending: false });
+      data = result.data;
+      error = result.error;
+    }
+  }
+
   if (error) {
-    console.error('Error fetching sessions:', error);
+    console.error('Error fetching sessions:', error.message || JSON.stringify(error));
     throw error;
   }
 
@@ -70,26 +87,38 @@ async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]>
   return (data ?? []) as TimeSession[];
 }
 
-async function fetchClientTeamMembers(clientEmail: string): Promise<TeamMemberSummary[]> {
+async function fetchClientTeamMembers(clientEmail: string, clientCompany: string | null): Promise<TeamMemberSummary[]> {
   const supabase = createServerSupabaseClient();
 
-  const { data: assignments, error: assignmentsError } = await supabase
-    .from('client_freelancer_assignments')
-    .select('freelancer_email')
-    .eq('client_email', clientEmail)
-    .eq('is_active', true);
-
-  if (assignmentsError) {
-    console.error('Error fetching client assignments:', assignmentsError);
-    throw assignmentsError;
-  }
-
-  const freelancerEmails = (assignments ?? [])
-    .map((assignment) => assignment.freelancer_email)
-    .filter((email): email is string => Boolean(email));
-
-  if (freelancerEmails.length === 0) {
-    return [];
+  // For clients, fetch users from Frappe filtered by company, then get their data from Supabase
+  let freelancerEmails: string[] = [];
+  
+  try {
+    // Get users from Frappe filtered by company
+    const { getAllFrappeUsers } = await import('@/lib/frappeClient');
+    const frappeUsers = await getAllFrappeUsers(clientCompany || undefined);
+    // Exclude the client themselves from the list
+    freelancerEmails = frappeUsers
+      .filter(u => u.email.toLowerCase() !== clientEmail.toLowerCase())
+      .map(u => u.email);
+  } catch (error) {
+    console.error('[reports-page] Failed to fetch Frappe users, falling back to Supabase:', error);
+    // Fall back to Supabase users with same company
+    if (clientCompany) {
+      const { data: supabaseUsers, error: usersError } = await supabase
+        .from('users')
+        .select('email')
+        .eq('company', clientCompany)
+        .neq('email', clientEmail); // Exclude the client themselves
+      
+      if (!usersError && supabaseUsers) {
+        freelancerEmails = supabaseUsers.map(u => u.email);
+      }
+    }
+    
+    if (freelancerEmails.length === 0) {
+      return [];
+    }
   }
 
   const uniqueFreelancerEmails = Array.from(new Set(freelancerEmails));
@@ -208,31 +237,31 @@ async function fetchUserName(userEmail: string): Promise<string | null> {
     .from('users')
     .select('display_name')
     .eq('email', userEmail)
-    .single();
+    .maybeSingle();
 
   if (error) {
-    console.error('Error fetching user name:', error);
+    console.error('Error fetching user name:', error.message || JSON.stringify(error));
     return null;
   }
 
   return data?.display_name || null;
 }
 
-async function fetchUserCategory(userEmail: string): Promise<string | null> {
+async function fetchUserRole(userEmail: string): Promise<string | null> {
   const supabase = createServerSupabaseClient();
   
   const { data, error } = await supabase
     .from('users')
-    .select('category')
+    .select('role')
     .eq('email', userEmail)
-    .single();
+    .maybeSingle();
 
   if (error) {
-    console.error('Error fetching user category:', error);
+    console.error('Error fetching user role:', error.message || JSON.stringify(error));
     return null;
   }
 
-  return data?.category || null;
+  return data?.role || null;
 }
 
 function buildMonthlySummary(sessions: TimeSession[]) {
@@ -399,7 +428,7 @@ export default async function ReportsPage({
   let errorMessage: string | null = null;
   let viewerName: string | null = null;
   let reportOwnerName: string | null = null;
-  let userCategory: string | null = null;
+  let userRole: string | null = null;
   let isClient = false;
   let reportEmail: string | null = decodedEmail;
   const clientEmailForSelector = decodedEmail;
@@ -411,13 +440,16 @@ export default async function ReportsPage({
     // Fetch viewer details (the person whose email is in the URL)
     viewerName = await fetchUserName(decodedEmail);
 
-    // Fetch user category to determine if this is a Client
-    userCategory = await fetchUserCategory(decodedEmail);
-    isClient = userCategory === 'Client';
+    // Fetch user role to determine if this is a Client
+    userRole = await fetchUserRole(decodedEmail);
+    isClient = userRole === 'Client';
 
     // If the user is a Client, build team overview and decide whether to show an individual report
     if (isClient) {
-      teamMembers = await fetchClientTeamMembers(decodedEmail);
+      // Get client's company from profile
+      const clientProfile = await fetchUserProfile(decodedEmail);
+      const clientCompany = clientProfile?.company || null;
+      teamMembers = await fetchClientTeamMembers(decodedEmail, clientCompany);
       const assignedFreelancers = teamMembers.map((member) => member.email);
       const hasRequestedFreelancer =
         requestedFreelancer && assignedFreelancers.includes(requestedFreelancer);
@@ -428,6 +460,27 @@ export default async function ReportsPage({
 
       showTeamOverview = !hasRequestedFreelancer;
       reportEmail = hasRequestedFreelancer ? requestedFreelancer : decodedEmail;
+      
+      // For clients, validate that the requested freelancer is from the same company
+      if (hasRequestedFreelancer && reportEmail && clientCompany) {
+        const { getFrappeCompanyForUser } = await import('@/lib/frappeClient');
+        const userCompany = await getFrappeCompanyForUser(reportEmail);
+        
+        // Also check Supabase as fallback
+        const supabase = createServerSupabaseClient();
+        const { data: userData } = await supabase
+          .from('users')
+          .select('company')
+          .eq('email', reportEmail)
+          .maybeSingle();
+        
+        const userCompanyFromDb = userData?.company || userCompany;
+        
+        // Only allow if company matches, otherwise redirect to team overview
+        if (userCompanyFromDb !== clientCompany) {
+          redirect(`/reports/${encodeURIComponent(decodedEmail)}`);
+        }
+      }
     } else {
       reportEmail = decodedEmail;
     }
@@ -444,8 +497,9 @@ export default async function ReportsPage({
       }
     }
   } catch (error) {
-    console.error('Error loading reports:', error);
-    errorMessage = error instanceof Error ? error.message : 'Failed to load reports';
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error('Error loading reports:', errorMsg, error);
+    errorMessage = errorMsg || 'Failed to load reports';
     summary = defaultSummary;
     projectSummary = [];
   }
@@ -519,7 +573,7 @@ export default async function ReportsPage({
     <DashboardShell
       userName={viewerDisplayName}
       userEmail={decodedEmail}
-      userRole={userCategory}
+      userRole={userRole}
     >
       <div className="space-y-8">
         <header className="space-y-3">

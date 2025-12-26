@@ -1,4 +1,5 @@
 import { createServerSupabaseClient } from './supabaseServer';
+import { getAllFrappeProjects } from './frappeClient';
 
 export type ProjectRecord = {
   id: number;
@@ -12,10 +13,28 @@ export type ProjectRecord = {
 export async function fetchClientProjects({
   email,
   userId,
+  company,
 }: {
   email: string;
   userId: number | null;
+  company?: string | null;
 }): Promise<ProjectRecord[]> {
+  // For clients, fetch projects from Frappe filtered by company
+  try {
+    const frappeProjects = await getAllFrappeProjects(company || undefined);
+    return frappeProjects.map((project, index) => ({
+      id: index + 1, // Use index as ID since Frappe projects don't have numeric IDs
+      name: project.name,
+      description: null,
+      clientEmail: null,
+      clientName: null,
+      createdAt: null,
+    }));
+  } catch (error) {
+    console.error('[client-projects] Failed to fetch Frappe projects, falling back to Supabase:', error);
+    // Fall back to Supabase if Frappe fails
+  }
+
   const supabase = createServerSupabaseClient();
   const selectColumns = 'id, project_name, created_at';
 
@@ -66,86 +85,35 @@ export async function fetchFreelancerProjects(email: string): Promise<ProjectRec
 
   const supabase = createServerSupabaseClient();
 
-  const { data: assignments, error: assignmentsError } = await supabase
-    .from('project_assignments')
-    .select('project_id')
-    .eq('freelancer_email', normalizedEmail);
-
-  if (assignmentsError) {
-    console.warn('[freelancer-projects] Failed to load assignments, returning empty list.', assignmentsError);
-    return [];
-  }
-
-  const projectIds = Array.from(
-    new Set(
-      (assignments ?? [])
-        .map((assignment: any) => assignment.project_id)
-        .filter((projectId): projectId is number => typeof projectId === 'number')
-    ),
-  );
-
-  if (projectIds.length === 0) return [];
-
+  // Since project_assignments table has been deleted, fetch projects directly from Supabase
+  // that belong to this freelancer (by user_email)
   const { data: projectsData, error: projectsError } = await supabase
-    .from('project_assignments')
-    .select(`
-      project_id,
-      assigned_by,
-      projects:projects (
-        id,
-        project_name,
-        created_at,
-        user_email
-      )
-    `)
-    .eq('freelancer_email', normalizedEmail)
-    .in('project_id', projectIds)
-    .order('assigned_at', { ascending: false });
+    .from('projects')
+    .select('id, project_name, created_at, user_email')
+    .eq('user_email', normalizedEmail)
+    .order('project_name', { ascending: true });
 
   if (projectsError) {
-    console.warn('[freelancer-projects] Project lookup failed, returning empty list.', projectsError);
+    // If table doesn't exist or other error, return empty list
+    if (projectsError.code === 'PGRST205' || projectsError.code === '42P01') {
+      console.warn('[freelancer-projects] Projects table not found, returning empty list.');
+    } else {
+      console.warn('[freelancer-projects] Failed to load projects, returning empty list.', projectsError);
+    }
     return [];
   }
-  if (!projectsData) return [];
 
-  const clientEmails = Array.from(
-    new Set(
-      (projectsData as any[])
-        .map((row) => row.assigned_by ?? row.projects?.user_email ?? null)
-        .filter((value): value is string => Boolean(value)),
-    ),
-  );
-
-  const clientNameMap = new Map<string, string | null>();
-  if (clientEmails.length > 0) {
-    const { data: clientRows, error: clientError } = await supabase
-      .from('users')
-      .select('email, display_name')
-      .in('email', clientEmails);
-
-    if (clientError) {
-      console.warn('[freelancer-projects] Failed to fetch client names:', clientError);
-    } else {
-      (clientRows ?? []).forEach((client: any) => {
-        clientNameMap.set(client.email, client.display_name ?? null);
-      });
-    }
+  if (!projectsData || projectsData.length === 0) {
+    return [];
   }
 
-  return (projectsData as any[])
-    .filter((row) => row.projects && row.projects.id && row.projects.project_name)
-    .map((row) => {
-      const projectId = row.projects.id;
-      const projectName = row.projects.project_name;
-      const clientEmail = row.assigned_by ?? row.projects.user_email ?? null;
-      const clientName = clientEmail ? clientNameMap.get(clientEmail) ?? null : null;
-      return {
-        id: projectId,
-        name: projectName,
-        description: null,
-        createdAt: row.projects.created_at ?? null,
-        clientEmail,
-        clientName,
-      };
-    });
+  // Map projects to ProjectRecord format
+  return projectsData.map((project: any) => ({
+    id: project.id,
+    name: project.project_name ?? 'Untitled project',
+    description: null,
+    clientEmail: project.user_email ?? null,
+    clientName: null, // We don't have client name without joining users table
+    createdAt: project.created_at ?? null,
+  }));
 }

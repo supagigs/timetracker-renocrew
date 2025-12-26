@@ -398,12 +398,46 @@ async function handleLogin() {
     let displayName = StorageService.getItem('displayName');
 
     try {
+      // Fetch company and role profile from Frappe
+      let company = null;
+      let roleProfile = null;
+      
+      if (window.auth && window.auth.getUserCompany) {
+        try {
+          const companyResult = await window.auth.getUserCompany(email);
+          if (companyResult && companyResult.success) {
+            company = companyResult.company || null;
+            console.log('Fetched company from Frappe:', company);
+          }
+        } catch (companyError) {
+          console.error('Error fetching company from Frappe:', companyError);
+          // Non-fatal - continue without company
+        }
+      }
+
+      if (window.auth && window.auth.getUserRoleProfile) {
+        try {
+          const roleProfileResult = await window.auth.getUserRoleProfile(email);
+          if (roleProfileResult && roleProfileResult.success) {
+            roleProfile = roleProfileResult.roleProfile || null;
+            console.log('Fetched role profile from Frappe:', roleProfile);
+          }
+        } catch (roleProfileError) {
+          console.error('Error fetching role profile from Frappe:', roleProfileError);
+          // Non-fatal - continue without role profile
+        }
+      }
+
+      // Determine role based on role_profile_name
+      // If role_profile_name is "SuperAdmin", user is a Client
+      const userRole = roleProfile === 'SuperAdmin' ? 'Client' : 'Freelancer';
+
       if (window.supabase) {
         // Look up existing user by email
         const { data: existingUser, error } = await SupabaseService.handleRequest(() =>
           window.supabase
             .from('users')
-            .select('id, email, display_name, category')
+            .select('id, email, display_name, role, company')
             .eq('email', email)
             .maybeSingle()
         );
@@ -423,9 +457,10 @@ async function handleLogin() {
               .insert([{
                 email,
                 display_name: null,
-                category: 'Freelancer'
+                role: userRole,
+                company: company
               }])
-              .select('id, email, display_name, category')
+              .select('id, email, display_name, role, company')
               .maybeSingle()
           );
 
@@ -433,6 +468,34 @@ async function handleLogin() {
             console.error('Error creating user profile in Supabase:', insertError);
           } else {
             userRow = inserted || null;
+          }
+        } else {
+          // Update role and/or company if they have changed
+          const updateData = {};
+          if (userRow.role !== userRole) {
+            updateData.role = userRole;
+            console.log('Updating role for user:', email, 'from', userRow.role, 'to', userRole);
+          }
+          if (company && userRow.company !== company) {
+            updateData.company = company;
+            console.log('Updating company for user:', email, 'from', userRow.company, 'to', company);
+          }
+
+          if (Object.keys(updateData).length > 0) {
+            const { error: updateError } = await SupabaseService.handleRequest(() =>
+              window.supabase
+                .from('users')
+                .update(updateData)
+                .eq('id', userRow.id)
+            );
+
+            if (updateError) {
+              console.error('Error updating user profile in Supabase:', updateError);
+            } else {
+              // Update local userRow with new values
+              if (updateData.role) userRow.role = updateData.role;
+              if (updateData.company) userRow.company = updateData.company;
+            }
           }
         }
 

@@ -4,6 +4,7 @@ import { DashboardShell } from '@/components/dashboard';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { format } from 'date-fns';
+import { getAllFrappeUsers } from '@/lib/frappeClient';
 
 type FreelancerSummary = {
   email: string;
@@ -14,27 +15,36 @@ type FreelancerSummary = {
   lastActiveAt: string | null;
 };
 
-async function fetchClientFreelancers(clientEmail: string): Promise<FreelancerSummary[]> {
+async function fetchClientFreelancers(clientEmail: string, clientCompany: string | null): Promise<FreelancerSummary[]> {
   const supabase = createServerSupabaseClient();
 
-  const { data: assignments, error: assignmentsError } = await supabase
-    .from('client_freelancer_assignments')
-    .select('freelancer_email')
-    .eq('client_email', clientEmail)
-    .eq('is_active', true);
-
-  if (assignmentsError) {
-    console.error('[client-freelancers] Failed to fetch assignments:', assignmentsError);
-    return [];
+  // For clients, fetch users from Frappe filtered by company
+  let freelancerEmails: string[] = [];
+  try {
+    const frappeUsers = await getAllFrappeUsers(clientCompany || undefined);
+    // Exclude the client themselves from the list
+    freelancerEmails = frappeUsers
+      .filter((user) => user.email.toLowerCase() !== clientEmail.toLowerCase())
+      .map((user) => user.email);
+  } catch (error) {
+    console.error('[client-freelancers] Failed to fetch Frappe users, falling back to Supabase:', error);
+    // Fall back to Supabase users with same company if Frappe fails
+    if (clientCompany) {
+      const { data: supabaseUsers, error: usersError } = await supabase
+        .from('users')
+        .select('email')
+        .eq('company', clientCompany)
+        .neq('email', clientEmail); // Exclude the client themselves
+      
+      if (!usersError && supabaseUsers) {
+        freelancerEmails = supabaseUsers.map(u => u.email);
+      }
+    }
+    
+    if (freelancerEmails.length === 0) {
+      return [];
+    }
   }
-
-  const freelancerEmails = Array.from(
-    new Set(
-      (assignments ?? [])
-        .map((entry) => entry.freelancer_email)
-        .filter((value): value is string => Boolean(value)),
-    ),
-  );
 
   if (freelancerEmails.length === 0) {
     return [];
@@ -191,15 +201,15 @@ export default async function ClientFreelancersPage({
     );
   }
 
-  const freelancers = profile.category === 'Client'
-    ? await fetchClientFreelancers(profile.email)
+  const freelancers = profile.role === 'Client'
+    ? await fetchClientFreelancers(profile.email, profile.company)
     : [];
 
   return (
     <DashboardShell
       userName={profile.displayName || profile.email}
       userEmail={profile.email}
-      userRole={profile.category}
+      userRole={profile.role}
     >
       <div className="space-y-6">
         <header className="space-y-2">
@@ -209,7 +219,7 @@ export default async function ClientFreelancersPage({
           </p>
         </header>
 
-        {profile.category !== 'Client' ? (
+        {profile.role !== 'Client' ? (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <p className="text-sm text-muted-foreground">
               Only client accounts can manage freelancer assignments.

@@ -3,7 +3,9 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
 type Screenshot = {
   id: number;
-  session_id: string | null; // Changed to string to support Frappe timesheet IDs (e.g., "TS-2025-00043")
+  frappe_timesheet_id: string | null; // Frappe timesheet ID (e.g., "TS-2025-00043")
+  frappe_project_id: string | null; // Frappe project ID
+  frappe_task_id: string | null; // Frappe task ID
   screenshot_data: string;
   captured_at: string;
   app_name: string | null;
@@ -30,9 +32,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // session_id is now TEXT, so use it directly as string (supports both Frappe IDs and Supabase session IDs)
-    const sessionId = sessionIdParam.trim();
-    if (!sessionId) {
+    // frappe_timesheet_id is TEXT, so use it directly as string
+    const timesheetId = sessionIdParam.trim();
+    if (!timesheetId) {
       return NextResponse.json(
         { error: 'Invalid sessionId' },
         { status: 400 }
@@ -46,11 +48,11 @@ export async function GET(request: NextRequest) {
         .from('screenshots')
         .select(
           includeMeta
-            ? 'id, session_id, screenshot_data, captured_at, app_name, captured_idle'
-            : 'id, session_id, screenshot_data, captured_at'
+            ? 'id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at, app_name, captured_idle'
+            : 'id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at'
         )
         .eq('user_email', email)
-        .eq('session_id', sessionId) // session_id is now TEXT, use directly
+        .eq('frappe_timesheet_id', timesheetId) // Use frappe_timesheet_id column
         .order('captured_at', { ascending: true })
         .limit(500);
 
@@ -72,7 +74,7 @@ export async function GET(request: NextRequest) {
           captured_idle: null,
         }));
         console.log(
-          `API: Fallback query returned ${normalized.length} screenshots for session ${sessionId}, user ${email}`
+          `API: Fallback query returned ${normalized.length} screenshots for timesheet ${timesheetId}, user ${email}`
         );
         return NextResponse.json(normalized as Screenshot[]);
       }
@@ -84,7 +86,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log(`API: Found ${data?.length ?? 0} screenshots for session ${sessionId}, user ${email}`);
+    console.log(`API: Found ${data?.length ?? 0} screenshots for timesheet ${timesheetId}, user ${email}`);
     return NextResponse.json((data ?? []) as unknown as Screenshot[]);
   } catch (error) {
     console.error('Error in screenshots API:', error);

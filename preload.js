@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('auth', {
 
   me: () =>
     ipcRenderer.invoke('auth:me'),
+
+  getUserCompany: (userEmail) =>
+    ipcRenderer.invoke('auth:get-user-company', userEmail),
+
+  getUserRoleProfile: (userEmail) =>
+    ipcRenderer.invoke('auth:get-user-role-profile', userEmail),
 });
 
 contextBridge.exposeInMainWorld('frappe', {
@@ -31,8 +37,8 @@ contextBridge.exposeInMainWorld('frappe', {
 
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  startBackgroundScreenshots: (userEmail, sessionId) =>
-    ipcRenderer.invoke('start-background-screenshots', userEmail, sessionId),
+  startBackgroundScreenshots: (userEmail, sessionId, frappeProjectId, frappeTaskId) =>
+    ipcRenderer.invoke('start-background-screenshots', userEmail, sessionId, frappeProjectId, frappeTaskId),
   stopBackgroundScreenshots: () =>
     ipcRenderer.invoke('stop-background-screenshots'),
   isBackgroundScreenshotsActive: () =>

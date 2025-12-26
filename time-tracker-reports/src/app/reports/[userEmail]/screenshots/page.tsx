@@ -19,7 +19,9 @@ type TimeSession = {
 
 type Screenshot = {
   id: number;
-  session_id: string | null; // Changed to string to support Frappe timesheet IDs (e.g., "TS-2025-00043")
+  frappe_timesheet_id: string | null; // Frappe timesheet ID (e.g., "TS-2025-00043")
+  frappe_project_id: string | null; // Frappe project ID
+  frappe_task_id: string | null; // Frappe task ID
   screenshot_data: string;
   captured_at: string;
   app_name: string | null;
@@ -54,8 +56,8 @@ async function fetchScreenshots(userEmail: string, sessionId?: string | number):
       .from('screenshots')
       .select(
         includeMeta
-          ? 'id, session_id, screenshot_data, captured_at, app_name, captured_idle'
-          : 'id, session_id, screenshot_data, captured_at'
+          ? 'id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at, app_name, captured_idle'
+          : 'id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at'
       )
       .eq('user_email', userEmail)
       .order('captured_at', { ascending: true })
@@ -64,14 +66,14 @@ async function fetchScreenshots(userEmail: string, sessionId?: string | number):
   let query = buildQuery(true);
 
   if (sessionId) {
-    query = query.eq('session_id', sessionId);
+    query = query.eq('frappe_timesheet_id', String(sessionId));
   }
 
   const { data, error } = await query;
   if (error) {
     if (error.code === '42703' || /(app_name|captured_idle)/.test(error.message ?? '')) {
       const fallbackQuery = buildQuery(false);
-      const fallbackResult = sessionId ? fallbackQuery.eq('session_id', sessionId) : fallbackQuery;
+      const fallbackResult = sessionId ? fallbackQuery.eq('frappe_timesheet_id', String(sessionId)) : fallbackQuery;
       const { data: fallbackData, error: fallbackError } = await fallbackResult;
       if (fallbackError) {
         console.error('[screenshots-page] Failed to load screenshots (fallback)', fallbackError);
@@ -118,7 +120,7 @@ export default async function ScreenshotsPage({
     );
   }
 
-  const isClient = profile.category === 'Client';
+  const isClient = profile.role === 'Client';
 
   const requestedFreelancer = (() => {
     const value = resolvedSearchParams?.freelancer;
@@ -142,7 +144,7 @@ export default async function ScreenshotsPage({
     <DashboardShell
       userName={profile.displayName || profile.email}
       userEmail={profile.email}
-      userRole={profile.category}
+      userRole={profile.role}
     >
       <ReportsRealtimeWatcher userEmail={targetEmail ?? profile.email} />
       <div className="space-y-6">

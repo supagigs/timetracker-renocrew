@@ -46,8 +46,30 @@ export default async function ScreenshotIntervalPage({
     );
   }
 
-  if (profile.category !== 'Client') {
+  if (profile.role !== 'Client') {
     redirect(`/reports/${encodeURIComponent(decodedEmail)}`);
+  }
+
+  // Validate that selected freelancer is from the same company
+  if (selectedFreelancerEmail && profile.company) {
+    const { getFrappeCompanyForUser } = await import('@/lib/frappeClient');
+    const { createServerSupabaseClient } = await import('@/lib/supabaseServer');
+    const freelancerCompany = await getFrappeCompanyForUser(selectedFreelancerEmail);
+    
+    // Also check Supabase as fallback
+    const supabase = createServerSupabaseClient();
+    const { data: userData } = await supabase
+      .from('users')
+      .select('company')
+      .eq('email', selectedFreelancerEmail)
+      .maybeSingle();
+    
+    const freelancerCompanyFromDb = userData?.company || freelancerCompany;
+    
+    // Only allow if company matches, otherwise redirect
+    if (freelancerCompanyFromDb !== profile.company) {
+      redirect(`/reports/${encodeURIComponent(decodedEmail)}/screenshot-interval`);
+    }
   }
 
   const existingSettings = await getClientSettings(decodedEmail);
@@ -65,7 +87,7 @@ export default async function ScreenshotIntervalPage({
     <DashboardShell
       userName={profile.displayName || profile.email}
       userEmail={profile.email}
-      userRole={profile.category}
+      userRole={profile.role}
     >
       <div className="space-y-6">
         <header className="space-y-2">

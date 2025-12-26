@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 import { upsertClientFreelancerInterval } from '@/lib/clientSettings';
+import { fetchUserProfile } from '@/lib/userProfile';
+import { getFrappeCompanyForUser } from '@/lib/frappeClient';
+import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
 export async function POST(request: Request) {
   try {
@@ -21,6 +24,39 @@ export async function POST(request: Request) {
         { error: 'Invalid payload' },
         { status: 400 },
       );
+    }
+
+    // Validate that freelancer is from the same company as client
+    const clientProfile = await fetchUserProfile(clientEmail);
+    if (!clientProfile || clientProfile.role !== 'Client') {
+      return NextResponse.json(
+        { error: 'Unauthorized: Client access required' },
+        { status: 403 },
+      );
+    }
+
+    const clientCompany = clientProfile.company;
+    if (clientCompany) {
+      // Check freelancer's company from Frappe
+      const freelancerCompany = await getFrappeCompanyForUser(freelancerEmail);
+      
+      // Also check Supabase as fallback
+      const supabase = createServerSupabaseClient();
+      const { data: userData } = await supabase
+        .from('users')
+        .select('company')
+        .eq('email', freelancerEmail)
+        .maybeSingle();
+      
+      const freelancerCompanyFromDb = userData?.company || freelancerCompany;
+      
+      // Only allow if company matches
+      if (freelancerCompanyFromDb !== clientCompany) {
+        return NextResponse.json(
+          { error: 'Unauthorized: Freelancer must be from the same company' },
+          { status: 403 },
+        );
+      }
     }
 
     const settings = await upsertClientFreelancerInterval(

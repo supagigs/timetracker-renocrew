@@ -4,7 +4,8 @@ export type UserProfile = {
   id: number | null;
   email: string;
   displayName: string | null;
-  category: string | null;
+  role: string | null;
+  company: string | null;
 };
 
 export async function fetchUserProfile(email: string): Promise<UserProfile | null> {
@@ -18,12 +19,12 @@ export async function fetchUserProfile(email: string): Promise<UserProfile | nul
 
   const { data, error } = await supabase
     .from('users')
-    .select('id, email, display_name, category')
+    .select('id, email, display_name, role, company')
     .eq('email', normalizedEmail)
     .maybeSingle();
 
   if (error) {
-    console.error('[userProfile] Failed to fetch profile:', error);
+    console.error('[userProfile] Failed to fetch profile:', error.message || JSON.stringify(error));
     return null;
   }
 
@@ -35,7 +36,8 @@ export async function fetchUserProfile(email: string): Promise<UserProfile | nul
     id: typeof data.id === 'number' ? data.id : null,
     email: data.email,
     displayName: data.display_name ?? null,
-    category: data.category ?? null,
+    role: data.role ?? null,
+    company: data.company ?? null,
   };
 }
 

@@ -29,11 +29,11 @@ export default async function ClientProjectsPage({
     );
   }
 
-  const isClient = profile.category === 'Client';
-  const isFreelancer = profile.category === 'Freelancer';
+  const isClient = profile.role === 'Client';
+  const isFreelancer = profile.role === 'Freelancer';
 
   const projects = isClient
-    ? await fetchClientProjects({ email: profile.email, userId: profile.id })
+    ? await fetchClientProjects({ email: profile.email, userId: profile.id, company: profile.company })
     : isFreelancer
       ? await fetchFreelancerProjects(profile.email)
       : [];
@@ -42,7 +42,7 @@ export default async function ClientProjectsPage({
     <DashboardShell
       userName={profile.displayName || profile.email}
       userEmail={profile.email}
-      userRole={profile.category}
+      userRole={profile.role}
     >
       <div className="space-y-6">
         <header className="space-y-2">

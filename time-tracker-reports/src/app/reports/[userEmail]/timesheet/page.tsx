@@ -40,6 +40,8 @@ async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): P
 
   const supabase = createServerSupabaseClient();
 
+  // Note: projects table join removed - time_sessions no longer has project_id foreign key
+  // Project information is stored in frappe_project_id column if needed
   const { data, error } = await supabase
     .from('time_sessions')
     .select(
@@ -52,9 +54,7 @@ async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): P
         active_duration,
         break_duration,
         idle_duration,
-        projects (
-          project_name
-        )
+        frappe_project_id
       `,
     )
     .in('user_email', emails)
@@ -68,7 +68,11 @@ async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): P
     return [];
   }
 
-  return (data ?? []) as RawSessionRow[];
+  // Transform data to match RawSessionRow type (projects is now null since we removed the join)
+  return (data ?? []).map((row: any) => ({
+    ...row,
+    projects: null, // No longer available via join
+  })) as RawSessionRow[];
 }
 
 async function fetchClientTimesheet({
@@ -124,7 +128,7 @@ async function fetchClientTimesheet({
     id: session.id,
     freelancerEmail: session.user_email,
     freelancerName: nameMap.get(session.user_email) ?? session.user_email,
-    projectName: session.projects?.[0]?.project_name ?? null,  // <-- FIXED: safe access
+    projectName: (session as any).frappe_project_id ?? null, // Use frappe_project_id since projects join was removed
     sessionDate: session.session_date,
     startTime: session.start_time,
     endTime: session.end_time,
@@ -164,7 +168,7 @@ async function fetchFreelancerTimesheet({
     id: session.id,
     freelancerEmail: session.user_email,
     freelancerName: displayName,
-    projectName: session.projects?.[0]?.project_name ?? null, // <-- FIXED: safe access
+    projectName: (session as any).frappe_project_id ?? null, // Use frappe_project_id since projects join was removed
     sessionDate: session.session_date,
     startTime: session.start_time,
     endTime: session.end_time,
@@ -223,8 +227,8 @@ export default async function TimesheetPage({
 
   const dateRange = normalizeDateRange(resolvedSearchParams);
 
-  const isClient = profile.category === 'Client';
-  const isFreelancer = profile.category === 'Freelancer';
+  const isClient = profile.role === 'Client';
+  const isFreelancer = profile.role === 'Freelancer';
 
   const timesheetRows = isClient
     ? await fetchClientTimesheet({ email: profile.email, dateRange })
@@ -240,7 +244,7 @@ export default async function TimesheetPage({
     <DashboardShell
       userName={profile.displayName || profile.email}
       userEmail={profile.email}
-      userRole={profile.category}
+      userRole={profile.role}
     >
       <div className="space-y-6">
         <header className="space-y-2">

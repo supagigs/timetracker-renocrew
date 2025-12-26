@@ -16,7 +16,7 @@ CREATE TABLE users (
   id SERIAL PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
   display_name TEXT,
-  category TEXT CHECK (category IN ('Client', 'Freelancer')),
+  role TEXT CHECK (role IN ('Client', 'Freelancer')),
   created_at TIMESTAMP DEFAULT NOW()
 );
 

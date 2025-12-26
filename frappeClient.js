@@ -28,22 +28,43 @@ function getFrappeBaseURL() {
 }
 
 // Create axios instance factory - creates a new instance with current FRAPPE_URL
-function createFrappeClient() {
+// useApiKey: if true, uses API key authentication (for server-side calls with broader permissions)
+//            if false, uses session-based authentication (for login/logout)
+function createFrappeClient(useApiKey = false) {
   const baseURL = getFrappeBaseURL();
   
   if (!baseURL) {
     throw new Error('FRAPPE_URL is not configured or invalid. Please check your .env file.');
   }
   
+  const headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+  
+  // Use API key authentication if requested and available
+  if (useApiKey) {
+    const apiKey = process.env.FRAPPE_API_KEY;
+    const apiSecret = process.env.FRAPPE_API_SECRET;
+    
+    if (apiKey && apiSecret) {
+      headers['Authorization'] = `token ${apiKey}:${apiSecret}`;
+      // API key auth doesn't use cookies
+      return axios.create({
+        baseURL: baseURL,
+        withCredentials: false,
+        headers: headers,
+      });
+    }
+  }
+  
+  // Default: session-based authentication with cookies
   return wrapper(
     axios.create({
       baseURL: baseURL,
       withCredentials: true,
       jar,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      headers: headers,
     })
   );
 }

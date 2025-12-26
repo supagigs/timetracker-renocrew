@@ -170,8 +170,12 @@ async function backgroundCaptureScreenshots() {
           screenIndex,
           screenName,
           appName: appNameForScreen,
-          displayId
+          displayId,
+          frappeProjectId: currentFrappeProjectId,
+          frappeTaskId: currentFrappeTaskId
         };
+        
+        logInfo('BG-UPLOAD', `Screen ${screenIndex}: frappe_project_id=${currentFrappeProjectId}, frappe_task_id=${currentFrappeTaskId}`);
     
         return addScreenshotToBatch(uploadData);
     
@@ -195,7 +199,7 @@ async function backgroundCaptureScreenshots() {
 }
 
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences } = require('electron');
-const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
+const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, getUserCompany: frappeGetUserCompany, getUserRoleProfile: frappeGetUserRoleProfile, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
 const { getUserProjects: frappeGetUserProjects, setLoggers: setFrappeServiceLoggers, createTimesheet } = require('./frappeService');
 const path = require('path');
 const fs = require('fs');
@@ -891,6 +895,8 @@ let isBackgroundTickRunning = false;
 let supabaseClientInstance = null;
 let currentUserEmail = null;
 let currentSessionId = null;
+let currentFrappeProjectId = null;
+let currentFrappeTaskId = null;
 
 // Simple in-memory time tracking state for IPC handlers used by preload.js
 let timeTrackingState = {
@@ -2457,7 +2463,9 @@ async function insertScreenshotToDatabase(
   publicUrl,
   timestamp,
   appName,
-  isIdle
+  isIdle,
+  frappeProjectId = null,
+  frappeTaskId = null
 ) {
   // Normalize email to match how it's stored in the DB
   const normalizedEmail =
@@ -2469,32 +2477,43 @@ async function insertScreenshotToDatabase(
     );
   }
 
-  // Normalize sessionId: store as string (can be Frappe timesheet ID or Supabase session ID)
-  // session_id is now TEXT to support both Frappe timesheet IDs (e.g., "TS-2025-00043") 
-  // and Supabase time_sessions.id (stored as string)
+  // Normalize sessionId: store as frappe_timesheet_id (Frappe timesheet ID)
+  // frappe_timesheet_id is TEXT to support Frappe timesheet IDs (e.g., "TS-2025-00043")
   // 'temp-session' placeholder should be null
-  let normalizedSessionId = null;
+  let normalizedTimesheetId = null;
   if (sessionId && sessionId !== 'temp-session') {
     // Convert to string if it's a number, otherwise use as-is
-    normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : String(sessionId);
+    normalizedTimesheetId = typeof sessionId === 'string' ? sessionId.trim() : String(sessionId);
     // Empty strings should be null
-    if (normalizedSessionId === '') {
-      normalizedSessionId = null;
+    if (normalizedTimesheetId === '') {
+      normalizedTimesheetId = null;
     }
   }
+  
+  // Normalize Frappe project and task IDs
+  const normalizedProjectId = frappeProjectId && typeof frappeProjectId === 'string' ? frappeProjectId.trim() : (frappeProjectId || null);
+  const normalizedTaskId = frappeTaskId && typeof frappeTaskId === 'string' ? frappeTaskId.trim() : (frappeTaskId || null);
 
   // First try the legacy schema that uses user_email (most common)
   try {
-    // Build insert object with only the columns we know exist
+    // Build insert object with renamed columns (frappe_timesheet_id, frappe_project_id, frappe_task_id)
     // screenshot_data stores the Supabase storage bucket public URL, not base64 data
     const insertData = {
       user_email: normalizedEmail,
-      session_id: normalizedSessionId, // Use normalized session ID (null if invalid)
+      frappe_timesheet_id: normalizedTimesheetId, // Frappe timesheet ID (e.g., "TS-2025-00043")
       screenshot_data: publicUrl, // Storage bucket public URL
       captured_at: timestamp,
       // Attempt to set captured_idle when the column exists; fallback logic below will retry without it if missing
       captured_idle: Boolean(isIdle)
     };
+    
+    // Add Frappe project and task IDs if provided
+    if (normalizedProjectId) {
+      insertData.frappe_project_id = normalizedProjectId;
+    }
+    if (normalizedTaskId) {
+      insertData.frappe_task_id = normalizedTaskId;
+    }
     
     // Add optional app_name if provided; fallback logic below handles column absence
     if (appName) {
@@ -2521,14 +2540,25 @@ async function insertScreenshotToDatabase(
           'DB',
           `Optional column missing, retrying without it: ${errorMsg}`
         );
-        // Retry with minimal required columns only
+        // Retry with minimal required columns only (without captured_idle and app_name)
         // screenshot_data stores the Supabase storage bucket public URL
         const minimalInsert = {
           user_email: normalizedEmail,
-          session_id: normalizedSessionId, // Use normalized session ID (null if invalid)
+          frappe_timesheet_id: normalizedTimesheetId, // Frappe timesheet ID
           screenshot_data: publicUrl, // Storage bucket public URL
           captured_at: timestamp
         };
+        
+        // Add Frappe IDs if available
+        if (normalizedProjectId) {
+          minimalInsert.frappe_project_id = normalizedProjectId;
+        }
+        if (normalizedTaskId) {
+          minimalInsert.frappe_task_id = normalizedTaskId;
+        }
+        
+        // Note: captured_idle is omitted here because column doesn't exist yet
+        // After running migration, it will be included in the main insert
         const { error: retryErr } = await supabase.from('screenshots').insert(minimalInsert);
         if (retryErr) {
           logError(
@@ -2606,10 +2636,18 @@ async function insertScreenshotToDatabase(
     // screenshot_data stores the Supabase storage bucket public URL, not base64 data
     let insertPayload = {
       user_id: userId,
-      session_id: normalizedSessionId, // Use normalized session ID (null if invalid)
+      frappe_timesheet_id: normalizedTimesheetId, // Frappe timesheet ID (e.g., "TS-2025-00043")
       screenshot_data: publicUrl, // Storage bucket public URL
       captured_at: timestamp
     };
+    
+    // Add Frappe project and task IDs if provided
+    if (normalizedProjectId) {
+      insertPayload.frappe_project_id = normalizedProjectId;
+    }
+    if (normalizedTaskId) {
+      insertPayload.frappe_task_id = normalizedTaskId;
+    }
     
     // Add optional fields if they exist
     if (appName) {
@@ -2631,10 +2669,18 @@ async function insertScreenshotToDatabase(
         );
         const minimalPayload = {
           user_id: userId,
-          session_id: normalizedSessionId,
+          frappe_timesheet_id: normalizedTimesheetId,
           screenshot_data: publicUrl,
           captured_at: timestamp
         };
+        
+        // Add Frappe IDs if available
+        if (normalizedProjectId) {
+          minimalPayload.frappe_project_id = normalizedProjectId;
+        }
+        if (normalizedTaskId) {
+          minimalPayload.frappe_task_id = normalizedTaskId;
+        }
         const { error: retryErr } = await supabase.from('screenshots').insert(minimalPayload);
         if (retryErr) {
           logError(
@@ -2688,7 +2734,9 @@ async function addScreenshotToBatch(uploadData) {
     screenIndex,
     screenName,
     appName,
-    displayId
+    displayId,
+    frappeProjectId,
+    frappeTaskId
   } = uploadData;
 
   const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
@@ -2739,9 +2787,16 @@ appName ||= 'Unknown';
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
     fs.writeFileSync(filePath, jpegBuffer);
 
+    // Determine Frappe timesheet ID - prefer it over numeric session IDs for storage path
+    // Frappe timesheet IDs start with "TS-" (e.g., "TS-2025-00043")
+    const frappeTimesheetId = (sessionId && typeof sessionId === 'string' && sessionId.startsWith('TS-')) 
+      ? sessionId 
+      : null;
+    
     const batchItem = {
       userEmail,
-      sessionId,
+      sessionId, // Keep original for database insert (can be Supabase session ID or Frappe timesheet ID)
+      frappeTimesheetId, // Frappe timesheet ID for storage path (null if not a Frappe ID)
       screenshotData, // kept for preview; cleared later
       timestamp,
       isIdle,
@@ -2752,6 +2807,8 @@ appName ||= 'Unknown';
       filePath,
       jpegBuffer,
       jpegFilename,
+      frappeProjectId: frappeProjectId || null,
+      frappeTaskId: frappeTaskId || null,
       addedAt: Date.now()
     };
 
@@ -2914,8 +2971,26 @@ async function processScreenshotBatch() {
           return { ok: false, skipped: true, reason: 'cancelled', filePath: item.filePath };
         }
 
-        const storagePath = `${item.userEmail}/${item.sessionId}/${item.jpegFilename}`;
-        logInfo(item.contextLabel, `Uploading to storage: ${storagePath} (${(item.jpegBuffer.length / 1024).toFixed(2)} KB)`);
+        // Use Frappe timesheet ID for storage path if available, otherwise use sessionId
+        // Frappe timesheet IDs are like "TS-2025-00043", which is what we want for folder structure
+        // This ensures screenshots are organized by Frappe timesheet ID in the bucket
+        // IMPORTANT: Always prefer Frappe timesheet ID over numeric Supabase session IDs
+        let folderId = item.frappeTimesheetId;
+        if (!folderId && item.sessionId) {
+          // If frappeTimesheetId is not set, check if sessionId is a Frappe ID
+          const sessionIdStr = String(item.sessionId);
+          if (sessionIdStr.startsWith('TS-')) {
+            folderId = sessionIdStr;
+          } else {
+            // sessionId is numeric (Supabase session ID), try to get Frappe timesheet ID from storage
+            // Note: We can't access localStorage from main process, so we rely on what was passed
+            // If it's numeric, we'll use it but log a warning
+            folderId = item.sessionId;
+            logWarn(item.contextLabel, `Using numeric session ID (${item.sessionId}) for storage path. Frappe timesheet ID not available. Screenshot will be stored under numeric ID folder.`);
+          }
+        }
+        const storagePath = `${item.userEmail}/${folderId}/${item.jpegFilename}`;
+        logInfo(item.contextLabel, `Uploading to storage: ${storagePath} (Frappe ID: ${item.frappeTimesheetId || 'none'}, Session ID: ${item.sessionId}, Using folder: ${folderId}) (${(item.jpegBuffer.length / 1024).toFixed(2)} KB)`);
         
         const { error: storageError } = await supabase.storage
           .from(STORAGE_BUCKET)
@@ -2932,31 +3007,37 @@ async function processScreenshotBatch() {
         const publicUrl = publicUrlRes?.data?.publicUrl ?? null;
         if (!publicUrl) throw new Error('Unable to get storage public URL');
 
-        // Delete local file immediately after successful storage upload
-        // This ensures files are removed from local storage once they're in the bucket
-        // even if database insert fails later
-        try {
-          if (fs.existsSync(item.filePath)) {
-            fs.unlinkSync(item.filePath);
-            logInfo(item.contextLabel, `Deleted local file after successful upload: ${item.filePath}`);
-          }
-        } catch (deleteError) {
-          logWarn(item.contextLabel, `Failed to delete local file ${item.filePath} after upload: ${deleteError.message}`);
-          // Continue processing even if deletion fails - file is already in bucket
-        }
-
         const appName = item.appName || 'Unknown';
         logInfo(item.contextLabel, `Inserting database record for ${item.jpegFilename}`);
+        
+        // Insert database record BEFORE deleting local file
+        // This ensures we can retry if database insert fails
+        // Use Frappe timesheet ID for database if available, otherwise use sessionId
+        const timesheetIdForDb = item.frappeTimesheetId || item.sessionId;
         await insertScreenshotToDatabase(
           supabase,
           item.userEmail,
-          item.sessionId,
+          timesheetIdForDb, // Use Frappe timesheet ID if available
           publicUrl,
           item.timestamp,
           appName,
-          item.isIdle
+          item.isIdle,
+          item.frappeProjectId,
+          item.frappeTaskId
         );
         logInfo(item.contextLabel, `Database record inserted successfully for ${item.jpegFilename}`);
+
+        // Delete local file ONLY after both storage upload AND database insert succeed
+        // This ensures files are removed from local storage only when fully processed
+        try {
+          if (fs.existsSync(item.filePath)) {
+            fs.unlinkSync(item.filePath);
+            logInfo(item.contextLabel, `Deleted local file after successful upload and database insert: ${item.filePath}`);
+          }
+        } catch (deleteError) {
+          logWarn(item.contextLabel, `Failed to delete local file ${item.filePath} after upload: ${deleteError.message}`);
+          // Continue processing even if deletion fails - file is already in bucket and database
+        }
 
         broadcastScreenshotCaptured({
           timestamp: item.timestamp,
@@ -3000,8 +3081,20 @@ async function processScreenshotBatch() {
         logInfo(item.contextLabel, `Uploaded successfully: ${item.jpegFilename}`);
         return { ok: true, filePath: item.filePath, url: publicUrl, appName };
       } catch (error) {
-        logError(item.contextLabel, `Upload error: ${error.message}`, error);
-        return { ok: false, error: error.message, filePath: item.filePath, item };
+        // Log detailed error information for debugging
+        const errorDetails = {
+          message: error.message,
+          stack: error.stack,
+          userEmail: item.userEmail,
+          sessionId: item.sessionId,
+          filename: item.jpegFilename
+        };
+        logError(item.contextLabel, `Upload error for ${item.jpegFilename}: ${error.message}`, error);
+        logError(item.contextLabel, `Error details: ${JSON.stringify(errorDetails, null, 2)}`);
+        
+        // If storage upload succeeded but database insert failed, we need to keep the file for retry
+        // The file will be deleted only after both succeed
+        return { ok: false, error: error.message, filePath: item.filePath, item, errorDetails };
       }
     });
 
@@ -3172,11 +3265,11 @@ async function getScreenshotInterval(userEmail, sessionId) {
     const supabase = getSupabaseClient();
     if (!supabase) {
       logWarn('ScreenshotInterval', 'Supabase client unavailable, using default');
-      return 300000; // 5 minutes default
+      return 60000; // 1 minute default
     }
 
     const normalizedFreelancer = userEmail.trim().toLowerCase();
-    const DEFAULT_INTERVAL_SECONDS = 300; // 5 minutes default
+    const DEFAULT_INTERVAL_SECONDS = 60; // 1 minute default
     let clientEmail = null;
 
     // 1) Get project_id from time_sessions using sessionId
@@ -3305,7 +3398,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
     return intervalMs;
   } catch (e) {
     logError('ScreenshotInterval', 'Failed to get interval', e);
-    return 300000;
+    return 60000;
   }
 }
 
@@ -3320,6 +3413,26 @@ ipcMain.handle('auth:login', async (event, { email, password }) => {
   } catch (error) {
     logError('IPC', `Frappe login error: ${error.message}`, error);
     return { success: false, error: error.message || 'Login failed' };
+  }
+});
+
+ipcMain.handle('auth:get-user-company', async (event, userEmail) => {
+  try {
+    const company = await frappeGetUserCompany(userEmail);
+    return { success: true, company };
+  } catch (error) {
+    logError('IPC', `Error getting user company: ${error.message}`, error);
+    return { success: false, error: error.message || 'Failed to get company' };
+  }
+});
+
+ipcMain.handle('auth:get-user-role-profile', async (event, userEmail) => {
+  try {
+    const roleProfile = await frappeGetUserRoleProfile(userEmail);
+    return { success: true, roleProfile };
+  } catch (error) {
+    logError('IPC', `Error getting user role profile: ${error.message}`, error);
+    return { success: false, error: error.message || 'Failed to get role profile' };
   }
 });
 
@@ -3595,7 +3708,7 @@ ipcMain.handle('get-time-tracking-status', async () => {
   return { ok: true, state: snapshot };
 });
 
-ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle, appName }) => {
+ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle, appName, frappeProjectId, frappeTaskId }) => {
   return handleScreenshotUpload({
     userEmail,
     sessionId,
@@ -3603,12 +3716,14 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
     timestamp,
     isIdle,
     appName, // Optional: if provided, will be used; otherwise captured automatically
+    frappeProjectId, // Frappe project ID
+    frappeTaskId, // Frappe task ID
     contextLabel: 'UPLOAD'
   });
 });
 
 // start/stop-background already present in your earlier file
-ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionId) => {
+ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionId, frappeProjectId, frappeTaskId) => {
   const startTime = Date.now();
   global.timerStartTime = startTime; // Store globally for timing calculations
   
@@ -3618,9 +3733,67 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   }
   currentUserEmail = userEmail;
   currentSessionId = sessionId;
+  
+  // Try to fetch frappe IDs from time_sessions table first (most reliable)
+  // Fall back to passed values if not found in database
+  let resolvedFrappeProjectId = frappeProjectId || null;
+  let resolvedFrappeTaskId = frappeTaskId || null;
+  
+  try {
+    const supabase = getSupabaseClient();
+    if (supabase && sessionId) {
+      // Try to parse sessionId as integer (Supabase session ID)
+      const numericSessionId = parseInt(sessionId, 10);
+      if (!isNaN(numericSessionId) && isFinite(numericSessionId)) {
+        const { data: sessionData, error: sessionError } = await supabase
+          .from('time_sessions')
+          .select('frappe_project_id, frappe_task_id')
+          .eq('id', numericSessionId)
+          .maybeSingle();
+        
+        if (!sessionError && sessionData) {
+          if (sessionData.frappe_project_id) {
+            resolvedFrappeProjectId = sessionData.frappe_project_id;
+            logInfo('IPC', `Fetched frappe_project_id from time_sessions: ${resolvedFrappeProjectId}`);
+          }
+          if (sessionData.frappe_task_id) {
+            resolvedFrappeTaskId = sessionData.frappe_task_id;
+            logInfo('IPC', `Fetched frappe_task_id from time_sessions: ${resolvedFrappeTaskId}`);
+          }
+        }
+      } else if (typeof sessionId === 'string' && sessionId.startsWith('TS-')) {
+        // sessionId is a Frappe timesheet ID (e.g., "TS-2025-00043")
+        // Try to find the session by frappe_timesheet_id
+        const { data: sessionData, error: sessionError } = await supabase
+          .from('time_sessions')
+          .select('frappe_project_id, frappe_task_id')
+          .eq('frappe_timesheet_id', sessionId)
+          .maybeSingle();
+        
+        if (!sessionError && sessionData) {
+          if (sessionData.frappe_project_id) {
+            resolvedFrappeProjectId = sessionData.frappe_project_id;
+            logInfo('IPC', `Fetched frappe_project_id from time_sessions (by frappe_timesheet_id): ${resolvedFrappeProjectId}`);
+          }
+          if (sessionData.frappe_task_id) {
+            resolvedFrappeTaskId = sessionData.frappe_task_id;
+            logInfo('IPC', `Fetched frappe_task_id from time_sessions (by frappe_timesheet_id): ${resolvedFrappeTaskId}`);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    logWarn('IPC', `Failed to fetch frappe IDs from time_sessions: ${error.message}`);
+    // Continue with passed values
+  }
+  
+  currentFrappeProjectId = resolvedFrappeProjectId;
+  currentFrappeTaskId = resolvedFrappeTaskId;
+  
+  logInfo('IPC', `Background screenshots starting with frappe_project_id: ${currentFrappeProjectId}, frappe_task_id: ${currentFrappeTaskId}`);
   isBackgroundCaptureActive = true;
 
-  // Fetch screenshot interval from database (defaults to 5 minutes if not found)
+  // Fetch screenshot interval from database (defaults to 1 minute if not found)
   // For freelancers, this will look up the client's interval from the project assignment
   const intervalMs = await getScreenshotInterval(userEmail, sessionId);
 
@@ -3696,11 +3869,10 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
     logInfo('IPC', `Next screenshot scheduled in ${randomDelay}ms (random between ${minDelay}ms and ${maxDelay}ms)`);
   };
 
-  // Delay the first screenshot by 200ms to ensure Electron has loaded all displays + bounds
-  // This fixes multi-monitor issues when timer starts at 0 seconds
+  // Capture first screenshot immediately (at 0 seconds)
   logInfo('IPC', '═══════════════════════════════════════════════════════════');
-  logInfo('IPC', 'Starting background screenshot capture with initial delay');
-  logInfo('IPC', `Initial delay: 200ms (to ensure displays are fully initialized)`);
+  logInfo('IPC', 'Starting background screenshot capture');
+  logInfo('IPC', `First screenshot: immediate (at 0 seconds)`);
   logInfo('IPC', `Screenshot interval: ${intervalMs}ms`);
   logInfo('IPC', `Random interval range: ${Math.floor(intervalMs * 0.7)}ms - ${Math.floor(intervalMs * 1.2)}ms`);
   
@@ -3711,14 +3883,13 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   });
   logInfo('IPC', '═══════════════════════════════════════════════════════════');
   
-  setTimeout(() => {
-    const captureTriggerTime = Date.now() - startTime;
-    sendToRendererConsole("Capture triggered at:", captureTriggerTime, "ms since timer start");
-    logInfo('IPC', 'Initial delay completed, capturing first screenshot...');
-    backgroundCaptureScreenshots();
-    // Then schedule subsequent screenshots with random intervals
-    scheduleNextScreenshot();
-  }, 200);
+  // Capture first screenshot immediately
+  const captureTriggerTime = Date.now() - startTime;
+  sendToRendererConsole("Capture triggered at:", captureTriggerTime, "ms since timer start");
+  logInfo('IPC', 'Capturing first screenshot immediately...');
+  backgroundCaptureScreenshots();
+  // Schedule subsequent screenshots with random intervals (70%-120% of interval)
+  scheduleNextScreenshot();
   
   logInfo('IPC', `Background screenshots started with random intervals between ${Math.floor(intervalMs * 0.7)}ms and ${Math.floor(intervalMs * 1.2)}ms`);
   return true;
