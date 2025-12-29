@@ -274,30 +274,64 @@ document.addEventListener('DOMContentLoaded', () => {
     idleTimeDisplay.textContent = formatTime(totalIdleTime);
   }
 
-  function startTimer() {
+  async function startTimer() {
     if (!isActive) {
-      isActive = true;
-      workStartTime = new Date().toISOString();
-      StorageService.setItem('isActive', 'true');
-      StorageService.setItem('workStartTime', workStartTime);
-      if (isIdle) {
-        isIdle = false;
-        StorageService.setItem('isIdle', 'false');
-        StorageService.removeItem('idleStartTime');
+      try {
+        // Get Frappe session data
+        const frappeSessionStr = StorageService.getItem('frappeSession');
+        if (!frappeSessionStr) {
+          throw new Error('Frappe session not found. Please create a timesheet first.');
+        }
+
+        const session = JSON.parse(frappeSessionStr);
+        if (!session.frappeTimesheetId || !session.frappeTimesheetRowId) {
+          throw new Error('Invalid Frappe session data. Please create a timesheet first.');
+        }
+
+        // Start the timesheet session
+        await window.frappe.startTimesheetSession({
+          timesheet: session.frappeTimesheetId,
+          row: session.frappeTimesheetRowId
+        });
+
+        // Set session start time (as Date object for timer calculations)
+        sessionStartTime = new Date();
+        StorageService.setItem('sessionStartTime', sessionStartTime.toISOString());
+
+        isActive = true;
+        workStartTime = new Date().toISOString();
+        StorageService.setItem('isActive', 'true');
+        StorageService.setItem('workStartTime', workStartTime);
+        if (isIdle) {
+          isIdle = false;
+          StorageService.setItem('isIdle', 'false');
+          StorageService.removeItem('idleStartTime');
+        }
+        startBtn.disabled = true;
+        breakBtn.disabled = false;
+        
+        // Notify main process that timer is active
+        updateTimerStateInMainProcess(true);
+        
+        // Start idle tracking when work begins
+        if (idleTracker) {
+          idleTracker.startTracking();
+        }
+        
+        // Start background screenshot capture immediately (first screenshot at 0 seconds)
+        startScreenshotCapture();
+
+        // Start the timer interval to update the display every second
+        if (!timerInterval) {
+          timerInterval = setInterval(updateTimer, 1000);
+        }
+
+        // Update timer immediately to show initial state
+        updateTimer();
+      } catch (error) {
+        console.error('Error starting timer:', error);
+        NotificationService.showError(error.message || 'Failed to start timer');
       }
-      startBtn.disabled = true;
-      breakBtn.disabled = false;
-      
-      // Notify main process that timer is active
-      updateTimerStateInMainProcess(true);
-      
-      // Start idle tracking when work begins
-      if (idleTracker) {
-        idleTracker.startTracking();
-      }
-      
-      // Start background screenshot capture immediately (first screenshot at 0 seconds)
-      startScreenshotCapture();
     }
   }
 
@@ -453,6 +487,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Clear session data
         StorageService.removeItem('sessionStartTime');
         StorageService.removeItem('currentSessionId');
+        StorageService.removeItem('frappeSession');
+        StorageService.removeItem('frappeTimesheetId');
+        StorageService.removeItem('frappeTimesheetRowId');
         StorageService.removeItem('workStartTime');
         StorageService.removeItem('isActive');
         StorageService.removeItem('isOnBreak');
@@ -538,6 +575,29 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     try {
+      // Update Frappe timesheet row with final hours
+      const frappeSessionStr = StorageService.getItem('frappeSession');
+      if (frappeSessionStr) {
+        try {
+          const session = JSON.parse(frappeSessionStr);
+          if (session.frappeTimesheetId && session.frappeTimesheetRowId) {
+            // Convert active duration from seconds to hours
+            const hours = activeDuration / 3600;
+
+            // Update the timesheet row with final hours
+            await window.frappe.updateTimesheetRow({
+              timesheetId: session.frappeTimesheetId,
+              timesheetRowId: session.frappeTimesheetRowId,
+              hours: hours
+            });
+            console.log(`Updated Frappe timesheet row with final hours: ${hours.toFixed(2)}`);
+          }
+        } catch (frappeError) {
+          console.error('Error updating Frappe timesheet row:', frappeError);
+          // Non-fatal - continue with Supabase update
+        }
+      }
+
       // Check if we have a Supabase session ID (integer) or Frappe timesheet ID (string)
       const supabaseSessionId = StorageService.getItem('supabaseSessionId');
       const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
@@ -566,7 +626,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedProjectId) {
           updateData.frappe_project_id = selectedProjectId;
         }
-        if (selectedTaskId) {
+        // Only include task ID if it's a valid non-empty value
+        if (selectedTaskId && selectedTaskId !== '' && selectedTaskId !== null) {
           updateData.frappe_task_id = selectedTaskId;
         }
 
@@ -615,7 +676,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedProjectId) {
           insertData.frappe_project_id = selectedProjectId;
         }
-        if (selectedTaskId) {
+        // Only include task ID if it's a valid non-empty value
+        if (selectedTaskId && selectedTaskId !== '' && selectedTaskId !== null) {
           insertData.frappe_task_id = selectedTaskId;
         }
 
@@ -646,7 +708,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function updateTimer() {
+  let lastTimesheetUpdateTime = 0;
+  const TIMESHEET_UPDATE_INTERVAL = 60000; // Update every 60 seconds
+
+  async function updateTimer() {
     if (!sessionStartTime) return;
 
     const now = new Date();
@@ -692,6 +757,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Update current session display to show only active time
     currentSession.textContent = formatTime(currentActiveTime);
     
+    // Update Frappe timesheet row periodically (every 60 seconds) if active
+    if (isActive && !isOnBreak) {
+      const nowTime = Date.now();
+      if (nowTime - lastTimesheetUpdateTime >= TIMESHEET_UPDATE_INTERVAL) {
+        lastTimesheetUpdateTime = nowTime;
+        updateTimesheetRowPeriodically(currentActiveTime);
+      }
+    }
+    
     // Update the activity chart and today's stats every 5 seconds
     if (Math.floor(Date.now() / 1000) % 5 === 0) {
       updateActivityChart();
@@ -704,6 +778,33 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         updateProjectTimes();
       }
+    }
+  }
+
+  async function updateTimesheetRowPeriodically(currentActiveTimeSeconds) {
+    try {
+      const frappeSessionStr = StorageService.getItem('frappeSession');
+      if (!frappeSessionStr) {
+        return; // No Frappe session, skip update
+      }
+
+      const session = JSON.parse(frappeSessionStr);
+      if (!session.frappeTimesheetId || !session.frappeTimesheetRowId) {
+        return; // Invalid session, skip update
+      }
+
+      // Convert seconds to hours
+      const hours = currentActiveTimeSeconds / 3600;
+
+      // Update the timesheet row
+      await window.frappe.updateTimesheetRow({
+        timesheetId: session.frappeTimesheetId,
+        timesheetRowId: session.frappeTimesheetRowId,
+        hours: hours
+      });
+    } catch (error) {
+      console.error('Error updating timesheet row periodically:', error);
+      // Non-fatal - don't show error to user for periodic updates
     }
   }
 
@@ -1089,7 +1190,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const sessionId = currentSessionId || 'temp-session';
     // Get Frappe project and task IDs from storage
     const frappeProjectId = StorageService.getItem('selectedProjectId');
-    const frappeTaskId = StorageService.getItem('selectedTaskId');
+    let frappeTaskId = StorageService.getItem('selectedTaskId');
+    // Ensure taskId is not empty string (treat empty as no task selected)
+    if (frappeTaskId === '' || frappeTaskId === null || frappeTaskId === undefined) {
+      frappeTaskId = null;
+    }
     
     console.log('Screenshot capture - sessionId:', sessionId);
     console.log('Screenshot capture - frappeProjectId from storage:', frappeProjectId);
@@ -1216,7 +1321,11 @@ document.addEventListener('DOMContentLoaded', () => {
           
           // Get Frappe project and task IDs from storage
           const frappeProjectId = StorageService.getItem('selectedProjectId');
-          const frappeTaskId = StorageService.getItem('selectedTaskId');
+          let frappeTaskId = StorageService.getItem('selectedTaskId');
+          // Ensure taskId is not empty string (treat empty as no task selected)
+          if (frappeTaskId === '' || frappeTaskId === null || frappeTaskId === undefined) {
+            frappeTaskId = null;
+          }
           // Get Frappe timesheet ID - ALWAYS prefer it over Supabase session ID for storage path
           // This ensures screenshots are stored under Frappe timesheet ID folders (e.g., TS-2025-00043)
           const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');

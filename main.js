@@ -3,7 +3,7 @@ require('dotenv').config();
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
   try {
-    logInfo('BG-UPLOAD', '═══════════════════════════════════════════════════════════');
+    logInfo('BG-UPLOAD', '===========================================================');
     logInfo('BG-UPLOAD', 'Starting background screenshot capture');
     
     const allDisplays = screen.getAllDisplays();
@@ -191,16 +191,25 @@ async function backgroundCaptureScreenshots() {
     
     await Promise.allSettled(uploadPromises);
     logInfo('BG-UPLOAD', `Completed processing ${sources.length} screen(s)`);
-    logInfo('BG-UPLOAD', '═══════════════════════════════════════════════════════════');
+    logInfo('BG-UPLOAD', '===========================================================');
   } catch (error) {
     logError('BG-UPLOAD', '[backgroundCaptureScreenshots] Unexpected error:', error);
-    logError('BG-UPLOAD', '═══════════════════════════════════════════════════════════');
+    logError('BG-UPLOAD', '===========================================================');
   }
 }
 
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences } = require('electron');
 const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, getUserCompany: frappeGetUserCompany, getUserRoleProfile: frappeGetUserRoleProfile, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
-const { getUserProjects: frappeGetUserProjects, setLoggers: setFrappeServiceLoggers, createTimesheet } = require('./frappeService');
+const { 
+  getUserProjects: frappeGetUserProjects, 
+  setLoggers: setFrappeServiceLoggers, 
+  createTimesheet,
+  getTimesheetForProject,
+  addTimeLogToTimesheet,
+  getOrCreateTimesheet,
+  startTimesheetSession,
+  updateTimesheetRow
+} = require('./frappeService');
 const path = require('path');
 const fs = require('fs');
 const { execSync, exec } = require('child_process');
@@ -647,9 +656,9 @@ function checkMacOSScreenRecordingPermission() {
 
   // If we still don't have a status, log detailed troubleshooting
   if (finalStatus === 'unknown' || finalStatus === 'denied') {
-    logWarn('Permissions', '═══════════════════════════════════════════════════════════');
+    logWarn('Permissions', '===========================================================');
     logWarn('Permissions', 'PERMISSION STATUS CHECK FAILED OR DENIED');
-    logWarn('Permissions', '═══════════════════════════════════════════════════════════');
+    logWarn('Permissions', '===========================================================');
     logWarn('Permissions', `Method used: ${methodUsed}`);
     logWarn('Permissions', `Status: ${finalStatus}`);
     logWarn('Permissions', `App Name: ${appName}`);
@@ -665,7 +674,7 @@ function checkMacOSScreenRecordingPermission() {
     logWarn('Permissions', '6. Restart the app');
     logWarn('Permissions', '7. If still not working, try:');
     logWarn('Permissions', `   Terminal: tccutil reset ScreenCapture ${bundleId || 'com.supagigs.timetracker'}`);
-    logWarn('Permissions', '═══════════════════════════════════════════════════════════');
+    logWarn('Permissions', '===========================================================');
     
     if (!isPackaged) {
       logWarn('Permissions', '⚠️  WARNING: Running in DEV mode');
@@ -1395,9 +1404,9 @@ async function ensureMacPermissionsOnStartup() {
     };
   }
 
-  logInfo('Permissions', '═══════════════════════════════════════════════════════════');
+  logInfo('Permissions', '===========================================================');
   logInfo('Permissions', 'Running macOS startup permission preflight');
-  logInfo('Permissions', '═══════════════════════════════════════════════════════════');
+  logInfo('Permissions', '===========================================================');
   
   const bundleId = getMacOSBundleId();
   const appName = app.getName();
@@ -1474,7 +1483,7 @@ async function ensureMacPermissionsOnStartup() {
   }
 
   logInfo('Permissions', '');
-  logInfo('Permissions', '═══════════════════════════════════════════════════════════');
+  logInfo('Permissions', '===========================================================');
   logInfo('Permissions', 'Startup Permission Summary:');
   logInfo('Permissions', `  Screen Recording: ${screenRecordingStatus} ${screenRecordingStatus === 'granted' ? '✅' : '❌'}`);
   logInfo('Permissions', `  Accessibility: ${accessibilityStatus} ${accessibilityStatus === 'authorized' ? '✅' : '❌'}`);
@@ -1493,7 +1502,7 @@ async function ensureMacPermissionsOnStartup() {
     }
   }
   
-  logInfo('Permissions', '═══════════════════════════════════════════════════════════');
+  logInfo('Permissions', '===========================================================');
 
   return { screenRecordingStatus, accessibilityStatus, screenPrompted, accessibilityPrompted };
 }
@@ -2204,7 +2213,7 @@ function showToastNotification(filePath, base64Data, screenIndex = null, display
 
 function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = null) {
   try {
-    logInfo('Toast', '═══════════════════════════════════════════════════════════');
+    logInfo('Toast', '===========================================================');
     logInfo('Toast', `Creating toast window: screenIndex=${screenIndex}, displayId=${displayId || 'N/A'}, filePath=${filePath ? path.basename(filePath) : 'null'}`);
     
     // Use a consistent, sufficiently large size on all platforms so that
@@ -3483,6 +3492,26 @@ ipcMain.handle('frappe:create-timesheet', async (_e, payload) => {
   return await createTimesheet(payload);
 });
 
+ipcMain.handle('frappe:get-timesheet-for-project', async (_e, projectId) => {
+  return await getTimesheetForProject(projectId);
+});
+
+ipcMain.handle('frappe:add-time-log-to-timesheet', async (_e, timesheetId, timeLog) => {
+  return await addTimeLogToTimesheet(timesheetId, timeLog);
+});
+
+ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
+  return await getOrCreateTimesheet(payload);
+});
+
+ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
+  return await startTimesheetSession(payload);
+});
+
+ipcMain.handle('frappe:update-timesheet-row', async (_e, payload) => {
+  return await updateTimesheetRow(payload);
+});
+
 ipcMain.handle(
   'frappe:get-tasks-for-project',
   async (_event, projectId) => {
@@ -3870,7 +3899,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   };
 
   // Capture first screenshot immediately (at 0 seconds)
-  logInfo('IPC', '═══════════════════════════════════════════════════════════');
+  logInfo('IPC', '===========================================================');
   logInfo('IPC', 'Starting background screenshot capture');
   logInfo('IPC', `First screenshot: immediate (at 0 seconds)`);
   logInfo('IPC', `Screenshot interval: ${intervalMs}ms`);
@@ -3881,7 +3910,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   allDisplays.forEach((display, idx) => {
     logInfo('IPC', `  Display ${idx + 1}: ID=${display.id}, ${display.size.width}x${display.size.height}, bounds: (${display.bounds.x}, ${display.bounds.y})`);
   });
-  logInfo('IPC', '═══════════════════════════════════════════════════════════');
+  logInfo('IPC', '===========================================================');
   
   // Capture first screenshot immediately
   const captureTriggerTime = Date.now() - startTime;

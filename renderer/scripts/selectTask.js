@@ -8,7 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const userNameEl = document.getElementById('userName');
   const projectNameEl = document.getElementById('projectName');
 
-  startSessionBtn.disabled = true;
+  // Button is enabled by default since task selection is optional
+  startSessionBtn.disabled = false;
 
   // ---- Load project info ----
   const projectId =
@@ -38,6 +39,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const displayName = StorageService.getItem('displayName') || email;
   welcomeText.textContent = `Ready to start your work session, ${displayName}?`;
   userNameEl.textContent = displayName;
+
+  // Clear any previously selected task ID when page loads
+  // Task selection is optional, so we start fresh each time
+  StorageService.removeItem('selectedTaskId');
+  StorageService.removeItem('selectedTaskName');
 
   // ---- Fetch tasks ----
   loadTasks();
@@ -88,21 +94,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
   taskSelect.addEventListener('change', () => {
     const selectedTaskId = taskSelect.value;
+    const selectedOption = taskSelect.options[taskSelect.selectedIndex];
 
-    if (!selectedTaskId) {
-      startSessionBtn.disabled = true;
-      return;
+    // Task selection is optional - store it if selected, clear if not
+    if (selectedTaskId) {
+      StorageService.setItem('selectedTaskId', selectedTaskId);
+      // Also store the task name for display purposes
+      const taskName = selectedOption.textContent || selectedTaskId;
+      StorageService.setItem('selectedTaskName', taskName);
+    } else {
+      StorageService.removeItem('selectedTaskId');
+      StorageService.removeItem('selectedTaskName');
     }
-
-    StorageService.setItem('selectedTaskId', selectedTaskId);
-    startSessionBtn.disabled = false;
+    // Button remains enabled regardless of task selection
   });
 
   startSessionBtn.addEventListener('click', () => {
-    if (!StorageService.getItem('selectedTaskId')) {
-      NotificationService.showError('Please select a task.');
-      return;
-    }
+    // Task selection is optional - proceed even without a task
     window.location.href = 'createTimesheet.html';
   });
 
@@ -113,7 +121,8 @@ document.addEventListener('DOMContentLoaded', () => {
     taskSelect.classList.add('hidden');
     noTasksMessage.textContent = message;
     noTasksMessage.classList.add('show');
-    startSessionBtn.disabled = true;
+    // Button remains enabled even when no tasks are available
+    // Task selection is optional
   }
 
   function redirectToProjects() {

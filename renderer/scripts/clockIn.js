@@ -94,6 +94,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       console.log('Projects received from Frappe:', projects);
       console.log('Number of projects:', projects?.length || 0);
+      
+      // Detailed logging for each project
+      if (projects && projects.length > 0) {
+        console.log('Project details:');
+        projects.forEach((project, index) => {
+          console.log(`  Project ${index + 1}:`, {
+            id: project.id,
+            name: project.name
+          });
+        });
+      } else {
+        console.warn('No projects returned from Frappe API');
+      }
 
       if (!projects || projects.length === 0) {
         console.warn('No projects found for user');

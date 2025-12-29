@@ -67,25 +67,61 @@ document.addEventListener('DOMContentLoaded', () => {
   
         const userEmail = StorageService.getItem('userEmail');
         const projectId = StorageService.getItem('selectedProjectId');
-        const taskId = StorageService.getItem('selectedTaskId');
-  
-        if (!userEmail || !projectId || !taskId) {
-          throw new Error('Missing user, project, or task information');
-        }
-  
-        clearLocalTimerState();
-  
-        const timesheet = await window.frappe.createTimesheet({
-          project: projectId,
-          task: taskId,
-        });
+        let taskId = StorageService.getItem('selectedTaskId'); // Optional
 
-        if (!timesheet?.name) {
+        // Ensure taskId is not empty string (treat empty as no task selected)
+        if (taskId === '' || taskId === null || taskId === undefined) {
+          taskId = null;
+          StorageService.removeItem('selectedTaskId'); // Clean up if it's empty
+        }
+
+        if (!userEmail || !projectId) {
+          throw new Error('Missing user or project information');
+        }
+
+        clearLocalTimerState();
+
+        // Task is optional - only include it if provided
+        const timesheetData = {
+          project: projectId,
+        };
+        if (taskId) {
+          timesheetData.task = taskId;
+        }
+
+        // Get or create timesheet for this project (one timesheet per project)
+        console.log('Getting or creating timesheet for project:', projectId);
+        console.log('Current user:', userEmail);
+        const { timesheet, row } = await window.frappe.getOrCreateTimesheet(timesheetData);
+
+        if (!timesheet) {
           throw new Error('Invalid timesheet response from server');
         }
 
-        const frappeTimesheetId = timesheet.name;
-        const sessionStartTime = new Date().toISOString();
+        if (!row) {
+          throw new Error('Invalid timesheet row response from server');
+        }
+
+        // Store in clearly named variables
+        const frappeTimesheetId = timesheet;
+        const frappeTimesheetRowId = row;
+
+        console.log('Timesheet result:', { 
+          frappeTimesheetId, 
+          frappeTimesheetRowId
+        });
+
+        // Store for later (start / stop / update)
+        const currentSession = {
+          frappeTimesheetId,
+          frappeTimesheetRowId
+        };
+        StorageService.setItem('frappeSession', JSON.stringify(currentSession));
+
+        // Also store IDs individually for backward compatibility
+        StorageService.setItem('frappeTimesheetId', frappeTimesheetId);
+        StorageService.setItem('frappeTimesheetRowId', frappeTimesheetRowId);
+
         const today = new Date().toISOString().split('T')[0];
 
         // Create a corresponding Supabase time_sessions record
@@ -94,7 +130,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (window.supabase) {
             const sessionData = {
               user_email: userEmail,
-              start_time: sessionStartTime,
+              start_time: null, // Will be set when user clicks Start
               end_time: null,
               break_duration: 0,
               active_duration: 0,
@@ -103,7 +139,7 @@ document.addEventListener('DOMContentLoaded', () => {
               session_date: today,
               frappe_timesheet_id: frappeTimesheetId,
               frappe_project_id: projectId,
-              frappe_task_id: taskId
+              frappe_task_id: taskId || null // Task is optional
             };
 
             const { data: supabaseSession, error: sessionError } = await window.supabase
@@ -126,8 +162,6 @@ document.addEventListener('DOMContentLoaded', () => {
           // Non-fatal - continue with Frappe timesheet
         }
 
-        StorageService.setItem('frappeTimesheetId', frappeTimesheetId);
-        StorageService.setItem('sessionStartTime', sessionStartTime);
         StorageService.setItem('isActive', 'false');
 
         window.location.href = 'tracker.html';

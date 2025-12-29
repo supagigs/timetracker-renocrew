@@ -33,6 +33,21 @@ contextBridge.exposeInMainWorld('frappe', {
   createTimesheet: (payload) =>
     ipcRenderer.invoke('frappe:create-timesheet', payload),
 
+  getTimesheetForProject: (projectId) =>
+    ipcRenderer.invoke('frappe:get-timesheet-for-project', projectId),
+
+  addTimeLogToTimesheet: (timesheetId, timeLog) =>
+    ipcRenderer.invoke('frappe:add-time-log-to-timesheet', timesheetId, timeLog),
+
+  getOrCreateTimesheet: (payload) =>
+    ipcRenderer.invoke('frappe:get-or-create-timesheet', payload),
+
+  startTimesheetSession: (payload) =>
+    ipcRenderer.invoke('frappe:start-timesheet-session', payload),
+
+  updateTimesheetRow: (payload) =>
+    ipcRenderer.invoke('frappe:update-timesheet-row', payload),
+
 });
 
 
