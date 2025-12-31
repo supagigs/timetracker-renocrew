@@ -481,6 +481,21 @@ document.addEventListener('DOMContentLoaded', () => {
         // Get final idle time
         const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
 
+        // Calculate total session duration (active + break + idle)
+        const totalSessionDurationSeconds = finalActiveDuration + totalBreakDuration + finalIdleTime;
+        const totalSessionDurationMinutes = totalSessionDurationSeconds / 60;
+        const totalSessionDurationHours = totalSessionDurationSeconds / 3600;
+
+        console.log('📊 Total Session Duration (Time Tracker):', {
+          activeDuration: `${finalActiveDuration}s (${(finalActiveDuration / 60).toFixed(2)} minutes, ${(finalActiveDuration / 3600).toFixed(4)} hours)`,
+          breakDuration: `${totalBreakDuration}s (${(totalBreakDuration / 60).toFixed(2)} minutes, ${(totalBreakDuration / 3600).toFixed(4)} hours)`,
+          idleDuration: `${finalIdleTime}s (${(finalIdleTime / 60).toFixed(2)} minutes, ${(finalIdleTime / 3600).toFixed(4)} hours)`,
+          totalSessionSeconds: `${totalSessionDurationSeconds}s`,
+          totalSessionMinutes: `${totalSessionDurationMinutes.toFixed(2)} minutes`,
+          totalSessionHours: `${totalSessionDurationHours.toFixed(4)} hours`,
+          formatted: formatTime(totalSessionDurationSeconds)
+        });
+
         // Save session to database and wait for completion
         await saveSession(sessionDuration, totalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
 
@@ -575,26 +590,145 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     try {
-      // Update Frappe timesheet row with final hours
+      // Update Frappe timesheet row using savedocs API
       const frappeSessionStr = StorageService.getItem('frappeSession');
       if (frappeSessionStr) {
         try {
           const session = JSON.parse(frappeSessionStr);
           if (session.frappeTimesheetId && session.frappeTimesheetRowId) {
-            // Convert active duration from seconds to hours
-            const hours = activeDuration / 3600;
+            // 1️⃣ Fetch the full timesheet JSON - DO NOT recompute, normalize, or touch old rows
+            const timesheet = await window.frappe.getTimesheetById(session.frappeTimesheetId);
+            
+            if (!timesheet || !timesheet.time_logs || !Array.isArray(timesheet.time_logs)) {
+              throw new Error('Invalid timesheet structure - time_logs not found');
+            }
 
-            // Update the timesheet row with final hours
-            await window.frappe.updateTimesheetRow({
-              timesheetId: session.frappeTimesheetId,
-              timesheetRowId: session.frappeTimesheetRowId,
-              hours: hours
+            // 2️⃣ Find the single open row (active Timesheet Detail)
+            // Criteria: from_time != null, to_time == null, completed == 0
+            const activeRow = timesheet.time_logs.find(row => {
+              return row &&
+                row.from_time != null &&
+                row.to_time == null &&
+                row.completed == 0;
             });
-            console.log(`Updated Frappe timesheet row with final hours: ${hours.toFixed(2)}`);
+
+            if (!activeRow) {
+              throw new Error('No active time log found to close');
+            }
+
+            // 3️⃣ Get SERVER TIME from Frappe (MANDATORY - prevents timezone issues)
+            const serverNow = await window.frappe.getFrappeServerTime();
+            
+            // Calculate hours that Frappe will compute (for logging purposes only)
+            const fromTime = new Date(activeRow.from_time);
+            const toTime = new Date(serverNow);
+            const timeDifferenceMs = toTime - fromTime;
+            const timeDifferenceSeconds = Math.floor(timeDifferenceMs / 1000);
+            const timeDifferenceMinutes = timeDifferenceSeconds / 60;
+            const calculatedHours = timeDifferenceMs / 3600000; // milliseconds to hours
+
+            console.log('⏱️ Hours Calculation (for Frappe - reference only, Frappe will calculate):', {
+              from_time: activeRow.from_time,
+              to_time: serverNow,
+              timeDifferenceMs: `${timeDifferenceMs}ms`,
+              timeDifferenceSeconds: `${timeDifferenceSeconds}s`,
+              timeDifferenceMinutes: `${timeDifferenceMinutes.toFixed(2)} minutes`,
+              calculatedHours: `${calculatedHours.toFixed(4)} hours`,
+              note: 'Frappe will calculate hours automatically via doc.calculate_hours() - this is for reference only'
+            });
+            
+            // 4️⃣ Close the active Timesheet Detail ONLY
+            // ❌ Do NOT touch from_time
+            // ❌ Do NOT touch other rows
+            // ❌ Do NOT create new rows
+            // ❌ Do NOT send hours - let Frappe calculate it via doc.calculate_hours()
+            
+            // Store existing hours value for logging (before we potentially remove it)
+            const existingHours = activeRow.hours;
+            
+            // Explicitly remove hours field to ensure we're not sending it
+            // Frappe will calculate it automatically via doc.calculate_hours()
+            if (activeRow.hasOwnProperty('hours')) {
+              delete activeRow.hours;
+            }
+            
+            activeRow.to_time = serverNow;
+            activeRow.completed = 1;
+
+            // Ensure doctype is set for the row (required by Frappe)
+            if (!activeRow.doctype) {
+              activeRow.doctype = 'Timesheet Detail';
+            }
+            
+            console.log('Closing active row with server time:', {
+              rowId: activeRow.name,
+              from_time: activeRow.from_time,
+              to_time: activeRow.to_time,
+              completed: activeRow.completed,
+              serverTime: serverNow,
+              removedHours: existingHours !== undefined ? existingHours : 'was not set',
+              note: 'hours field removed from payload - Frappe will calculate it automatically'
+            });
+            
+            // Log what we're sending in the payload (for debugging)
+            console.log('📤 Payload being sent to Frappe savedocs:', {
+              activeRowFields: {
+                name: activeRow.name,
+                doctype: activeRow.doctype,
+                from_time: activeRow.from_time,
+                to_time: activeRow.to_time,
+                completed: activeRow.completed,
+                hours: activeRow.hours !== undefined ? activeRow.hours : 'REMOVED (not sent)',
+                project: activeRow.project,
+                activity_type: activeRow.activity_type
+              },
+              note: 'hours field explicitly removed - Frappe will calculate it via doc.calculate_hours()'
+            });
+            
+            // 5️⃣ HARD GUARD: Validate all rows before saving (prevents 417 errors)
+            for (const row of timesheet.time_logs) {
+              if (row.from_time && row.to_time) {
+                const rowFromTime = new Date(row.from_time);
+                const rowToTime = new Date(row.to_time);
+                if (rowToTime < rowFromTime) {
+                  throw new Error(
+                    `Invalid row ${row.name || 'unnamed'}: to_time (${row.to_time}) < from_time (${row.from_time}). This indicates a timezone mismatch.`
+                  );
+                }
+              }
+            }
+
+            // Log the full timesheet structure before saving (for debugging)
+            console.log('Timesheet document before save:', {
+              name: timesheet.name,
+              doctype: timesheet.doctype,
+              time_logs_count: timesheet.time_logs?.length,
+              total_hours: timesheet.total_hours,
+              employee: timesheet.employee
+            });
+
+            // 5️⃣ Save the timesheet using savedocs API (ONLY once per session)
+            try {
+              await window.frappe.saveTimesheetWithSavedocs(timesheet);
+              console.log(`Successfully saved timesheet ${session.frappeTimesheetId} via savedocs with completed row`);
+            } catch (saveError) {
+              // Log detailed error information
+              console.error('Error saving timesheet via savedocs:', {
+                error: saveError,
+                message: saveError.message,
+                response: saveError.response?.data,
+                timesheetId: session.frappeTimesheetId,
+                rowId: session.frappeTimesheetRowId
+              });
+              // Re-throw to show error to user
+              throw new Error(`Failed to save timesheet in Frappe: ${saveError.message || 'Unknown error'}`);
+            }
           }
         } catch (frappeError) {
-          console.error('Error updating Frappe timesheet row:', frappeError);
-          // Non-fatal - continue with Supabase update
+          console.error('Error updating Frappe timesheet via savedocs:', frappeError);
+          // Show error to user instead of silently continuing
+          NotificationService.showError(`Failed to update Frappe timesheet: ${frappeError.message || 'Unknown error'}`);
+          // Still continue with Supabase update as fallback
         }
       }
 
@@ -608,6 +742,18 @@ document.addEventListener('DOMContentLoaded', () => {
         (currentSessionId && !isNaN(parseInt(currentSessionId)) && isFinite(parseInt(currentSessionId)) ? currentSessionId : null);
       
       if (sessionIdToUpdate) {
+        // Get company for the user (in case it wasn't set initially)
+        let company = null;
+        try {
+          const companyResult = await window.auth.getUserCompany(email);
+          if (companyResult && companyResult.success) {
+            company = companyResult.company;
+          }
+        } catch (companyError) {
+          console.warn('Error getting company for user:', companyError);
+          // Continue without company - non-fatal
+        }
+
         // Update existing Supabase session
         const updateData = {
           end_time: new Date().toISOString(),
@@ -616,6 +762,11 @@ document.addEventListener('DOMContentLoaded', () => {
           idle_duration: idleDuration,
           break_count: breakCountVal
         };
+
+        // Add company if available
+        if (company) {
+          updateData.company = company;
+        }
 
         // Add Frappe IDs if available
         if (frappeTimesheetId) {
@@ -658,6 +809,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedProjectId = StorageService.getItem('selectedProjectId');
         const selectedTaskId = StorageService.getItem('selectedTaskId');
         
+        // Get company for the user
+        let company = null;
+        try {
+          const companyResult = await window.auth.getUserCompany(email);
+          if (companyResult && companyResult.success) {
+            company = companyResult.company;
+          }
+        } catch (companyError) {
+          console.warn('Error getting company for user:', companyError);
+          // Continue without company - non-fatal
+        }
+
         const insertData = {
           user_email: email,
           start_time: sessionStartTime ? (sessionStartTime instanceof Date ? sessionStartTime.toISOString() : sessionStartTime) : new Date().toISOString(),
@@ -666,7 +829,8 @@ document.addEventListener('DOMContentLoaded', () => {
           active_duration: activeDuration,
           idle_duration: idleDuration,
           break_count: breakCountVal,
-          session_date: today
+          session_date: today,
+          company: company // Add company from user's Employee record
         };
 
         // Add Frappe IDs if available
@@ -707,9 +871,6 @@ document.addEventListener('DOMContentLoaded', () => {
       NotificationService.showError(`Error saving session: ${error.message || 'Unknown error'}`);
     }
   }
-
-  let lastTimesheetUpdateTime = 0;
-  const TIMESHEET_UPDATE_INTERVAL = 60000; // Update every 60 seconds
 
   async function updateTimer() {
     if (!sessionStartTime) return;
@@ -757,14 +918,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Update current session display to show only active time
     currentSession.textContent = formatTime(currentActiveTime);
     
-    // Update Frappe timesheet row periodically (every 60 seconds) if active
-    if (isActive && !isOnBreak) {
-      const nowTime = Date.now();
-      if (nowTime - lastTimesheetUpdateTime >= TIMESHEET_UPDATE_INTERVAL) {
-        lastTimesheetUpdateTime = nowTime;
-        updateTimesheetRowPeriodically(currentActiveTime);
-      }
-    }
+    // NOTE: We DO NOT update Frappe timesheet while timer is running
+    // This keeps the timesheet row truly "active" (from_time set, to_time null, completed !== 1)
+    // We only save to Frappe on Clock Out via savedocs API
     
     // Update the activity chart and today's stats every 5 seconds
     if (Math.floor(Date.now() / 1000) % 5 === 0) {
@@ -781,32 +937,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  async function updateTimesheetRowPeriodically(currentActiveTimeSeconds) {
-    try {
-      const frappeSessionStr = StorageService.getItem('frappeSession');
-      if (!frappeSessionStr) {
-        return; // No Frappe session, skip update
-      }
-
-      const session = JSON.parse(frappeSessionStr);
-      if (!session.frappeTimesheetId || !session.frappeTimesheetRowId) {
-        return; // Invalid session, skip update
-      }
-
-      // Convert seconds to hours
-      const hours = currentActiveTimeSeconds / 3600;
-
-      // Update the timesheet row
-      await window.frappe.updateTimesheetRow({
-        timesheetId: session.frappeTimesheetId,
-        timesheetRowId: session.frappeTimesheetRowId,
-        hours: hours
-      });
-    } catch (error) {
-      console.error('Error updating timesheet row periodically:', error);
-      // Non-fatal - don't show error to user for periodic updates
-    }
-  }
+  // REMOVED: updateTimesheetRowPeriodically function
+  // We no longer update Frappe timesheet while timer is running
+  // This prevents the "active row" from disappearing
+  // We only save to Frappe on Clock Out via savedocs API
 
   async function loadTodayStats() {
     const email = StorageService.getItem('userEmail');

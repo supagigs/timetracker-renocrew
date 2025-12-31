@@ -176,6 +176,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // For non-freelancers (if any), proceed with old flow
     try {
+      // Get company for the user
+      let company = null;
+      try {
+        const companyResult = await window.auth.getUserCompany(email);
+        if (companyResult && companyResult.success) {
+          company = companyResult.company;
+        }
+      } catch (companyError) {
+        console.warn('Error getting company for user:', companyError);
+        // Continue without company - non-fatal
+      }
+
       // Create session record immediately in database
       const sessionStartTime = new Date().toISOString();
       const today = new Date().toISOString().split('T')[0];
@@ -185,7 +197,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         end_time: null,
         break_duration: 0,
         active_duration: 0,
-        session_date: today
+        session_date: today,
+        company: company // Add company from user's Employee record
       };
 
       console.log('Creating session with data:', sessionData);

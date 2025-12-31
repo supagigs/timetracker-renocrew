@@ -48,6 +48,15 @@ contextBridge.exposeInMainWorld('frappe', {
   updateTimesheetRow: (payload) =>
     ipcRenderer.invoke('frappe:update-timesheet-row', payload),
 
+  getTimesheetById: (timesheetId) =>
+    ipcRenderer.invoke('frappe:get-timesheet-by-id', timesheetId),
+
+  saveTimesheetWithSavedocs: (timesheetDoc) =>
+    ipcRenderer.invoke('frappe:save-timesheet-with-savedocs', timesheetDoc),
+
+  getFrappeServerTime: () =>
+    ipcRenderer.invoke('frappe:get-server-time'),
+
 });
 
 

@@ -1766,6 +1766,257 @@ async function getUserProjectsDirect() {
   }
 }
 
+/**
+ * Get server time from Frappe
+ * This ensures we use server time instead of local time to prevent timezone issues
+ * Requires a Frappe method endpoint: get_server_now
+ * 
+ * Frappe API script required:
+ * @frappe.whitelist()
+ * def get_server_now():
+ *     return frappe.utils.now_datetime()
+ * 
+ * @returns {string} - Server datetime in Frappe format (YYYY-MM-DD HH:mm:ss)
+ */
+async function getFrappeServerTime() {
+  const userEmail = await getCurrentUser();
+  if (!userEmail) {
+    throw new Error('User not logged in');
+  }
+
+  const frappe = createFrappeClient();
+
+  try {
+    if (logInfo) {
+      logInfo('Frappe', 'Fetching server time from Frappe');
+    }
+
+    // Call Frappe method endpoint to get server time
+    // This requires a server script: get_server_now
+    // Using POST as per the server script implementation
+    const res = await frappe.post('/api/method/get_server_now');
+
+    if (!res?.data?.message) {
+      throw new Error('Invalid response from get_server_now');
+    }
+
+    const serverTime = res.data.message;
+
+    if (logInfo) {
+      logInfo('Frappe', `Server time: ${serverTime}`);
+    }
+
+    // Ensure the format is correct (YYYY-MM-DD HH:mm:ss)
+    // If Frappe returns a datetime object, convert it
+    if (typeof serverTime === 'string') {
+      return serverTime;
+    } else if (serverTime && typeof serverTime === 'object') {
+      // Handle datetime object if Frappe returns it
+      return serverTime.toString();
+    }
+
+    return serverTime;
+  } catch (err) {
+    // If get_server_now method doesn't exist, fall back to using current time
+    // but log a warning
+    if (logError) {
+      logError('Frappe', `Error fetching server time: ${err.message}. Falling back to local time.`);
+      logError('Frappe', 'Please add get_server_now method to Frappe: @frappe.whitelist() def get_server_now(): return frappe.utils.now_datetime()');
+    }
+    
+    // Fallback: use current time in Frappe format
+    const now = new Date();
+    const fallbackTime = now.toISOString().slice(0, 19).replace('T', ' ');
+    if (logInfo) {
+      logInfo('Frappe', `Using fallback local time: ${fallbackTime}`);
+    }
+    return fallbackTime;
+  }
+}
+
+/**
+ * Fetch full timesheet JSON by ID
+ * Returns the complete timesheet document
+ */
+async function getTimesheetById(timesheetId) {
+  const userEmail = await getCurrentUser();
+  if (!userEmail) {
+    throw new Error('User not logged in');
+  }
+
+  if (!timesheetId || typeof timesheetId !== 'string') {
+    throw new Error('Timesheet ID is required');
+  }
+
+  const frappe = createFrappeClient();
+
+  try {
+    if (logInfo) {
+      logInfo('Frappe', `Fetching timesheet ${timesheetId}`);
+    }
+
+    const res = await frappe.get(`/api/resource/Timesheet/${timesheetId}`);
+
+    if (!res?.data?.data) {
+      throw new Error('Invalid response from Frappe while fetching timesheet');
+    }
+
+    const timesheet = res.data.data;
+
+    if (logInfo) {
+      logInfo('Frappe', `Fetched timesheet ${timesheetId} with ${timesheet.time_logs?.length || 0} time log(s)`);
+    }
+
+    return timesheet;
+  } catch (err) {
+    const errorMessage =
+      err.response?.data?.message ||
+      err.message ||
+      'Failed to fetch timesheet from Frappe';
+
+    if (logError) {
+      logError('Frappe', `Error fetching timesheet: ${errorMessage}`, {
+        status: err.response?.status,
+        data: err.response?.data,
+      });
+    }
+
+    throw err;
+  }
+}
+
+/**
+ * Save timesheet using savedocs API endpoint
+ * This is used to update timesheet with completed rows (to_time and completed = 1)
+ * 
+ * @param {Object} timesheetDoc - The complete timesheet document object
+ * @returns {Object} - The saved timesheet response
+ */
+async function saveTimesheetWithSavedocs(timesheetDoc) {
+  const userEmail = await getCurrentUser();
+  if (!userEmail) {
+    throw new Error('User not logged in');
+  }
+
+  if (!timesheetDoc || !timesheetDoc.name) {
+    throw new Error('Timesheet document is required');
+  }
+
+  const frappe = createFrappeClient();
+
+  try {
+    if (logInfo) {
+      logInfo('Frappe', `Saving timesheet ${timesheetDoc.name} via savedocs API`);
+      logInfo('Frappe', `Timesheet doc structure:`, {
+        name: timesheetDoc.name,
+        doctype: timesheetDoc.doctype,
+        time_logs_count: timesheetDoc.time_logs?.length || 0,
+        has_doctype: !!timesheetDoc.doctype
+      });
+    }
+
+    // Ensure doctype is set (required by savedocs)
+    if (!timesheetDoc.doctype) {
+      timesheetDoc.doctype = 'Timesheet';
+    }
+
+    // ❌ DO NOT recompute, normalize, or touch old rows
+    // Only ensure doctype is set on rows that don't have it (minimal change)
+    // Do NOT recalculate hours for old rows
+    // Do NOT replace the entire time_logs array
+    if (timesheetDoc.time_logs && Array.isArray(timesheetDoc.time_logs)) {
+      // Only set doctype if missing (don't modify other fields)
+      timesheetDoc.time_logs.forEach(log => {
+        if (log && !log.doctype) {
+          log.doctype = 'Timesheet Detail';
+        }
+      });
+    }
+
+    // IMPORTANT: doc must be a stringified JSON, not an object
+    const payload = {
+      doc: JSON.stringify(timesheetDoc),
+      action: 'Save'
+    };
+
+    if (logInfo) {
+      logInfo('Frappe', `Calling savedocs with payload (doc length: ${payload.doc.length} chars)`);
+    }
+
+    const res = await frappe.post('/api/method/frappe.desk.form.save.savedocs', payload);
+
+    // Validate savedocs response correctly
+    // savedocs returns: { status: 200, data: { docs: [...], _server_messages: "..." } }
+    // It does NOT return data.message at the top level
+    if (res.status !== 200) {
+      const errorDetails = {
+        status: res?.status,
+        statusText: res?.statusText,
+        data: res?.data
+      };
+      if (logError) {
+        logError('Frappe', `Failed to save timesheet via savedocs:`, errorDetails);
+      }
+      throw new Error(`Failed to save timesheet: HTTP ${res.status}`);
+    }
+
+    // Optionally validate the saved document
+    const savedDoc = res?.data?.docs?.[0];
+    if (!savedDoc || savedDoc.doctype !== 'Timesheet') {
+      if (logError) {
+        logError('Frappe', `Invalid savedocs response structure:`, {
+          has_docs: !!res?.data?.docs,
+          docs_length: res?.data?.docs?.length,
+          first_doc_doctype: savedDoc?.doctype
+        });
+      }
+      throw new Error('Invalid savedocs response: expected Timesheet document');
+    }
+
+    // Optionally parse server messages to confirm save
+    try {
+      const serverMessages = JSON.parse(res.data._server_messages || '[]');
+      const saved = serverMessages.some(m => m.message && m.message.includes('Saved'));
+      if (logInfo) {
+        logInfo('Frappe', `Savedocs response:`, {
+          status: res.status,
+          saved: saved,
+          server_messages: serverMessages,
+          timesheet_name: savedDoc.name
+        });
+      }
+    } catch (parseError) {
+      // Non-fatal - just log it
+      if (logInfo) {
+        logInfo('Frappe', `Could not parse server messages: ${parseError.message}`);
+      }
+    }
+
+    if (logInfo) {
+      logInfo('Frappe', `Successfully saved timesheet ${savedDoc.name} via savedocs`);
+    }
+
+    return savedDoc;
+  } catch (err) {
+    const errorMessage =
+      err.response?.data?.message ||
+      err.response?.data?.exc ||
+      err.message ||
+      'Failed to save timesheet via savedocs';
+
+    if (logError) {
+      logError('Frappe', `Error in savedocs: ${errorMessage}`, {
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        data: err.response?.data,
+        fullError: err
+      });
+    }
+
+    throw err;
+  }
+}
+
 module.exports = { 
   getUserProjects, 
   getUserProjectsDirect, 
@@ -1776,6 +2027,9 @@ module.exports = {
   addTimeLogToTimesheet,
   getOrCreateTimesheet,
   startTimesheetSession,
-  updateTimesheetRow
+  updateTimesheetRow,
+  getTimesheetById,
+  saveTimesheetWithSavedocs,
+  getFrappeServerTime
 };
 

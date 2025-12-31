@@ -128,6 +128,18 @@ document.addEventListener('DOMContentLoaded', () => {
         // This allows the reports website to display session data
         try {
           if (window.supabase) {
+            // Get company for the user
+            let company = null;
+            try {
+              const companyResult = await window.auth.getUserCompany(userEmail);
+              if (companyResult && companyResult.success) {
+                company = companyResult.company;
+              }
+            } catch (companyError) {
+              console.warn('Error getting company for user:', companyError);
+              // Continue without company - non-fatal
+            }
+
             const sessionData = {
               user_email: userEmail,
               start_time: null, // Will be set when user clicks Start
@@ -139,7 +151,8 @@ document.addEventListener('DOMContentLoaded', () => {
               session_date: today,
               frappe_timesheet_id: frappeTimesheetId,
               frappe_project_id: projectId,
-              frappe_task_id: taskId || null // Task is optional
+              frappe_task_id: taskId || null, // Task is optional
+              company: company // Add company from user's Employee record
             };
 
             const { data: supabaseSession, error: sessionError } = await window.supabase

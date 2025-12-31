@@ -208,7 +208,10 @@ const {
   addTimeLogToTimesheet,
   getOrCreateTimesheet,
   startTimesheetSession,
-  updateTimesheetRow
+  updateTimesheetRow,
+  getTimesheetById,
+  saveTimesheetWithSavedocs,
+  getFrappeServerTime
 } = require('./frappeService');
 const path = require('path');
 const fs = require('fs');
@@ -2486,6 +2489,18 @@ async function insertScreenshotToDatabase(
     );
   }
 
+  // Get company for the user
+  let company = null;
+  try {
+    company = await frappeGetUserCompany(userEmail);
+    if (company) {
+      logInfo('DB', `Got company for user ${userEmail}: ${company}`);
+    }
+  } catch (companyError) {
+    logWarn('DB', `Error getting company for user ${userEmail}: ${companyError.message}`);
+    // Continue without company - non-fatal
+  }
+
   // Normalize sessionId: store as frappe_timesheet_id (Frappe timesheet ID)
   // frappe_timesheet_id is TEXT to support Frappe timesheet IDs (e.g., "TS-2025-00043")
   // 'temp-session' placeholder should be null
@@ -2515,6 +2530,11 @@ async function insertScreenshotToDatabase(
       // Attempt to set captured_idle when the column exists; fallback logic below will retry without it if missing
       captured_idle: Boolean(isIdle)
     };
+    
+    // Add company if available
+    if (company) {
+      insertData.company = company;
+    }
     
     // Add Frappe project and task IDs if provided
     if (normalizedProjectId) {
@@ -2557,6 +2577,11 @@ async function insertScreenshotToDatabase(
           screenshot_data: publicUrl, // Storage bucket public URL
           captured_at: timestamp
         };
+        
+        // Add company if available
+        if (company) {
+          minimalInsert.company = company;
+        }
         
         // Add Frappe IDs if available
         if (normalizedProjectId) {
@@ -2650,6 +2675,11 @@ async function insertScreenshotToDatabase(
       captured_at: timestamp
     };
     
+    // Add company if available
+    if (company) {
+      insertPayload.company = company;
+    }
+    
     // Add Frappe project and task IDs if provided
     if (normalizedProjectId) {
       insertPayload.frappe_project_id = normalizedProjectId;
@@ -2682,6 +2712,11 @@ async function insertScreenshotToDatabase(
           screenshot_data: publicUrl,
           captured_at: timestamp
         };
+        
+        // Add company if available
+        if (company) {
+          minimalPayload.company = company;
+        }
         
         // Add Frappe IDs if available
         if (normalizedProjectId) {
@@ -3281,17 +3316,38 @@ async function getScreenshotInterval(userEmail, sessionId) {
     const DEFAULT_INTERVAL_SECONDS = 60; // 1 minute default
     let clientEmail = null;
 
-    // 1) Get project_id from time_sessions using sessionId
+    // 1) Get frappe_project_id from time_sessions using sessionId
+    // Note: project_id column has been removed - we now use frappe_project_id
+    // Since Frappe projects don't map to Supabase project_assignments, we'll use a simpler approach
     if (!sessionId) {
       logWarn('ScreenshotInterval', 'No sessionId provided, using default interval');
       return DEFAULT_INTERVAL_SECONDS * 1000;
     }
 
-    const { data: sessionData, error: sessionError } = await supabase
-      .from('time_sessions')
-      .select('project_id')
-      .eq('id', sessionId)
-      .maybeSingle();
+    // Try to parse sessionId as integer (Supabase session ID) or use as-is (Frappe timesheet ID)
+    const numericSessionId = parseInt(sessionId, 10);
+    let sessionData = null;
+    let sessionError = null;
+
+    if (!isNaN(numericSessionId) && isFinite(numericSessionId)) {
+      // sessionId is a numeric Supabase session ID
+      const result = await supabase
+        .from('time_sessions')
+        .select('frappe_project_id, user_email')
+        .eq('id', numericSessionId)
+        .maybeSingle();
+      sessionData = result.data;
+      sessionError = result.error;
+    } else if (typeof sessionId === 'string' && sessionId.startsWith('TS-')) {
+      // sessionId is a Frappe timesheet ID (e.g., "TS-2025-00043")
+      const result = await supabase
+        .from('time_sessions')
+        .select('frappe_project_id, user_email')
+        .eq('frappe_timesheet_id', sessionId)
+        .maybeSingle();
+      sessionData = result.data;
+      sessionError = result.error;
+    }
 
     if (sessionError) {
       logWarn(
@@ -3301,60 +3357,40 @@ async function getScreenshotInterval(userEmail, sessionId) {
       return DEFAULT_INTERVAL_SECONDS * 1000;
     }
 
-    if (!sessionData || !sessionData.project_id) {
-      logInfo(
-        'ScreenshotInterval',
-        `Session ${sessionId} has no project_id, using default interval`,
-      );
-      return DEFAULT_INTERVAL_SECONDS * 1000;
-    }
-
-    const projectId = sessionData.project_id;
-
-    // 2) Get client email from project_assignments (assigned_by) or projects (user_email)
-    // Try project_assignments first (most reliable - shows who assigned the project)
-    const { data: projectAssignment, error: assignmentError } = await supabase
-      .from('project_assignments')
-      .select('assigned_by')
-      .eq('project_id', projectId)
-      .eq('freelancer_email', normalizedFreelancer)
-      .maybeSingle();
-
-    if (!assignmentError && projectAssignment && projectAssignment.assigned_by) {
-      // Use assigned_by (the client who assigned the project)
-      clientEmail = projectAssignment.assigned_by.trim().toLowerCase();
-    }
-
-    // 3) If project_assignments lookup failed or has no assigned_by, try getting client from projects table directly
-    if (!clientEmail) {
-      const { data: projectData, error: projectError } = await supabase
-        .from('projects')
-        .select('user_id')
-        .eq('id', projectId)
-        .maybeSingle();
-
-      if (!projectError && projectData && projectData.user_id) {
-        // Fetch email from users table using user_id foreign key
-        const { data: userData, error: userError } = await supabase
-          .from('users')
-          .select('email')
-          .eq('id', projectData.user_id)
+    // Since we're now using Frappe projects, we can't use Supabase project_assignments
+    // Instead, we'll use the user's company or fall back to the logged-in user as client
+    // 2) Try to get client email from user's company (if available)
+    if (sessionData && sessionData.user_email) {
+      try {
+        const { data: userCompanyData, error: companyError } = await supabase
+          .from('employees')
+          .select('company')
+          .eq('email', sessionData.user_email)
           .maybeSingle();
 
-        if (!userError && userData && userData.email) {
-          clientEmail = userData.email.trim().toLowerCase();
-          logInfo('ScreenshotInterval', `Using project owner email: ${clientEmail}`);
-        } else if (userError) {
-          logError('ScreenshotInterval', `Error fetching user email: ${userError.message}`);
+        if (!companyError && userCompanyData && userCompanyData.company) {
+          // Try to get client email from company
+          const { data: companyData, error: companyLookupError } = await supabase
+            .from('companies')
+            .select('owner_email')
+            .eq('name', userCompanyData.company)
+            .maybeSingle();
+
+          if (!companyLookupError && companyData && companyData.owner_email) {
+            clientEmail = companyData.owner_email.trim().toLowerCase();
+            logInfo('ScreenshotInterval', `Using company owner email: ${clientEmail}`);
+          }
         }
+      } catch (companyErr) {
+        logWarn('ScreenshotInterval', `Error fetching company info: ${companyErr.message}`);
       }
     }
 
-    // 4) Final fallback: assume logged-in user is the client
+    // 3) Final fallback: assume logged-in user is the client
     if (!clientEmail) {
       logInfo(
         'ScreenshotInterval',
-        `Could not resolve client for project ${projectId}, assuming user is client`,
+        `Could not resolve client from company, assuming user is client`,
       );
       clientEmail = normalizedFreelancer;
     }
@@ -3402,7 +3438,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
     const intervalMs = intervalSeconds * 1000;
     logInfo(
       'ScreenshotInterval',
-      `Using interval for client ${clientEmail}, freelancer ${normalizedFreelancer}, project ${projectId}: ${intervalSeconds} seconds (${intervalMs}ms)`,
+      `Using interval for client ${clientEmail}, freelancer ${normalizedFreelancer}: ${intervalSeconds} seconds (${intervalMs}ms)`,
     );
     return intervalMs;
   } catch (e) {
@@ -3510,6 +3546,18 @@ ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
 
 ipcMain.handle('frappe:update-timesheet-row', async (_e, payload) => {
   return await updateTimesheetRow(payload);
+});
+
+ipcMain.handle('frappe:get-timesheet-by-id', async (_e, timesheetId) => {
+  return await getTimesheetById(timesheetId);
+});
+
+ipcMain.handle('frappe:save-timesheet-with-savedocs', async (_e, timesheetDoc) => {
+  return await saveTimesheetWithSavedocs(timesheetDoc);
+});
+
+ipcMain.handle('frappe:get-server-time', async () => {
+  return await getFrappeServerTime();
 });
 
 ipcMain.handle(
