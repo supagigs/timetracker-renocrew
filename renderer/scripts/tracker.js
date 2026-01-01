@@ -298,6 +298,67 @@ document.addEventListener('DOMContentLoaded', () => {
         sessionStartTime = new Date();
         StorageService.setItem('sessionStartTime', sessionStartTime.toISOString());
 
+        // Create Supabase time_sessions record now that tracking is actually starting
+        // This ensures we only create the record when user actually starts tracking
+        try {
+          if (window.supabase) {
+            const startTimeISO = sessionStartTime.toISOString();
+            const today = new Date().toISOString().split('T')[0];
+            const selectedProjectId = StorageService.getItem('selectedProjectId');
+            const selectedTaskId = StorageService.getItem('selectedTaskId');
+
+            // Get company for the user
+            let company = null;
+            try {
+              const companyResult = await window.auth.getUserCompany(userEmail);
+              if (companyResult && companyResult.success) {
+                company = companyResult.company;
+              }
+            } catch (companyError) {
+              console.warn('Error getting company for user:', companyError);
+              // Continue without company - non-fatal
+            }
+
+            const sessionData = {
+              user_email: userEmail,
+              start_time: startTimeISO,
+              end_time: null,
+              break_duration: 0,
+              active_duration: 0,
+              idle_duration: 0,
+              break_count: 0,
+              total_duration: 0, // Will be updated when session ends
+              session_date: today,
+              frappe_timesheet_id: session.frappeTimesheetId,
+              frappe_project_id: selectedProjectId || null,
+              frappe_task_id: (selectedTaskId && selectedTaskId !== '' && selectedTaskId !== null) ? selectedTaskId : null,
+              company: company
+            };
+
+            const { data: supabaseSession, error: sessionError } = await window.supabase
+              .from('time_sessions')
+              .insert([sessionData])
+              .select('id')
+              .single();
+
+            if (sessionError) {
+              console.error('Error creating Supabase session:', sessionError);
+              console.error('Session data that failed to insert:', JSON.stringify(sessionData, null, 2));
+              console.error('Error details:', JSON.stringify(sessionError, null, 2));
+              // Non-fatal - continue with timer start, but log the error
+              NotificationService.showWarning('Session record creation failed. Timer started, but data may not appear in reports.');
+            } else if (supabaseSession) {
+              // Store the Supabase session ID for later updates
+              StorageService.setItem('supabaseSessionId', supabaseSession.id.toString());
+              console.log('Created Supabase session with ID:', supabaseSession.id);
+            }
+          }
+        } catch (supabaseError) {
+          console.error('Error creating Supabase session record:', supabaseError);
+          // Non-fatal - continue with timer start
+          NotificationService.showWarning('Session record creation failed. Timer started, but data may not appear in reports.');
+        }
+
         isActive = true;
         workStartTime = new Date().toISOString();
         StorageService.setItem('isActive', 'true');
@@ -760,7 +821,8 @@ document.addEventListener('DOMContentLoaded', () => {
           break_duration: breakDuration,
           active_duration: activeDuration,
           idle_duration: idleDuration,
-          break_count: breakCountVal
+          break_count: breakCountVal,
+          total_duration: totalDuration // Sum of active_duration + break_duration + idle_duration
         };
 
         // Add company if available
@@ -798,7 +860,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           console.log('Session updated successfully:', data);
           if (data && data[0]) {
-            console.log('Updated session includes project_id:', data[0].project_id);
+            console.log('Updated session includes frappe_project_id:', data[0].frappe_project_id);
             console.log('Updated session active_duration:', data[0].active_duration);
           }
         }
@@ -829,6 +891,7 @@ document.addEventListener('DOMContentLoaded', () => {
           active_duration: activeDuration,
           idle_duration: idleDuration,
           break_count: breakCountVal,
+          total_duration: totalDuration, // Sum of active_duration + break_duration + idle_duration
           session_date: today,
           company: company // Add company from user's Employee record
         };
@@ -861,7 +924,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           console.log('Session saved successfully:', data);
           if (data) {
-            console.log('Saved session includes project_id:', data.project_id);
+            console.log('Saved session includes frappe_project_id:', data.frappe_project_id);
             console.log('Saved session active_duration:', data.active_duration);
           }
         }
@@ -1145,10 +1208,6 @@ document.addEventListener('DOMContentLoaded', () => {
       let projectId = selectedProjectId;
       if (!projectId && currentSessionId) {
         return;
-        
-        if (session && session.project_id) {
-          projectId = session.project_id.toString();
-        }
       }
 
       if (!projectId || !window.supabase) {

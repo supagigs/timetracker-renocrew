@@ -122,60 +122,10 @@ document.addEventListener('DOMContentLoaded', () => {
         StorageService.setItem('frappeTimesheetId', frappeTimesheetId);
         StorageService.setItem('frappeTimesheetRowId', frappeTimesheetRowId);
 
-        const today = new Date().toISOString().split('T')[0];
-
-        // Create a corresponding Supabase time_sessions record
-        // This allows the reports website to display session data
-        try {
-          if (window.supabase) {
-            // Get company for the user
-            let company = null;
-            try {
-              const companyResult = await window.auth.getUserCompany(userEmail);
-              if (companyResult && companyResult.success) {
-                company = companyResult.company;
-              }
-            } catch (companyError) {
-              console.warn('Error getting company for user:', companyError);
-              // Continue without company - non-fatal
-            }
-
-            const sessionData = {
-              user_email: userEmail,
-              start_time: null, // Will be set when user clicks Start
-              end_time: null,
-              break_duration: 0,
-              active_duration: 0,
-              idle_duration: 0,
-              break_count: 0,
-              session_date: today,
-              frappe_timesheet_id: frappeTimesheetId,
-              frappe_project_id: projectId,
-              frappe_task_id: taskId || null, // Task is optional
-              company: company // Add company from user's Employee record
-            };
-
-            const { data: supabaseSession, error: sessionError } = await window.supabase
-              .from('time_sessions')
-              .insert([sessionData])
-              .select('id')
-              .single();
-
-            if (sessionError) {
-              console.error('Error creating Supabase session:', sessionError);
-              // Continue anyway - Frappe timesheet was created successfully
-            } else if (supabaseSession) {
-              // Store the Supabase session ID for later updates
-              StorageService.setItem('supabaseSessionId', supabaseSession.id.toString());
-              console.log('Created Supabase session with ID:', supabaseSession.id);
-            }
-          }
-        } catch (supabaseError) {
-          console.error('Error creating Supabase session record:', supabaseError);
-          // Non-fatal - continue with Frappe timesheet
-        }
-
         StorageService.setItem('isActive', 'false');
+
+        // Note: Supabase session record will be created when user clicks "Start" on tracker page
+        // This ensures we only create the record when tracking actually begins
 
         window.location.href = 'tracker.html';
   
