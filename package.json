@@ -69,6 +69,9 @@
     "files": [
       "main.js",
       "preload.js",
+      "frappeAuth.js",
+      "frappeClient.js",
+      "frappeService.js",
       "toast.html",
       "SupagigsIcon.ico",
       "renderer/**/*",
