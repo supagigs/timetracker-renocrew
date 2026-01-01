@@ -2530,9 +2530,9 @@ async function insertScreenshotToDatabase(
       captured_idle: Boolean(isIdle)
     };
     
-    // Add session_id (time_sessions.id) if available
+    // Add time_session_id (time_sessions.id) if available
     if (timeTrackerSessionId && typeof timeTrackerSessionId === 'number') {
-      insertData.session_id = timeTrackerSessionId;
+      insertData.time_session_id = timeTrackerSessionId;
     }
     
     // Add company if available
@@ -2582,9 +2582,9 @@ async function insertScreenshotToDatabase(
           captured_at: timestamp
         };
         
-        // Add session_id (time_sessions.id) if available
+        // Add time_session_id (time_sessions.id) if available
         if (timeTrackerSessionId && typeof timeTrackerSessionId === 'number') {
-          minimalInsert.session_id = timeTrackerSessionId;
+          minimalInsert.time_session_id = timeTrackerSessionId;
         }
         
         // Add company if available
@@ -2684,9 +2684,9 @@ async function insertScreenshotToDatabase(
       captured_at: timestamp
     };
     
-    // Add session_id (time_sessions.id) if available
+    // Add time_session_id (time_sessions.id) if available
     if (timeTrackerSessionId && typeof timeTrackerSessionId === 'number') {
-      insertPayload.session_id = timeTrackerSessionId;
+      insertPayload.time_session_id = timeTrackerSessionId;
     }
     
     // Add company if available
@@ -3096,18 +3096,18 @@ async function processScreenshotBatch() {
         
         // Insert database record BEFORE deleting local file
         // This ensures we can retry if database insert fails
-        // Use Frappe timesheet ID for database if available, otherwise use sessionId
-        const timesheetIdForDb = item.frappeTimesheetId || item.sessionId;
+        // Pass frappe_timesheet_id and time_tracker_session_id (numeric id) separately
         await insertScreenshotToDatabase(
           supabase,
           item.userEmail,
-          timesheetIdForDb, // Use Frappe timesheet ID if available
+          frappeTimesheetId || null, // Frappe timesheet ID
           publicUrl,
           item.timestamp,
           appName,
           item.isIdle,
           item.frappeProjectId,
-          item.frappeTaskId
+          item.frappeTaskId,
+          timeTrackerSessionId // Numeric time_sessions.id
         );
         logInfo(item.contextLabel, `Database record inserted successfully for ${item.jpegFilename}`);
 
