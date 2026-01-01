@@ -2471,13 +2471,14 @@ function broadcastScreenshotCaptured(screenshotData) {
 async function insertScreenshotToDatabase(
   supabase,
   userEmail,
-  sessionId,
+  frappeTimesheetId,
   publicUrl,
   timestamp,
   appName,
   isIdle,
   frappeProjectId = null,
-  frappeTaskId = null
+  frappeTaskId = null,
+  timeTrackerSessionId = null
 ) {
   // Normalize email to match how it's stored in the DB
   const normalizedEmail =
@@ -2501,13 +2502,11 @@ async function insertScreenshotToDatabase(
     // Continue without company - non-fatal
   }
 
-  // Normalize sessionId: store as frappe_timesheet_id (Frappe timesheet ID)
+  // Normalize frappeTimesheetId: store as frappe_timesheet_id (Frappe timesheet ID)
   // frappe_timesheet_id is TEXT to support Frappe timesheet IDs (e.g., "TS-2025-00043")
-  // 'temp-session' placeholder should be null
   let normalizedTimesheetId = null;
-  if (sessionId && sessionId !== 'temp-session') {
-    // Convert to string if it's a number, otherwise use as-is
-    normalizedTimesheetId = typeof sessionId === 'string' ? sessionId.trim() : String(sessionId);
+  if (frappeTimesheetId && typeof frappeTimesheetId === 'string') {
+    normalizedTimesheetId = frappeTimesheetId.trim();
     // Empty strings should be null
     if (normalizedTimesheetId === '') {
       normalizedTimesheetId = null;
@@ -2530,6 +2529,11 @@ async function insertScreenshotToDatabase(
       // Attempt to set captured_idle when the column exists; fallback logic below will retry without it if missing
       captured_idle: Boolean(isIdle)
     };
+    
+    // Add session_id (time_sessions.id) if available
+    if (timeTrackerSessionId && typeof timeTrackerSessionId === 'number') {
+      insertData.session_id = timeTrackerSessionId;
+    }
     
     // Add company if available
     if (company) {
@@ -2577,6 +2581,11 @@ async function insertScreenshotToDatabase(
           screenshot_data: publicUrl, // Storage bucket public URL
           captured_at: timestamp
         };
+        
+        // Add session_id (time_sessions.id) if available
+        if (timeTrackerSessionId && typeof timeTrackerSessionId === 'number') {
+          minimalInsert.session_id = timeTrackerSessionId;
+        }
         
         // Add company if available
         if (company) {
@@ -2674,6 +2683,11 @@ async function insertScreenshotToDatabase(
       screenshot_data: publicUrl, // Storage bucket public URL
       captured_at: timestamp
     };
+    
+    // Add session_id (time_sessions.id) if available
+    if (timeTrackerSessionId && typeof timeTrackerSessionId === 'number') {
+      insertPayload.session_id = timeTrackerSessionId;
+    }
     
     // Add company if available
     if (company) {
@@ -3017,24 +3031,50 @@ async function processScreenshotBatch() {
 
         // Use Frappe timesheet ID for storage path if available, otherwise use sessionId
         // Frappe timesheet IDs are like "TS-2025-00043", which is what we want for folder structure
-        // This ensures screenshots are organized by Frappe timesheet ID in the bucket
-        // IMPORTANT: Always prefer Frappe timesheet ID over numeric Supabase session IDs
-        let folderId = item.frappeTimesheetId;
-        if (!folderId && item.sessionId) {
-          // If frappeTimesheetId is not set, check if sessionId is a Frappe ID
+        // Look up time_sessions.id (numeric ID) for storage path and database insert
+        // sessionId can be either a numeric Supabase session ID or a Frappe timesheet ID
+        let timeTrackerSessionId = null; // Numeric time_sessions.id
+        let frappeTimesheetId = item.frappeTimesheetId;
+        
+        if (item.sessionId) {
           const sessionIdStr = String(item.sessionId);
-          if (sessionIdStr.startsWith('TS-')) {
-            folderId = sessionIdStr;
-          } else {
-            // sessionId is numeric (Supabase session ID), try to get Frappe timesheet ID from storage
-            // Note: We can't access localStorage from main process, so we rely on what was passed
-            // If it's numeric, we'll use it but log a warning
-            folderId = item.sessionId;
-            logWarn(item.contextLabel, `Using numeric session ID (${item.sessionId}) for storage path. Frappe timesheet ID not available. Screenshot will be stored under numeric ID folder.`);
+          const numericSessionId = parseInt(sessionIdStr, 10);
+          
+          if (!isNaN(numericSessionId) && isFinite(numericSessionId)) {
+            // sessionId is numeric - this is already the time_sessions.id
+            timeTrackerSessionId = numericSessionId;
+            // Try to get frappe_timesheet_id from database
+            if (!frappeTimesheetId) {
+              const { data: sessionData } = await supabase
+                .from('time_sessions')
+                .select('frappe_timesheet_id')
+                .eq('id', numericSessionId)
+                .maybeSingle();
+              if (sessionData?.frappe_timesheet_id) {
+                frappeTimesheetId = sessionData.frappe_timesheet_id;
+              }
+            }
+          } else if (sessionIdStr.startsWith('TS-')) {
+            // sessionId is a Frappe timesheet ID - look up the numeric id
+            frappeTimesheetId = sessionIdStr;
+            const { data: sessionData } = await supabase
+              .from('time_sessions')
+              .select('id')
+              .eq('frappe_timesheet_id', sessionIdStr)
+              .maybeSingle();
+            if (sessionData?.id) {
+              timeTrackerSessionId = sessionData.id;
+            }
           }
         }
-        const storagePath = `${item.userEmail}/${folderId}/${item.jpegFilename}`;
-        logInfo(item.contextLabel, `Uploading to storage: ${storagePath} (Frappe ID: ${item.frappeTimesheetId || 'none'}, Session ID: ${item.sessionId}, Using folder: ${folderId}) (${(item.jpegBuffer.length / 1024).toFixed(2)} KB)`);
+        
+        // Build storage path: user_email/frappe_timesheet_id/time_tracker_session_id/screenshots/filename
+        // If frappe_timesheet_id is not available, use time_tracker_session_id for that part
+        const frappeFolder = frappeTimesheetId || (timeTrackerSessionId ? String(timeTrackerSessionId) : 'unknown');
+        const sessionFolder = timeTrackerSessionId ? String(timeTrackerSessionId) : 'unknown';
+        const storagePath = `${item.userEmail}/${frappeFolder}/${sessionFolder}/screenshots/${item.jpegFilename}`;
+        
+        logInfo(item.contextLabel, `Uploading to storage: ${storagePath} (Frappe ID: ${frappeTimesheetId || 'none'}, Session ID: ${timeTrackerSessionId || 'none'}) (${(item.jpegBuffer.length / 1024).toFixed(2)} KB)`);
         
         const { error: storageError } = await supabase.storage
           .from(STORAGE_BUCKET)
