@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { frappeLogin, getFrappeCurrentUserRoleProfile, getFrappeUserCompany } from '@/lib/frappeClient';
+import { syncUserContextFromFrappe } from '@/lib/frappeUserContext';
 
 type UserRecord = {
   id: number;

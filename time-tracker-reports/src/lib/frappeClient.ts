@@ -28,6 +28,7 @@ export function createFrappeClient(useApiKey: boolean = true): AxiosInstance {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
+    'Expect': '', // 🔥 REQUIRED for Frappe - prevents 417 errors
   };
   
   // For server-side API calls, use API key authentication
@@ -37,20 +38,21 @@ export function createFrappeClient(useApiKey: boolean = true): AxiosInstance {
     
     if (apiKey && apiSecret) {
       headers['Authorization'] = `token ${apiKey}:${apiSecret}`;
-    } else {
-      console.warn('[frappeClient] FRAPPE_API_KEY and FRAPPE_API_SECRET not configured. API calls may fail. Falling back to session-based auth.');
-      // Fall back to session-based auth if API keys are not configured
+      
+      // API key auth - no cookies needed
       return axios.create({
         baseURL: baseURL,
-        withCredentials: true,
         headers: headers,
       });
+    } else {
+      console.warn('[frappeClient] FRAPPE_API_KEY and FRAPPE_API_SECRET not configured. Falling back to session-based auth.');
     }
   }
   
+  // Session-based auth (withCredentials: true for cookies)
   return axios.create({
     baseURL: baseURL,
-    withCredentials: !useApiKey, // Only use cookies for session-based auth
+    withCredentials: true,
     headers: headers,
   });
 }
@@ -264,31 +266,79 @@ export async function getFrappeUserRolesForEmail(userEmail: string): Promise<str
 
 /**
  * Get all users from Frappe, optionally filtered by company
+ * 
+ * IMPORTANT: This function uses a whitelisted Frappe method instead of /api/resource/User
+ * because Frappe blocks direct access to the User doctype via API (returns 417).
+ * 
+ * ⚠️ NOTE: You need to create a PYTHON METHOD, not a Server Script!
+ * Server Scripts cannot be called via API endpoints.
+ * 
+ * Steps to create the method:
+ * 
+ * 1. Create or edit a Python file in your custom app:
+ *    File: your_app/api/users.py (create this file if it doesn't exist)
+ * 
+ * 2. Add this code:
+ * 
+ *    import frappe
+ * 
+ *    @frappe.whitelist()
+ *    def get_users(company=None):
+ *        # Optional: restrict to System Manager role
+ *        # frappe.only_for("System Manager")
+ *        
+ *        filters = {"enabled": 1}
+ *        if company:
+ *            filters["company"] = company
+ *        
+ *        users = frappe.get_all(
+ *            "User",
+ *            filters=filters,
+ *            fields=["name", "full_name", "company"],
+ *            limit_page_length=1000
+ *        )
+ *        
+ *        return users
+ * 
+ * 3. Restart your Frappe bench:
+ *    bench restart
+ * 
+ * Method path format:
+ * - If file is: your_app/api/users.py → path: /api/method/your_app.api.users.get_users
+ * - Or create in a simpler location for: /api/method/get_users
+ * 
+ * To create in a simpler location, you can add it to any existing Python file that's already
+ * being loaded, or create a new file in your app's root api folder.
  */
 export async function getAllFrappeUsers(company?: string | null): Promise<Array<{ email: string; full_name: string | null }>> {
   try {
-    const frappe = createFrappeClient();
-    const filters: any[] = [['enabled', '=', 1]];
+    const frappe = createFrappeClient(true); // Use API key auth
     
-    // Filter by company if provided
+    const params: Record<string, string> = {};
     if (company) {
-      filters.push(['company', '=', company]);
+      params.company = company;
     }
     
-    const res = await frappe.get('/api/resource/User', {
-      params: {
-        fields: JSON.stringify(['name', 'full_name', 'company']),
-        filters: JSON.stringify(filters),
-        limit_page_length: 1000,
-      },
-    });
-    const users = res?.data?.data || [];
+    const res = await frappe.get('/api/method/get_users', { params });
+    
+    // ✅ Always read from res.data.message (NOT res.data.data)
+    const users = res.data.message || [];
+    
+    if (!Array.isArray(users)) {
+      console.warn('[frappeClient] get_users method returned unexpected format:', users);
+      return [];
+    }
+    
     return users.map((user: any) => ({
-      email: user.name,
+      email: user.name || user.email,
       full_name: user.full_name || null,
     }));
-  } catch (err) {
-    console.error('[frappeClient] Error getting all users:', err);
+  } catch (err: any) {
+    console.error('[frappeClient] get_users failed', {
+      status: err?.response?.status,
+      contentType: err?.response?.headers?.['content-type'],
+      message: err?.message,
+    });
     return [];
   }
 }
@@ -361,6 +411,149 @@ export async function getAllFrappeProjects(company?: string | null): Promise<Arr
     }));
   } catch (err) {
     console.error('[frappeClient] Error getting all projects:', err);
+    return [];
+  }
+}
+
+/**
+ * Get projects assigned to a specific user in Frappe
+ * Returns projects from multiple sources (matching frappeService.js logic):
+ * 1. Projects from tasks assigned to the user
+ * 2. Projects directly assigned via _assign field on Project (PRIMARY method)
+ * 3. Projects via Project User doctype assignments
+ */
+export async function getFrappeProjectsForUser(userEmail: string): Promise<Array<{ id: string; name: string }>> {
+  try {
+    const frappe = createFrappeClient();
+    const normalizedEmail = userEmail.trim().toLowerCase();
+    const projectIds = new Set<string>();
+    
+    // Method 1: Get projects from tasks assigned to this user
+    try {
+      const taskRes = await frappe.get('/api/resource/Task', {
+        params: {
+          fields: JSON.stringify(['project']),
+          filters: JSON.stringify([
+            ['_assign', 'like', `%${normalizedEmail}%`],
+            ['project', '!=', ''],
+          ]),
+          limit_page_length: 1000,
+        },
+      });
+      
+      const tasks = Array.isArray(taskRes?.data?.data) ? taskRes.data.data : [];
+      const projectIdsFromTasks = [...new Set(tasks.map((t: any) => t.project).filter((p: any) => p))] as string[];
+      projectIdsFromTasks.forEach((id) => projectIds.add(id));
+      console.log(`[frappeClient] Found ${tasks.length} task(s), extracted ${projectIdsFromTasks.length} unique project(s) from tasks`);
+    } catch (taskErr) {
+      console.warn('[frappeClient] Error fetching tasks for projects:', taskErr);
+    }
+    
+    // Method 2: Get projects directly assigned via _assign field on Project
+    // This is the PRIMARY way projects are assigned to users in Frappe
+    try {
+      const projectWithAssignRes = await frappe.get('/api/resource/Project', {
+        params: {
+          fields: JSON.stringify(['name', 'project_name', '_assign']),
+          filters: JSON.stringify([
+            ['_assign', 'like', `%${normalizedEmail}%`],
+          ]),
+          limit_page_length: 1000,
+        },
+      });
+      
+      const projectsWithAssign = projectWithAssignRes?.data?.data || [];
+      projectsWithAssign.forEach((project: any) => {
+        if (project.name) {
+          projectIds.add(project.name);
+        }
+      });
+      console.log(`[frappeClient] Found ${projectsWithAssign.length} project(s) directly assigned via _assign field`);
+    } catch (assignFieldErr) {
+      console.warn('[frappeClient] Error checking _assign field for projects:', assignFieldErr);
+    }
+    
+    // Method 3: Get projects via Project User doctype assignments
+    try {
+      const projectUserRes = await frappe.get('/api/resource/Project User', {
+        params: {
+          fields: JSON.stringify(['project', 'user']),
+          filters: JSON.stringify([
+            ['user', '=', normalizedEmail],
+          ]),
+          limit_page_length: 1000,
+        },
+      });
+      
+      const projectUsers = Array.isArray(projectUserRes?.data?.data) ? projectUserRes.data.data : [];
+      const projectIdsFromDirect = [...new Set(projectUsers.map((pu: any) => pu.project).filter((p: any) => p))] as string[];
+      projectIdsFromDirect.forEach((id) => projectIds.add(id));
+      console.log(`[frappeClient] Found ${projectUsers.length} project assignment(s) via Project User doctype`);
+    } catch (projectUserErr) {
+      // Project User doctype might not exist, that's okay
+      console.log('[frappeClient] Project User doctype not available or no assignments found');
+    }
+    
+    if (projectIds.size === 0) {
+      console.log('[frappeClient] No projects found from any source');
+      return [];
+    }
+    
+    // Get project details for all unique project IDs
+    const uniqueProjectIds = Array.from(projectIds);
+    console.log(`[frappeClient] Fetching details for ${uniqueProjectIds.length} unique project(s): ${uniqueProjectIds.join(', ')}`);
+    
+    let projects: Array<{ id: string; name: string }> = [];
+    
+    // Try batch fetch first (more efficient)
+    try {
+      const projectRes = await frappe.get('/api/resource/Project', {
+        params: {
+          fields: JSON.stringify(['name', 'project_name']),
+          filters: JSON.stringify([
+            ['name', 'in', uniqueProjectIds],
+          ]),
+          limit_page_length: 1000,
+        },
+      });
+      
+      projects = (projectRes.data.data || []).map((p: any) => ({
+        id: p.name,
+        name: p.project_name || p.name,
+      }));
+      
+      console.log(`[frappeClient] Batch fetch returned ${projects.length} project(s)`);
+    } catch (batchErr) {
+      console.warn('[frappeClient] Batch fetch failed, trying individual fetches:', batchErr);
+      // Fallback: fetch projects individually
+      for (const projectId of uniqueProjectIds) {
+        try {
+          const projectRes = await frappe.get(`/api/resource/Project/${projectId}`);
+          const project = projectRes?.data?.data;
+          if (project) {
+            projects.push({
+              id: project.name,
+              name: project.project_name || project.name,
+            });
+          }
+        } catch (indErr) {
+          console.warn(`[frappeClient] Failed to fetch project ${projectId}:`, indErr);
+        }
+      }
+    }
+    
+    // Verify we got all projects
+    const foundProjectIds = projects.map(p => p.id);
+    const missingProjectIds = uniqueProjectIds.filter(id => !foundProjectIds.includes(id));
+    
+    if (missingProjectIds.length > 0) {
+      console.warn(`[frappeClient] Warning: Could not fetch details for ${missingProjectIds.length} project(s): ${missingProjectIds.join(', ')}`);
+    }
+    
+    console.log(`[frappeClient] Returning ${projects.length} project(s) for user ${normalizedEmail}`);
+    return projects;
+  } catch (err) {
+    console.error('[frappeClient] Error getting projects for user:', err);
     return [];
   }
 }

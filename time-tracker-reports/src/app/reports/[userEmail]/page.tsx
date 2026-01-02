@@ -350,13 +350,43 @@ function formatSecondsToHoursMinutes(totalSeconds: number): string {
   }
 }
 
-function buildProjectSummary(sessions: TimeSession[]) {
-  const projectMap = new Map<number, { name: string; totalSeconds: number }>();
+async function fetchProjectNamesMap(supabase: ReturnType<typeof createServerSupabaseClient>, projectIds: string[]): Promise<Map<string, string>> {
+  if (projectIds.length === 0) {
+    return new Map();
+  }
+
+  const uniqueProjectIds = [...new Set(projectIds.filter(Boolean))];
+  if (uniqueProjectIds.length === 0) {
+    return new Map();
+  }
+
+  const { data: projects, error } = await supabase
+    .from('projects')
+    .select('frappe_project_id, project_name')
+    .in('frappe_project_id', uniqueProjectIds);
+
+  if (error) {
+    console.warn('[reports-page] Failed to load project names:', error);
+    return new Map();
+  }
+
+  const projectMap = new Map<string, string>();
+  (projects || []).forEach((project: any) => {
+    if (project.frappe_project_id && project.project_name) {
+      projectMap.set(project.frappe_project_id, project.project_name);
+    }
+  });
+
+  return projectMap;
+}
+
+function buildProjectSummary(sessions: TimeSession[], projectNamesMap: Map<string, string>) {
+  const projectMap = new Map<string, { name: string; totalSeconds: number }>();
 
   sessions.forEach((session) => {
-    if (session.project_id && session.projects) {
-      const projectId = session.project_id;
-      const projectName = session.projects.project_name || 'Untitled project';
+    const projectId = (session as any).frappe_project_id;
+    if (projectId) {
+      const projectName = projectNamesMap.get(projectId) || projectId || 'Untitled project';
       const activeDuration = session.active_duration ?? 0;
 
       if (projectMap.has(projectId)) {
@@ -376,8 +406,8 @@ function buildProjectSummary(sessions: TimeSession[]) {
 
   // Convert to arrays and sort by total time (descending)
   const projectData = Array.from(projectMap.entries())
-    .map(([id, data]) => ({
-      id,
+    .map(([id, data], index) => ({
+      id: index + 1,
       name: data.name,
       totalHours: data.totalSeconds / 3600,
       totalSeconds: data.totalSeconds,
@@ -491,7 +521,13 @@ export default async function ReportsPage({
 
       sessions = await fetchLastMonthSessions(reportEmail);
       summary = buildMonthlySummary(sessions);
-      projectSummary = buildProjectSummary(sessions);
+      
+      // Fetch project names
+      const supabase = createServerSupabaseClient();
+      const projectIds = sessions.map((s: any) => s.frappe_project_id).filter(Boolean) as string[];
+      const projectNamesMap = await fetchProjectNamesMap(supabase, projectIds);
+      projectSummary = buildProjectSummary(sessions, projectNamesMap);
+      
       if (!isClient) {
         assignedProjects = await fetchFreelancerProjects(reportEmail);
       }

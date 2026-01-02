@@ -116,15 +116,13 @@ function buildMonthlySummary(sessions: TimeSession[], dateRange: DateRange) {
   };
 }
 
-function buildProjectSummary(sessions: TimeSession[]) {
-  // Use frappe_project_id instead of project_id since projects table join was removed
+function buildProjectSummary(sessions: TimeSession[], projectNamesMap: Map<string, string>) {
   const projectMap = new Map<string, { name: string; totalSeconds: number }>();
 
   sessions.forEach((session) => {
-    // Use frappe_project_id if available, otherwise skip
     const projectId = (session as any).frappe_project_id;
     if (projectId) {
-      const projectName = projectId || 'Untitled project';
+      const projectName = projectNamesMap.get(projectId) || projectId || 'Untitled project';
       const activeDuration = session.active_duration ?? 0;
 
       if (projectMap.has(projectId)) {
@@ -144,7 +142,7 @@ function buildProjectSummary(sessions: TimeSession[]) {
 
   return Array.from(projectMap.entries())
     .map(([id, data], index) => ({
-      id: index + 1, // Use index as numeric ID since frappe_project_id is a string
+      id: index + 1,
       name: data.name,
       totalHours: data.totalSeconds / 3600,
       totalSeconds: data.totalSeconds,
@@ -155,8 +153,6 @@ function buildProjectSummary(sessions: TimeSession[]) {
 async function fetchSessionsInRange(userEmail: string, dateRange: DateRange): Promise<TimeSession[]> {
   const supabase = createServerSupabaseClient();
 
-  // Note: projects table join removed - time_sessions no longer has project_id foreign key
-  // Project information is stored in frappe_project_id column if needed
   const { data, error } = await supabase
     .from('time_sessions')
     .select('*')
@@ -171,6 +167,36 @@ async function fetchSessionsInRange(userEmail: string, dateRange: DateRange): Pr
   }
 
   return (data ?? []) as TimeSession[];
+}
+
+async function fetchProjectNamesMap(supabase: ReturnType<typeof createServerSupabaseClient>, projectIds: string[]): Promise<Map<string, string>> {
+  if (projectIds.length === 0) {
+    return new Map();
+  }
+
+  const uniqueProjectIds = [...new Set(projectIds.filter(Boolean))];
+  if (uniqueProjectIds.length === 0) {
+    return new Map();
+  }
+
+  const { data: projects, error } = await supabase
+    .from('projects')
+    .select('frappe_project_id, project_name')
+    .in('frappe_project_id', uniqueProjectIds);
+
+  if (error) {
+    console.warn('[reports-page] Failed to load project names:', error);
+    return new Map();
+  }
+
+  const projectMap = new Map<string, string>();
+  (projects || []).forEach((project: any) => {
+    if (project.frappe_project_id && project.project_name) {
+      projectMap.set(project.frappe_project_id, project.project_name);
+    }
+  });
+
+  return projectMap;
 }
 
 export default async function ReportsAnalyticsPage({
@@ -224,8 +250,14 @@ export default async function ReportsAnalyticsPage({
   const dateRange = normalizeDateRange(resolvedSearchParams);
 
   const sessions = await fetchSessionsInRange(targetEmail, dateRange);
+  
+  // Fetch project names
+  const supabase = createServerSupabaseClient();
+  const projectIds = sessions.map((s: any) => s.frappe_project_id).filter(Boolean) as string[];
+  const projectNamesMap = await fetchProjectNamesMap(supabase, projectIds);
+  
   const summary = buildMonthlySummary(sessions, dateRange);
-  const projectSummary = buildProjectSummary(sessions);
+  const projectSummary = buildProjectSummary(sessions, projectNamesMap);
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
   const todayActiveSeconds = sessions

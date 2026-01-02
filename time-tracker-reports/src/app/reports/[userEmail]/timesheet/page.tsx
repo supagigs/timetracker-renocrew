@@ -4,6 +4,7 @@ import { DashboardShell } from '@/components/dashboard';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { type DateRange, defaultDateRange, normalizeDateRange } from '@/lib/dateRange';
+import { LocalTime } from '@/components/LocalTime';
 
 type TimesheetRow = {
   id: number;
@@ -33,6 +34,36 @@ type RawSessionRow = {
   }> | null;
 };
 
+async function fetchProjectNamesMap(supabase: ReturnType<typeof createServerSupabaseClient>, projectIds: string[]): Promise<Map<string, string>> {
+  if (projectIds.length === 0) {
+    return new Map();
+  }
+
+  const uniqueProjectIds = [...new Set(projectIds.filter(Boolean))];
+  if (uniqueProjectIds.length === 0) {
+    return new Map();
+  }
+
+  const { data: projects, error } = await supabase
+    .from('projects')
+    .select('frappe_project_id, project_name')
+    .in('frappe_project_id', uniqueProjectIds);
+
+  if (error) {
+    console.warn('[timesheet] Failed to load project names:', error);
+    return new Map();
+  }
+
+  const projectMap = new Map<string, string>();
+  (projects || []).forEach((project) => {
+    if (project.frappe_project_id && project.project_name) {
+      projectMap.set(project.frappe_project_id, project.project_name);
+    }
+  });
+
+  return projectMap;
+}
+
 async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): Promise<RawSessionRow[]> {
   if (emails.length === 0) {
     return [];
@@ -40,8 +71,6 @@ async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): P
 
   const supabase = createServerSupabaseClient();
 
-  // Note: projects table join removed - time_sessions no longer has project_id foreign key
-  // Project information is stored in frappe_project_id column if needed
   const { data, error } = await supabase
     .from('time_sessions')
     .select(
@@ -78,12 +107,16 @@ async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): P
 async function fetchClientTimesheet({
   email,
   dateRange,
+  company,
 }: {
   email: string;
   dateRange: DateRange;
+  company?: string | null;
 }): Promise<TimesheetRow[]> {
   const supabase = createServerSupabaseClient();
 
+  // Try to fetch freelancers from assignments table first
+  let freelancerEmails: string[] = [];
   const { data: assignments, error: assignmentsError } = await supabase
     .from('client_freelancer_assignments')
     .select('freelancer_email')
@@ -91,17 +124,52 @@ async function fetchClientTimesheet({
     .eq('is_active', true);
 
   if (assignmentsError) {
-    console.error('[client-timesheet] Failed to fetch assignments:', assignmentsError);
-    return [];
+    // If assignments table query fails (e.g., table doesn't exist or RLS blocking), 
+    // silently continue to fallback approach
+    // Only log if it's not an empty error object (which might indicate RLS/permission issue)
+    if (Object.keys(assignmentsError).length > 0) {
+      console.warn('[client-timesheet] Failed to fetch assignments, trying fallback:', assignmentsError);
+    }
+  } else if (assignments && assignments.length > 0) {
+    freelancerEmails = Array.from(
+      new Set(
+        assignments
+          .map((entry) => entry.freelancer_email)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
   }
 
-  const freelancerEmails = Array.from(
-    new Set(
-      (assignments ?? [])
-        .map((entry) => entry.freelancer_email)
-        .filter((value): value is string => Boolean(value)),
-    ),
-  );
+  // If no assignments found, try fetching freelancers by company (fallback approach)
+  if (freelancerEmails.length === 0 && company) {
+    try {
+      // Import and use Frappe client to get users by company
+      const { getAllFrappeUsers } = await import('@/lib/frappeClient');
+      const frappeUsers = await getAllFrappeUsers(company);
+      freelancerEmails = frappeUsers
+        .filter((user) => user.email.toLowerCase() !== email.toLowerCase())
+        .map((user) => user.email);
+    } catch (fallbackError: any) {
+      // Silently handle Frappe API errors (e.g., 417, authentication issues)
+      // If Frappe fails, try fallback to Supabase users with same company
+      if (company) {
+        const { data: supabaseUsers, error: usersError } = await supabase
+          .from('users')
+          .select('email')
+          .eq('company', company)
+          .neq('email', email);
+        
+        if (!usersError && supabaseUsers && supabaseUsers.length > 0) {
+          freelancerEmails = supabaseUsers.map(u => u.email);
+        }
+      }
+      
+      // If still no emails, return empty array
+      if (freelancerEmails.length === 0) {
+        return [];
+      }
+    }
+  }
 
   if (freelancerEmails.length === 0) {
     return [];
@@ -124,22 +192,31 @@ async function fetchClientTimesheet({
 
   const sessions = await fetchSessionsForEmails(freelancerEmails, dateRange);
 
-  return sessions.map((session) => ({
-    id: session.id,
-    freelancerEmail: session.user_email,
-    freelancerName: nameMap.get(session.user_email) ?? session.user_email,
-    projectName: (session as any).frappe_project_id ?? null, // Use frappe_project_id since projects join was removed
-    sessionDate: session.session_date,
-    startTime: session.start_time,
-    endTime: session.end_time,
-    activeSeconds: session.active_duration ?? 0,
-    breakSeconds: session.break_duration ?? 0,
-    idleSeconds: session.idle_duration ?? 0,
-    totalSeconds:
-      (session.active_duration ?? 0) +
-      (session.break_duration ?? 0) +
-      (session.idle_duration ?? 0),
-  }));
+  // Fetch project names
+  const projectIds = sessions.map((s: any) => s.frappe_project_id).filter(Boolean) as string[];
+  const projectNamesMap = await fetchProjectNamesMap(supabase, projectIds);
+
+  return sessions.map((session) => {
+    const frappeProjectId = (session as any).frappe_project_id;
+    const projectName = frappeProjectId ? projectNamesMap.get(frappeProjectId) ?? null : null;
+
+    return {
+      id: session.id,
+      freelancerEmail: session.user_email,
+      freelancerName: nameMap.get(session.user_email) ?? session.user_email,
+      projectName,
+      sessionDate: session.session_date,
+      startTime: session.start_time,
+      endTime: session.end_time,
+      activeSeconds: session.active_duration ?? 0,
+      breakSeconds: session.break_duration ?? 0,
+      idleSeconds: session.idle_duration ?? 0,
+      totalSeconds:
+        (session.active_duration ?? 0) +
+        (session.break_duration ?? 0) +
+        (session.idle_duration ?? 0),
+    };
+  });
 }
 
 async function fetchFreelancerTimesheet({
@@ -164,22 +241,31 @@ async function fetchFreelancerTimesheet({
 
   const sessions = await fetchSessionsForEmails([email], dateRange);
 
-  return sessions.map((session) => ({
-    id: session.id,
-    freelancerEmail: session.user_email,
-    freelancerName: displayName,
-    projectName: (session as any).frappe_project_id ?? null, // Use frappe_project_id since projects join was removed
-    sessionDate: session.session_date,
-    startTime: session.start_time,
-    endTime: session.end_time,
-    activeSeconds: session.active_duration ?? 0,
-    breakSeconds: session.break_duration ?? 0,
-    idleSeconds: session.idle_duration ?? 0,
-    totalSeconds:
-      (session.active_duration ?? 0) +
-      (session.break_duration ?? 0) +
-      (session.idle_duration ?? 0),
-  }));
+  // Fetch project names
+  const projectIds = sessions.map((s: any) => s.frappe_project_id).filter(Boolean) as string[];
+  const projectNamesMap = await fetchProjectNamesMap(supabase, projectIds);
+
+  return sessions.map((session) => {
+    const frappeProjectId = (session as any).frappe_project_id;
+    const projectName = frappeProjectId ? projectNamesMap.get(frappeProjectId) ?? null : null;
+
+    return {
+      id: session.id,
+      freelancerEmail: session.user_email,
+      freelancerName: displayName,
+      projectName,
+      sessionDate: session.session_date,
+      startTime: session.start_time,
+      endTime: session.end_time,
+      activeSeconds: session.active_duration ?? 0,
+      breakSeconds: session.break_duration ?? 0,
+      idleSeconds: session.idle_duration ?? 0,
+      totalSeconds:
+        (session.active_duration ?? 0) +
+        (session.break_duration ?? 0) +
+        (session.idle_duration ?? 0),
+    };
+  });
 }
 
 function formatSecondsToHoursMinutes(totalSeconds: number): string {
@@ -231,7 +317,7 @@ export default async function TimesheetPage({
   const isFreelancer = profile.role === 'Freelancer';
 
   const timesheetRows = isClient
-    ? await fetchClientTimesheet({ email: profile.email, dateRange })
+    ? await fetchClientTimesheet({ email: profile.email, dateRange, company: profile.company })
     : isFreelancer
       ? await fetchFreelancerTimesheet({ email: profile.email, dateRange })
       : [];
@@ -336,10 +422,10 @@ export default async function TimesheetPage({
                       <td className="px-4 py-3 text-foreground">{formatSecondsToHoursMinutes(row.idleSeconds)}</td>
                       <td className="px-4 py-3 text-foreground">{formatSecondsToHoursMinutes(row.totalSeconds)}</td>
                       <td className="px-4 py-3 text-foreground">
-                        {row.startTime ? format(new Date(row.startTime), 'p') : '—'}
+                        <LocalTime isoString={row.startTime} formatString="p" />
                       </td>
                       <td className="px-4 py-3 text-foreground">
-                        {row.endTime ? format(new Date(row.endTime), 'p') : '—'}
+                        <LocalTime isoString={row.endTime} formatString="p" />
                       </td>
                     </tr>
                   ))}

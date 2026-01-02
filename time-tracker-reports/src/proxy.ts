@@ -3,12 +3,13 @@ import type { NextRequest } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { isRouteAccessible, getDefaultRouteForRole } from '@/lib/roleRules';
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const pathname = req.nextUrl.pathname;
 
   // Skip public routes
   if (
-    pathname.startsWith('/login') ||
+    pathname === '/' ||
+    pathname.startsWith('/post-login') ||
     pathname.startsWith('/api') ||
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon.ico') ||
@@ -20,8 +21,8 @@ export async function middleware(req: NextRequest) {
   // Get user email from cookie
   const email = req.cookies.get('user_email')?.value;
   if (!email) {
-    // Redirect to login if no email cookie
-    return NextResponse.redirect(new URL('/login', req.url));
+    // Redirect to home page (which has the login form) if no email cookie
+    return NextResponse.redirect(new URL('/', req.url));
   }
 
   const supabase = createServerSupabaseClient();
@@ -36,27 +37,27 @@ export async function middleware(req: NextRequest) {
   // If user_context table doesn't exist or user not found, allow through
   // (the page will handle authentication)
   if (error && error.code !== 'PGRST116') {
-    console.warn('[middleware] Error fetching user context:', error);
+    console.warn('[proxy] Error fetching user context:', error);
     // Allow through - let the page handle auth
     return NextResponse.next();
   }
 
-  if (!user?.role_profile) {
-    // No role profile found - redirect to login
-    return NextResponse.redirect(new URL('/login', req.url));
+  // If we have a role_profile, apply role-based access control
+  if (user?.role_profile) {
+    // Check if route is accessible for this role profile
+    if (!isRouteAccessible(user.role_profile, pathname)) {
+      // Route not accessible - redirect to default route for role
+      const defaultRoute = getDefaultRouteForRole(user.role_profile);
+      return NextResponse.redirect(new URL(defaultRoute, req.url));
+    }
   }
-
-  // Check if route is accessible for this role profile
-  if (!isRouteAccessible(user.role_profile, pathname)) {
-    // Route not accessible - redirect to default route for role
-    const defaultRoute = getDefaultRouteForRole(user.role_profile);
-    return NextResponse.redirect(new URL(defaultRoute, req.url));
-  }
+  // If no role_profile, still allow through - the page will handle authorization
+  // This allows users to access routes even if user_context sync hasn't completed yet
 
   return NextResponse.next();
 }
 
-// Configure which routes this middleware runs on
+// Configure which routes this proxy runs on
 export const config = {
   matcher: [
     /*
