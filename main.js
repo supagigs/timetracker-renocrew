@@ -223,7 +223,7 @@ const { getMyTasksForProject } = require('./frappeService');
 
 
 if (process.platform === 'win32') {
-  app.setAppUserModelId("Supagigs Time Tracker");
+  app.setAppUserModelId("Renocrew Time Tracker");
 }
 
 const envPath = app?.isPackaged
@@ -1004,8 +1004,8 @@ function createWindow() {
   if (process.platform === 'darwin') {
     // macOS prefers .icns, but .png also works, .ico as last resort
     const icnsPath = path.join(__dirname, 'SupagigsIcon.icns');
-    const pngPath = path.join(__dirname, 'SupagigsIcon.png');
-    const icoPath = path.join(__dirname, 'SupagigsIcon.ico');
+    const pngPath = path.join(__dirname, 'android-chrome-512x512.png');
+    const icoPath = path.join(__dirname, 'favicon.ico');
     if (fs.existsSync(icnsPath)) {
       iconPath = icnsPath;
     } else if (fs.existsSync(pngPath)) {
@@ -1015,7 +1015,7 @@ function createWindow() {
     }
   } else {
     // Windows and Linux use .ico
-    const icoPath = path.join(__dirname, 'SupagigsIcon.ico');
+    const icoPath = path.join(__dirname, 'favicon.ico');
     if (fs.existsSync(icoPath)) {
       iconPath = icoPath;
     }

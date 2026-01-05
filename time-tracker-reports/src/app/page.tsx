@@ -194,14 +194,15 @@ export default function Home() {
       <section className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
         <div className="flex flex-col items-center gap-4">
           <Image
-            src="/SupagigsIcon.ico"
-            alt="Supatimetracker logo"
+            src="/android-chrome-512x512.png"
+            alt="Renocrew Solutions logo"
             width={96}
             height={96}
             priority
+            unoptimized
             className="h-24 w-24 rounded-2xl border border-border bg-secondary object-contain"
           />
-          <p className="text-sm font-semibold uppercase tracking-wide text-primary">Supatimetracker</p>
+          <p className="text-sm font-semibold uppercase tracking-wide text-primary">Renocrew Time Tracker</p>
           <h1 className="text-3xl font-bold sm:text-4xl">Welcome to your dashboard</h1>
           <p className="max-w-2xl text-sm text-muted-foreground">
             Log into the desktop Time Tracker application to record time. Use this website to review your account after you
@@ -241,11 +242,7 @@ export default function Home() {
               <p className="text-sm text-destructive-foreground">{loginError}</p>
             ) : loginSuccess ? (
               <p className="text-sm text-emerald-600">{loginSuccess}</p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Existing users can log in here. New users should create an account from the desktop Time Tracker app first.
-              </p>
-            )}
+            ) : null}
 
             <button
               type="submit"

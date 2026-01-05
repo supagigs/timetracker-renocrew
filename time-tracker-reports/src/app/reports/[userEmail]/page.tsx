@@ -1,5 +1,4 @@
 import { format, formatDistanceToNow } from 'date-fns';
-import Image from 'next/image';
 import SummaryCard from '@/components/SummaryCard';
 import WeeklyActivityChart from '@/components/WeeklyActivityChart';
 import FreelancerSelector from '@/components/FreelancerSelector';
@@ -613,28 +612,18 @@ export default async function ReportsPage({
     >
       <div className="space-y-8">
         <header className="space-y-3">
-          <div className="flex items-center gap-4">
-            <Image
-              src="/SupagigsIcon.ico"
-              alt="Supatimetracker logo"
-              width={56}
-              height={56}
-              className="h-14 w-14 rounded-xl border border-border bg-secondary object-contain shadow"
-              priority
-            />
-            <div>
-              <h1 className="text-3xl font-bold text-foreground">
-                {showTeamOverview ? 'Team overview' : `Reports for ${reportDisplayName}`}
-              </h1>
-              <p className="text-sm text-muted-foreground">
-                {showTeamOverview
-                  ? 'Monitor your freelancers at a glance and jump into detailed reports when needed.'
-                  : 'Summary of the last 30 days'}
-              </p>
-              {!showTeamOverview && reportOwnerName && (
-                <p className="text-xs text-muted-foreground">{reportEmail}</p>
-              )}
-            </div>
+          <div>
+            <h1 className="text-3xl font-bold text-foreground">
+              {showTeamOverview ? 'Team overview' : `Reports for ${reportDisplayName}`}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {showTeamOverview
+                ? 'Monitor your freelancers at a glance and jump into detailed reports when needed.'
+                : 'Summary of the last 30 days'}
+            </p>
+            {!showTeamOverview && reportOwnerName && (
+              <p className="text-xs text-muted-foreground">{reportEmail}</p>
+            )}
           </div>
           {errorMessage && (
             <div className="mt-2 rounded-lg border border-destructive bg-destructive/20 p-4 text-sm text-destructive-foreground">

@@ -91,8 +91,8 @@ export function Sidebar({
       <aside className="flex h-screen w-16 flex-col border-r border-border bg-sidebar px-2 pb-4 pt-4 md:hidden">
         <div className="mb-6 flex items-center justify-center">
           <img
-            src="/SupagigsIcon.ico"
-            alt="Supagigs logo"
+            src="/android-chrome-192x192.png"
+            alt="Renocrew Solutions logo"
             width={32}
             height={32}
             className="h-8 w-8 rounded-lg object-contain"
@@ -119,13 +119,13 @@ export function Sidebar({
       <aside className="hidden h-screen w-64 flex-col border-r border-border bg-sidebar px-6 pb-6 pt-6 md:flex">
         <div className="mb-8 flex items-center gap-3">
           <img
-            src="/SupagigsIcon.ico"
-            alt="Supagigs logo"
+            src="/android-chrome-192x192.png"
+            alt="Renocrew Solutions logo"
             width={36}
             height={36}
             className="h-9 w-9 rounded-xl object-contain"
           />
-          <span className="text-xl font-bold tracking-tight text-sidebar-foreground">Supagigs</span>
+          <span className="text-xl font-bold tracking-tight text-sidebar-foreground">Renocrew Solutions</span>
         </div>
         <nav className="flex-1 space-y-1">
           {navItems.map((item) => (

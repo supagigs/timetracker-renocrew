@@ -68,11 +68,6 @@ export default function PostLoginPage() {
           </div>
         ) : null}
 
-        {!storedUser && !loading ? (
-          <div className="mt-6 text-sm text-muted-foreground">
-            <p>If you are a new user, please sign up first from the desktop Time Tracker application.</p>
-          </div>
-        ) : null}
       </section>
     </DashboardShell>
   );
