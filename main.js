@@ -3368,11 +3368,11 @@ async function getScreenshotInterval(userEmail, sessionId) {
     const supabase = getSupabaseClient();
     if (!supabase) {
       logWarn('ScreenshotInterval', 'Supabase client unavailable, using default');
-      return 60000; // 1 minute default
+      return 1800000; // 30 minutes default
     }
 
     const normalizedFreelancer = userEmail.trim().toLowerCase();
-    const DEFAULT_INTERVAL_SECONDS = 60; // 1 minute default
+    const DEFAULT_INTERVAL_SECONDS = 1800; // 30 minutes default
     let clientEmail = null;
 
     // 1) Get frappe_project_id from time_sessions using sessionId
@@ -3502,7 +3502,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
     return intervalMs;
   } catch (e) {
     logError('ScreenshotInterval', 'Failed to get interval', e);
-    return 60000;
+    return 1800000; // 30 minutes default
   }
 }
 
@@ -3934,7 +3934,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   logInfo('IPC', `Background screenshots starting with frappe_project_id: ${currentFrappeProjectId}, frappe_task_id: ${currentFrappeTaskId}`);
   isBackgroundCaptureActive = true;
 
-  // Fetch screenshot interval from database (defaults to 1 minute if not found)
+  // Fetch screenshot interval from database (defaults to 30 minutes if not found)
   // For freelancers, this will look up the client's interval from the project assignment
   const intervalMs = await getScreenshotInterval(userEmail, sessionId);
 

@@ -5,7 +5,7 @@ import { getClientSettings } from '@/lib/clientSettings';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { redirect } from 'next/navigation';
 
-const DEFAULT_INTERVAL_SECONDS = 300;
+const DEFAULT_INTERVAL_SECONDS = 1800; // 30 minutes
 
 export default async function ScreenshotIntervalPage({
   params,

@@ -39,17 +39,15 @@ const buildReportsNavItems = (
   if (normalizedRole === "client") {
     items.push({
       icon: <Users size={20} />,
-      label: "Freelancers",
+      label: "Users",
       href: `${basePath}/freelancers`,
     });
   }
 
   items.push(
-    { icon: <FolderOpen size={20} />, label: "Projects", href: `${basePath}/projects` },
     { icon: <BarChart3 size={20} />, label: "Reports", href: `${basePath}/reports` },
-    ...(normalizedRole === "freelancer"
-      ? [{ icon: <CalendarClock size={20} />, label: "Timesheet", href: `${basePath}/timesheet` }]
-      : []),
+    { icon: <FolderOpen size={20} />, label: "Projects", href: `${basePath}/projects` },
+    { icon: <CalendarClock size={20} />, label: "Timesheets", href: `${basePath}/timesheet` },
     { icon: <Monitor size={20} />, label: "Screenshots", href: `${basePath}/screenshots` },
     ...(normalizedRole === "client"
       ? [

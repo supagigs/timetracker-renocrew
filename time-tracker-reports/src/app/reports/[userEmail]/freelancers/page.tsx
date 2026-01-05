@@ -213,16 +213,16 @@ export default async function ClientFreelancersPage({
     >
       <div className="space-y-6">
         <header className="space-y-2">
-          <h1 className="text-3xl font-bold text-foreground">Freelancers</h1>
+          <h1 className="text-3xl font-bold text-foreground">Users</h1>
           <p className="text-sm text-muted-foreground">
-            Get a quick status update on every freelancer assigned to your projects.
+            Get a quick status update on every user assigned to your projects.
           </p>
         </header>
 
         {profile.role !== 'Client' ? (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <p className="text-sm text-muted-foreground">
-              Only client accounts can manage freelancer assignments.
+              Only client accounts can manage user assignments.
             </p>
           </section>
         ) : freelancers.length === 0 ? (
@@ -230,9 +230,9 @@ export default async function ClientFreelancersPage({
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary/70 text-secondary-foreground">
               <Users size={24} />
             </div>
-            <h2 className="mt-4 text-xl font-semibold text-foreground">No freelancers assigned yet</h2>
+            <h2 className="mt-4 text-xl font-semibold text-foreground">No users assigned yet</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Invite freelancers from the desktop app and they will appear here automatically.
+              Invite users from the desktop app and they will appear here automatically.
             </p>
           </section>
         ) : (
@@ -241,7 +241,7 @@ export default async function ClientFreelancersPage({
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
-                    <th className="px-4 py-3 font-medium">Freelancer</th>
+                    <th className="px-4 py-3 font-medium">User</th>
                     <th className="px-4 py-3 font-medium">Today</th>
                     <th className="px-4 py-3 font-medium">Last 30 days</th>
                     <th className="px-4 py-3 font-medium">Status</th>

@@ -31,20 +31,20 @@ SupaTimeTracker streamlines how distributed teams track billable work. Freelance
 ### Freelancers
 - One-click clock in/out with automatic project association.
 - Idle detection and break tracking ensure only focused time is captured.
-- Background screenshots (configurable interval) stored in Supabase Storage.
-- Local UI showing today’s stats, session history, and active project list.
+- Background screenshots (configurable interval, default 30 minutes) stored in Supabase Storage.
+- Local UI showing today's stats, session history, and active project list.
 - View tailored overview, timesheet, reports, and screenshots inside the web portal.
 
-### Clients
-- Manage projects, assign freelancers, and review team status from the desktop app.
-- Unified reports navigation (Overview, Projects, Freelancers, Reports, Timesheet, Screenshots) in the web portal.
-- Team dashboards summarizing active/offline freelancers and total hours.
+### Clients (SuperAdmin)
+- Unified reports navigation (Overview, Users, Reports, Projects, Timesheets, Screenshots, Settings) in the web portal.
+- Team dashboards summarizing active/offline users and total hours.
 - Per-session screenshots, filtered timesheets, and project performance metrics.
+- Manage screenshot intervals per freelancer.
 
 ### Shared
-- Supabase authentication (email magic link).
+- Frappe/ERPNext authentication and user management.
+- Supabase for data storage (PostgreSQL + Storage).
 - Local session persistence with secure preload IPC bridges.
-- Cross-app logout: ending a session in the web portal forces the desktop app to log out and vice versa.
 - Configurable reports URL—desktop app opens the portal after verifying credentials.
 
 ---
@@ -108,17 +108,14 @@ The web portal expects matching values in `time-tracker-reports/.env.local` with
 
 Run the SQL files inside Supabase in this order:
 
-1. `database-schema.sql`
-2. `database-migration-category.sql`
-3. `database-migration-projects.sql`
-4. `database-migration-project-assignments.sql`
-5. `database-migration-break-count.sql`
-6. `database-migration-idle-time.sql`
-7. `database-migration-client-freelancer-assignments.sql`
-8. `database-migration-screenshot-indexes.sql`
-9. `database-migration-user-sessions.sql`
+1. `database-schema.sql` - Base schema
+2. `database-migration-category-to-role.sql` - User roles
+3. `database-migration-add-company-column.sql` - Company support
+4. `database-migration-frappe-ids.sql` - Frappe integration
+5. `database-migration-client-settings.sql` - Client settings
+6. `database-migration-backfill-company.sql` - Backfill company data (optional)
 
-Optional clean-up or patch migrations (e.g. `database-migration-projects-fix-rls.sql`, `database-migration-projects-simple-fix.sql`) can be run as needed. The schema expects a Supabase Storage bucket named `screenshots`.
+The schema expects a Supabase Storage bucket named `screenshots`. See individual migration files for detailed descriptions.
 
 ---
 
@@ -151,15 +148,13 @@ The reports portal can be deployed independently using standard Next.js hosting 
 
 ---
 
-## Cross-App Session Sync
+## Authentication
 
-A `user_sessions` table tracks whether each user is logged into the desktop app and web portal. When a logout occurs anywhere:
+The application uses Frappe/ERPNext for authentication. Users must exist in Frappe and have the appropriate role profile:
+- **SuperAdmin** role profile → treated as Client in the application
+- Other role profiles → treated as Freelancer
 
-- The initiating surface updates `user_sessions` (`app_logged_in`, `web_logged_in`).
-- Supabase realtime notifies the other surface.
-- Electron listens through `SessionSync` and forces a local logout without prompting the user.
-
-For this to work, both apps must share the same Supabase project and environment variables, and the `database-migration-user-sessions.sql` migration must be applied.
+Company information is fetched from Frappe's Employee doctype and used for multi-tenant data filtering.
 
 ---
 
