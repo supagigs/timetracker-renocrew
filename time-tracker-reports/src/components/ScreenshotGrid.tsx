@@ -131,6 +131,10 @@ function FloatingViewer({
           alt={`Screenshot ${index + 1} of ${screenshots.length}`}
           className="max-h-[95vh] max-w-[95vw] object-contain rounded-lg shadow-2xl"
           draggable={false}
+          onError={(e) => {
+            console.error(`Failed to load screenshot ${screenshot.id} in viewer:`, screenshot.screenshot_data);
+            console.error('Image error:', e);
+          }}
         />
 
         {/* BOTTOM COUNTER AND APP INFO */}
@@ -175,6 +179,7 @@ function FloatingViewer({
 -------------------------------------------------- */
 export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [imageErrors, setImageErrors] = useState<Set<number>>(new Set());
 
   if (screenshots.length === 0) {
     return (
@@ -213,12 +218,31 @@ export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
             >
               {/* THUMBNAIL IMAGE */}
               <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-muted">
-                <img
-                  src={shot.screenshot_data}
-                  alt={`Screenshot thumbnail ${idx + 1}`}
-                  className="absolute inset-0 h-full w-full object-contain"
-                  draggable={false}
-                />
+                {imageErrors.has(shot.id) ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4">
+                    <div className="text-muted-foreground text-xs">
+                      <div className="mb-2">⚠️ Image failed to load</div>
+                      <div className="text-[10px] break-all opacity-70">
+                        URL: {shot.screenshot_data?.substring(0, 60)}...
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <img
+                    src={shot.screenshot_data}
+                    alt={`Screenshot thumbnail ${idx + 1}`}
+                    className="absolute inset-0 h-full w-full object-contain"
+                    draggable={false}
+                    onError={(e) => {
+                      console.error(`Failed to load screenshot ${shot.id}:`, shot.screenshot_data);
+                      console.error('Image error event:', e);
+                      setImageErrors((prev) => new Set(prev).add(shot.id));
+                    }}
+                    onLoad={() => {
+                      console.log(`Successfully loaded screenshot ${shot.id}:`, shot.screenshot_data);
+                    }}
+                  />
+                )}
               </div>
 
               {/* TIMESTAMP */}

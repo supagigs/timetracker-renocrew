@@ -61,8 +61,10 @@ contextBridge.exposeInMainWorld('frappe', {
 
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  startBackgroundScreenshots: (userEmail, sessionId, frappeProjectId, frappeTaskId) =>
-    ipcRenderer.invoke('start-background-screenshots', userEmail, sessionId, frappeProjectId, frappeTaskId),
+  startBackgroundScreenshots: (userEmail, sessionId, supabaseSessionId, frappeProjectId, frappeTaskId) =>
+    ipcRenderer.invoke('start-background-screenshots', userEmail, sessionId, supabaseSessionId, frappeProjectId, frappeTaskId),
+  updateBackgroundScreenshotSessionId: (supabaseSessionId) =>
+    ipcRenderer.invoke('update-background-screenshot-session-id', supabaseSessionId),
   stopBackgroundScreenshots: () =>
     ipcRenderer.invoke('stop-background-screenshots'),
   isBackgroundScreenshotsActive: () =>

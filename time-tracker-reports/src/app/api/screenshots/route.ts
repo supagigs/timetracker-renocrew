@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
+
+
 type Screenshot = {
   id: number;
+  time_session_id: number | null; // Numeric foreign key to time_sessions.id
   frappe_timesheet_id: string | null; // Frappe timesheet ID (e.g., "TS-2025-00043")
   frappe_project_id: string | null; // Frappe project ID
   frappe_task_id: string | null; // Frappe task ID
@@ -32,11 +35,11 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // frappe_timesheet_id is TEXT, so use it directly as string
-    const timesheetId = sessionIdParam.trim();
-    if (!timesheetId) {
+    // sessionId is the numeric time_sessions.id, parse it as integer
+    const sessionId = parseInt(sessionIdParam, 10);
+    if (isNaN(sessionId) || !isFinite(sessionId)) {
       return NextResponse.json(
-        { error: 'Invalid sessionId' },
+        { error: 'Invalid sessionId - must be a numeric time_sessions.id' },
         { status: 400 }
       );
     }
@@ -48,11 +51,11 @@ export async function GET(request: NextRequest) {
         .from('screenshots')
         .select(
           includeMeta
-            ? 'id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at, app_name, captured_idle'
-            : 'id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at'
+            ? 'id, time_session_id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at, app_name, captured_idle'
+            : 'id, time_session_id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at'
         )
         .eq('user_email', email)
-        .eq('frappe_timesheet_id', timesheetId) // Use frappe_timesheet_id column
+        .eq('time_session_id', sessionId) // Use time_session_id column (numeric foreign key to time_sessions.id)
         .order('captured_at', { ascending: true })
         .limit(500);
 
@@ -74,7 +77,7 @@ export async function GET(request: NextRequest) {
           captured_idle: null,
         }));
         console.log(
-          `API: Fallback query returned ${normalized.length} screenshots for timesheet ${timesheetId}, user ${email}`
+          `API: Fallback query returned ${normalized.length} screenshots for session ${sessionId}, user ${email}`
         );
         return NextResponse.json(normalized as Screenshot[]);
       }
@@ -86,7 +89,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log(`API: Found ${data?.length ?? 0} screenshots for timesheet ${timesheetId}, user ${email}`);
+    console.log(`API: Found ${data?.length ?? 0} screenshots for session ${sessionId}, user ${email}`);
     return NextResponse.json((data ?? []) as unknown as Screenshot[]);
   } catch (error) {
     console.error('Error in screenshots API:', error);

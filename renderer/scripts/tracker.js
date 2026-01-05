@@ -349,8 +349,16 @@ document.addEventListener('DOMContentLoaded', () => {
               NotificationService.showWarning('Session record creation failed. Timer started, but data may not appear in reports.');
             } else if (supabaseSession) {
               // Store the Supabase session ID for later updates
-              StorageService.setItem('supabaseSessionId', supabaseSession.id.toString());
-              console.log('Created Supabase session with ID:', supabaseSession.id);
+              const numericSessionId = supabaseSession.id;
+              StorageService.setItem('supabaseSessionId', numericSessionId.toString());
+              console.log('Created Supabase session with ID:', numericSessionId);
+              
+              // Update background screenshot capture with the numeric session ID
+              // This ensures all future screenshots have the correct time_session_id
+              if (window.electronAPI && window.electronAPI.updateBackgroundScreenshotSessionId) {
+                window.electronAPI.updateBackgroundScreenshotSessionId(numericSessionId)
+                  .catch(err => console.warn('Failed to update background screenshot session ID:', err));
+              }
             }
           }
         } catch (supabaseError) {
@@ -1381,6 +1389,15 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Starting background screenshot capture...');
     const email = StorageService.getItem('userEmail');
     const sessionId = currentSessionId || 'temp-session';
+    // Get numeric Supabase session ID separately - needed for time_session_id column
+    const supabaseSessionId = StorageService.getItem('supabaseSessionId');
+    let numericSupabaseSessionId = null;
+    if (supabaseSessionId) {
+      const parsed = parseInt(supabaseSessionId, 10);
+      if (!isNaN(parsed) && isFinite(parsed)) {
+        numericSupabaseSessionId = parsed;
+      }
+    }
     // Get Frappe project and task IDs from storage
     const frappeProjectId = StorageService.getItem('selectedProjectId');
     let frappeTaskId = StorageService.getItem('selectedTaskId');
@@ -1390,11 +1407,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     console.log('Screenshot capture - sessionId:', sessionId);
+    console.log('Screenshot capture - supabaseSessionId:', numericSupabaseSessionId);
     console.log('Screenshot capture - frappeProjectId from storage:', frappeProjectId);
     console.log('Screenshot capture - frappeTaskId from storage:', frappeTaskId);
     
     // Start background screenshot capture in main process
-    window.electronAPI.startBackgroundScreenshots(email, sessionId, frappeProjectId, frappeTaskId)
+    window.electronAPI.startBackgroundScreenshots(email, sessionId, numericSupabaseSessionId, frappeProjectId, frappeTaskId)
       .then(() => {
         console.log('Background screenshot capture started successfully');
       })
@@ -1522,9 +1540,20 @@ document.addEventListener('DOMContentLoaded', () => {
           // Get Frappe timesheet ID - ALWAYS prefer it over Supabase session ID for storage path
           // This ensures screenshots are stored under Frappe timesheet ID folders (e.g., TS-2025-00043)
           const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
+          // Get numeric Supabase session ID separately - needed for time_session_id column
+          const supabaseSessionId = StorageService.getItem('supabaseSessionId');
           
-          // IMPORTANT: Always use Frappe timesheet ID if available, even if currentSessionId is set
-          // currentSessionId might be a numeric Supabase session ID, but we want Frappe ID for storage
+          // Parse supabaseSessionId to numeric if it's a string
+          let numericSupabaseSessionId = null;
+          if (supabaseSessionId) {
+            const parsed = parseInt(supabaseSessionId, 10);
+            if (!isNaN(parsed) && isFinite(parsed)) {
+              numericSupabaseSessionId = parsed;
+            }
+          }
+          
+          // Use Frappe timesheet ID for sessionId (for storage path compatibility)
+          // But also pass numeric Supabase session ID separately for time_session_id column
           const sessionIdForUpload = frappeTimesheetId || currentSessionId || 'temp-session';
           
           // Log which ID we're using for debugging
@@ -1537,6 +1566,7 @@ document.addEventListener('DOMContentLoaded', () => {
           window.electronAPI.queueScreenshotUpload({
             userEmail: email,
             sessionId: sessionIdForUpload, // Use Frappe timesheet ID if available, otherwise currentSessionId
+            supabaseSessionId: numericSupabaseSessionId, // Numeric Supabase session ID for time_session_id column
             screenshotData: screenshot.dataURL,
             timestamp: baseTimestamp, // Keep original ISO format
             isIdle,

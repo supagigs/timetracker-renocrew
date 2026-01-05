@@ -19,6 +19,7 @@ type TimeSession = {
 
 type Screenshot = {
   id: number;
+  time_session_id: number | null; // Numeric foreign key to time_sessions.id
   frappe_timesheet_id: string | null; // Frappe timesheet ID (e.g., "TS-2025-00043")
   frappe_project_id: string | null; // Frappe project ID
   frappe_task_id: string | null; // Frappe task ID
@@ -56,8 +57,8 @@ async function fetchScreenshots(userEmail: string, sessionId?: string | number):
       .from('screenshots')
       .select(
         includeMeta
-          ? 'id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at, app_name, captured_idle'
-          : 'id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at'
+          ? 'id, time_session_id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at, app_name, captured_idle'
+          : 'id, time_session_id, frappe_timesheet_id, frappe_project_id, frappe_task_id, screenshot_data, captured_at'
       )
       .eq('user_email', userEmail)
       .order('captured_at', { ascending: true })
@@ -66,14 +67,24 @@ async function fetchScreenshots(userEmail: string, sessionId?: string | number):
   let query = buildQuery(true);
 
   if (sessionId) {
-    query = query.eq('frappe_timesheet_id', String(sessionId));
+    // sessionId is the numeric time_sessions.id, query by time_session_id
+    const numericSessionId = typeof sessionId === 'number' ? sessionId : parseInt(String(sessionId), 10);
+    if (!isNaN(numericSessionId) && isFinite(numericSessionId)) {
+      query = query.eq('time_session_id', numericSessionId);
+    }
   }
 
   const { data, error } = await query;
   if (error) {
     if (error.code === '42703' || /(app_name|captured_idle)/.test(error.message ?? '')) {
       const fallbackQuery = buildQuery(false);
-      const fallbackResult = sessionId ? fallbackQuery.eq('frappe_timesheet_id', String(sessionId)) : fallbackQuery;
+      let fallbackResult = fallbackQuery;
+      if (sessionId) {
+        const numericSessionId = typeof sessionId === 'number' ? sessionId : parseInt(String(sessionId), 10);
+        if (!isNaN(numericSessionId) && isFinite(numericSessionId)) {
+          fallbackResult = fallbackQuery.eq('time_session_id', numericSessionId);
+        }
+      }
       const { data: fallbackData, error: fallbackError } = await fallbackResult;
       if (fallbackError) {
         console.error('[screenshots-page] Failed to load screenshots (fallback)', fallbackError);

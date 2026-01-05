@@ -163,6 +163,7 @@ async function backgroundCaptureScreenshots() {
         const uploadData = {
           userEmail: currentUserEmail,
           sessionId: currentSessionId,
+          supabaseSessionId: currentSupabaseSessionId, // Numeric Supabase session ID for time_session_id column
           screenshotData: dataUrl,
           timestamp,
           isIdle,
@@ -907,6 +908,7 @@ let isBackgroundTickRunning = false;
 let supabaseClientInstance = null;
 let currentUserEmail = null;
 let currentSessionId = null;
+let currentSupabaseSessionId = null; // Numeric Supabase session ID for time_session_id column
 let currentFrappeProjectId = null;
 let currentFrappeTaskId = null;
 
@@ -2785,6 +2787,7 @@ async function addScreenshotToBatch(uploadData) {
   const {
     userEmail,
     sessionId,
+    supabaseSessionId, // Numeric Supabase session ID for time_session_id column
     screenshotData,
     timestamp,
     isIdle,
@@ -2854,6 +2857,7 @@ appName ||= 'Unknown';
     const batchItem = {
       userEmail,
       sessionId, // Keep original for database insert (can be Supabase session ID or Frappe timesheet ID)
+      supabaseSessionId: supabaseSessionId || null, // Numeric Supabase session ID for time_session_id column
       frappeTimesheetId, // Frappe timesheet ID for storage path (null if not a Frappe ID)
       screenshotData, // kept for preview; cleared later
       timestamp,
@@ -3031,12 +3035,27 @@ async function processScreenshotBatch() {
 
         // Use Frappe timesheet ID for storage path if available, otherwise use sessionId
         // Frappe timesheet IDs are like "TS-2025-00043", which is what we want for folder structure
-        // Look up time_sessions.id (numeric ID) for storage path and database insert
-        // sessionId can be either a numeric Supabase session ID or a Frappe timesheet ID
+        // Use numeric Supabase session ID for time_session_id column if available
+        // Prefer supabaseSessionId from batch item (passed directly), otherwise try to resolve from sessionId
         let timeTrackerSessionId = null; // Numeric time_sessions.id
         let frappeTimesheetId = item.frappeTimesheetId;
         
-        if (item.sessionId) {
+        // First, check if we have the numeric Supabase session ID directly from the batch item
+        if (item.supabaseSessionId && typeof item.supabaseSessionId === 'number') {
+          timeTrackerSessionId = item.supabaseSessionId;
+          // Try to get frappe_timesheet_id from database if we don't have it yet
+          if (!frappeTimesheetId) {
+            const { data: sessionData } = await supabase
+              .from('time_sessions')
+              .select('frappe_timesheet_id')
+              .eq('id', item.supabaseSessionId)
+              .maybeSingle();
+            if (sessionData?.frappe_timesheet_id) {
+              frappeTimesheetId = sessionData.frappe_timesheet_id;
+            }
+          }
+        } else if (item.sessionId) {
+          // Fallback: Try to resolve from sessionId if supabaseSessionId wasn't provided
           const sessionIdStr = String(item.sessionId);
           const numericSessionId = parseInt(sessionIdStr, 10);
           
@@ -3526,6 +3545,7 @@ ipcMain.handle('auth:logout', async () => {
     // STOP timer globally
     isTimerActive = false;
     currentSessionId = null;
+    currentSupabaseSessionId = null;
 
     forceStopAllTimers();
     await frappeLogout();
@@ -3825,10 +3845,11 @@ ipcMain.handle('get-time-tracking-status', async () => {
   return { ok: true, state: snapshot };
 });
 
-ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, screenshotData, timestamp, isIdle, appName, frappeProjectId, frappeTaskId }) => {
+ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, supabaseSessionId, screenshotData, timestamp, isIdle, appName, frappeProjectId, frappeTaskId }) => {
   return handleScreenshotUpload({
     userEmail,
     sessionId,
+    supabaseSessionId, // Numeric Supabase session ID for time_session_id column
     screenshotData,
     timestamp,
     isIdle,
@@ -3840,7 +3861,7 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
 });
 
 // start/stop-background already present in your earlier file
-ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionId, frappeProjectId, frappeTaskId) => {
+ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionId, supabaseSessionId, frappeProjectId, frappeTaskId) => {
   const startTime = Date.now();
   global.timerStartTime = startTime; // Store globally for timing calculations
   
@@ -3850,6 +3871,9 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   }
   currentUserEmail = userEmail;
   currentSessionId = sessionId;
+  // Store numeric Supabase session ID separately for time_session_id column
+  // This will be used when adding screenshots to batch
+  currentSupabaseSessionId = supabaseSessionId || null;
   
   // Try to fetch frappe IDs from time_sessions table first (most reliable)
   // Fall back to passed values if not found in database
@@ -4022,6 +4046,14 @@ ipcMain.handle('stop-background-screenshots', async () => {
   await flushScreenshotBatch();
   logInfo('IPC', 'Background screenshots stopped');
   return true;
+});
+
+ipcMain.handle('update-background-screenshot-session-id', async (event, supabaseSessionId) => {
+  // Update the numeric Supabase session ID for background screenshots
+  // This is called after the session is created in the database
+  currentSupabaseSessionId = supabaseSessionId || null;
+  logInfo('IPC', `Updated background screenshot session ID to: ${currentSupabaseSessionId}`);
+  return { ok: true };
 });
 
 // Get batch queue status
