@@ -60,8 +60,8 @@ export async function GET(request: NextRequest) {
 
     // Fetch employees assigned to this manager
     const { data: assignments, error: assignmentsError } = await supabase
-      .from('manager_employee_assignments')
-      .select('employee_email')
+      .from('manager_freelancer_assignments')
+      .select('freelancer_email')
       .eq('manager_email', managerEmail)
       .eq('is_active', true);
 
@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
 
     // Get unique employee emails
     const employeeEmails = [
-      ...new Set(assignments.map((a) => a.employee_email)),
+      ...new Set(assignments.map((a) => a.freelancer_email)),
     ];
 
     // Fetch user details for each employee
@@ -107,25 +107,4 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

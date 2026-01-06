@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { determineRoleFromRoleProfile } from "@/lib/frappeClient";
 import {
   LayoutDashboard,
   FolderOpen,
@@ -22,7 +23,7 @@ type NavItemConfig = {
 
 const buildReportsNavItems = (
   pathname: string,
-  normalizedRole: "client" | "freelancer" | null,
+  normalizedRole: "manager" | "employee" | null,
   normalizedEmail?: string | null,
 ): Array<NavItemConfig & { active: boolean }> => {
   if (!normalizedEmail) {
@@ -36,11 +37,11 @@ const buildReportsNavItems = (
     { icon: <LayoutDashboard size={20} />, label: "Overview", href: basePath },
   ];
 
-  if (normalizedRole === "client") {
+  if (normalizedRole === "manager") {
     items.push({
       icon: <Users size={20} />,
       label: "Users",
-      href: `${basePath}/freelancers`,
+      href: `${basePath}/employees`,
     });
   }
 
@@ -49,7 +50,7 @@ const buildReportsNavItems = (
     { icon: <FolderOpen size={20} />, label: "Projects", href: `${basePath}/projects` },
     { icon: <CalendarClock size={20} />, label: "Timesheets", href: `${basePath}/timesheet` },
     { icon: <Monitor size={20} />, label: "Screenshots", href: `${basePath}/screenshots` },
-    ...(normalizedRole === "client"
+    ...(normalizedRole === "manager"
       ? [
           {
             icon: <SlidersHorizontal size={20} />,
@@ -76,10 +77,13 @@ export function Sidebar({
   userEmail?: string | null;
 }) {
   const pathname = usePathname();
-  const normalizedRole = userRole ? userRole.trim().toLowerCase() : null;
   const normalizedEmail = userEmail ? userEmail.trim().toLowerCase() : null;
-  const roleForNav: "client" | "freelancer" | null =
-    normalizedRole === "client" ? "client" : normalizedRole === "freelancer" ? "freelancer" : "freelancer";
+  
+  // Convert role_profile_name to Manager/Employee for navigation logic
+  // role_profile_name is stored directly from Frappe (e.g., "SuperAdmin", "Employee", etc.)
+  const convertedRole = determineRoleFromRoleProfile(userRole ?? null);
+  const roleForNav: "manager" | "employee" | null =
+    convertedRole === "Manager" ? "manager" : "employee";
 
   const navItems = buildReportsNavItems(pathname, roleForNav, normalizedEmail ?? undefined);
 

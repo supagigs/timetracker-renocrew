@@ -406,7 +406,16 @@ async function handleLogin() {
         try {
           const companyResult = await window.auth.getUserCompany(email);
           if (companyResult && companyResult.success) {
-            company = companyResult.company || null;
+            // Handle case where company might be an object (e.g., {name: "Company Name"})
+            const companyValue = companyResult.company;
+            if (typeof companyValue === 'string') {
+              company = companyValue;
+            } else if (companyValue && typeof companyValue === 'object' && companyValue.name) {
+              company = companyValue.name;
+            } else if (companyValue && typeof companyValue === 'object') {
+              // Try to extract string value from object
+              company = Object.values(companyValue).find(v => typeof v === 'string') || null;
+            }
             console.log('Fetched company from Frappe:', company);
           }
         } catch (companyError) {
@@ -428,9 +437,8 @@ async function handleLogin() {
         }
       }
 
-      // Determine role based on role_profile_name
-      // If role_profile_name is "SuperAdmin", user is a Client
-      const userRole = roleProfile === 'SuperAdmin' ? 'Client' : 'Freelancer';
+      // Store role_profile_name directly from Frappe (not converted)
+      // The role_profile_name from Frappe will be stored as-is in the database
 
       if (window.supabase) {
         // Look up existing user by email
@@ -457,7 +465,7 @@ async function handleLogin() {
               .insert([{
                 email,
                 display_name: null,
-                role: userRole,
+                role: roleProfile, // Store role_profile_name directly from Frappe
                 company: company
               }])
               .select('id, email, display_name, role, company')
@@ -472,13 +480,20 @@ async function handleLogin() {
         } else {
           // Update role and/or company if they have changed
           const updateData = {};
-          if (userRow.role !== userRole) {
-            updateData.role = userRole;
-            console.log('Updating role for user:', email, 'from', userRow.role, 'to', userRole);
+          if (userRow.role !== roleProfile) {
+            updateData.role = roleProfile; // Store role_profile_name directly
+            console.log('Updating role for user:', email, 'from', userRow.role, 'to', roleProfile);
           }
-          if (company && userRow.company !== company) {
-            updateData.company = company;
-            console.log('Updating company for user:', email, 'from', userRow.company, 'to', company);
+          // Update company if it's different (handle null/undefined cases)
+          const currentCompany = userRow.company || null;
+          const newCompany = company || null;
+          if (newCompany && currentCompany !== newCompany) {
+            updateData.company = newCompany;
+            console.log('Updating company for user:', email, 'from', currentCompany, 'to', newCompany);
+          } else if (!currentCompany && newCompany) {
+            // Also update if current is null/empty and we have a new value
+            updateData.company = newCompany;
+            console.log('Setting company for user:', email, 'to', newCompany);
           }
 
           if (Object.keys(updateData).length > 0) {

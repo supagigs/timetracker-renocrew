@@ -56,13 +56,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (window.supabase) {
         try {
-          // Fetch company from Frappe if available
+          // Fetch company and role profile from Frappe if available
           let company = null;
+          let roleProfile = null;
+          
           if (window.auth && window.auth.getUserCompany) {
             try {
               const companyResult = await window.auth.getUserCompany(email);
               if (companyResult && companyResult.success) {
-                company = companyResult.company || null;
+                // Handle case where company might be an object (e.g., {name: "Company Name"})
+                const companyValue = companyResult.company;
+                if (typeof companyValue === 'string') {
+                  company = companyValue;
+                } else if (companyValue && typeof companyValue === 'object' && companyValue.name) {
+                  company = companyValue.name;
+                } else if (companyValue && typeof companyValue === 'object') {
+                  // Try to extract string value from object
+                  company = Object.values(companyValue).find(v => typeof v === 'string') || null;
+                }
+                console.log('Fetched company from Frappe:', company);
               }
             } catch (companyError) {
               console.error('Error fetching company from Frappe:', companyError);
@@ -70,7 +82,32 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           }
 
-          console.log('Updating Supabase display name for email:', email, 'name:', displayName, 'company:', company);
+          if (window.auth && window.auth.getUserRoleProfile) {
+            try {
+              const roleProfileResult = await window.auth.getUserRoleProfile(email);
+              if (roleProfileResult && roleProfileResult.success) {
+                roleProfile = roleProfileResult.roleProfile || null;
+                console.log('Fetched role profile from Frappe:', roleProfile);
+              }
+            } catch (roleProfileError) {
+              console.error('Error fetching role profile from Frappe:', roleProfileError);
+              // Non-fatal - continue without role profile
+            }
+          }
+
+          // Get existing user to preserve role if we couldn't fetch it
+          const { data: existingUser } = await SupabaseService.handleRequest(() =>
+            window.supabase
+              .from('users')
+              .select('role, company')
+              .eq('email', email)
+              .maybeSingle()
+          );
+
+          // Use fetched role profile, or keep existing role if fetch failed
+          const roleToStore = roleProfile || existingUser?.role || null;
+
+          console.log('Updating Supabase display name for email:', email, 'name:', displayName, 'role:', roleToStore, 'company:', company);
           const { data, error } = await SupabaseService.handleRequest(() =>
             window.supabase
               .from('users')
@@ -78,12 +115,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 {
                   email,
                   display_name: displayName,
-                  role: 'Freelancer',
-                  company: company,
+                  role: roleToStore, // Store role_profile_name from Frappe (or keep existing)
+                  company: company || existingUser?.company || null, // Use fetched company or keep existing
                 },
                 { onConflict: 'email' }
               )
-              .select('email, display_name')
+              .select('email, display_name, role, company')
               .maybeSingle()
           );
 

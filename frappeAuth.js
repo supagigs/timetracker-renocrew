@@ -137,24 +137,87 @@ async function getUserCompany(userEmail) {
 // Employee has user_id field that links to User email
 async function tryGetCompanyFromEmployee(frappe, userEmail) {
   try {
-    // Try resource API first
-    const employeeRes = await frappe.get('/api/resource/Employee', {
-      params: {
-        fields: JSON.stringify(['company']),
-        filters: JSON.stringify([['user_id', '=', userEmail]]),
-        limit_page_length: 1,
-      },
-    });
+    // Extract username part (before @) in case user_id stores just the username
+    const username = userEmail.split('@')[0];
+    
+    // Try multiple approaches to find the Employee record
+    
+    // Approach 1: Query by full email in user_id field
+    try {
+      const employeeRes = await frappe.get('/api/resource/Employee', {
+        params: {
+          fields: JSON.stringify(['company', 'user_id', 'name']),
+          filters: JSON.stringify([['user_id', '=', userEmail]]),
+          limit_page_length: 1,
+        },
+      });
 
-    const employees = employeeRes?.data?.data || [];
-    if (employees.length > 0) {
-      const company = employees[0]?.company || null;
-      if (company) {
-        return company;
+      const employees = employeeRes?.data?.data || [];
+      if (employees.length > 0) {
+        const companyValue = employees[0]?.company || null;
+        if (companyValue) {
+          const extractedCompany = extractCompanyString(companyValue);
+          if (extractedCompany) {
+            if (logInfo) logInfo('Frappe', `Found company via user_id (email) for ${userEmail}: ${extractedCompany}`);
+            return extractedCompany;
+          }
+        }
       }
+    } catch (err1) {
+      if (logWarn) logWarn('Frappe', `Failed to query Employee by email user_id: ${err1.message}`);
     }
 
-    // If resource API doesn't work, try method endpoint
+    // Approach 2: Query by username (before @) in user_id field
+    try {
+      const employeeRes = await frappe.get('/api/resource/Employee', {
+        params: {
+          fields: JSON.stringify(['company', 'user_id', 'name']),
+          filters: JSON.stringify([['user_id', '=', username]]),
+          limit_page_length: 1,
+        },
+      });
+
+      const employees = employeeRes?.data?.data || [];
+      if (employees.length > 0) {
+        const companyValue = employees[0]?.company || null;
+        if (companyValue) {
+          const extractedCompany = extractCompanyString(companyValue);
+          if (extractedCompany) {
+            if (logInfo) logInfo('Frappe', `Found company via user_id (username) for ${userEmail}: ${extractedCompany}`);
+            return extractedCompany;
+          }
+        }
+      }
+    } catch (err2) {
+      if (logWarn) logWarn('Frappe', `Failed to query Employee by username user_id: ${err2.message}`);
+    }
+
+    // Approach 3: Query by email in name field (some setups use email as Employee name)
+    try {
+      const employeeRes = await frappe.get('/api/resource/Employee', {
+        params: {
+          fields: JSON.stringify(['company', 'user_id', 'name']),
+          filters: JSON.stringify([['name', '=', userEmail]]),
+          limit_page_length: 1,
+        },
+      });
+
+      const employees = employeeRes?.data?.data || [];
+      if (employees.length > 0) {
+        const companyValue = employees[0]?.company || null;
+        if (companyValue) {
+          const extractedCompany = extractCompanyString(companyValue);
+          if (extractedCompany) {
+            if (logInfo) logInfo('Frappe', `Found company via name (email) for ${userEmail}: ${extractedCompany}`);
+            return extractedCompany;
+          }
+        }
+      }
+    } catch (err3) {
+      if (logWarn) logWarn('Frappe', `Failed to query Employee by name (email): ${err3.message}`);
+    }
+
+    // Approach 4: Try method endpoint with email
     try {
       const methodRes = await frappe.get('/api/method/frappe.client.get_value', {
         params: {
@@ -165,18 +228,67 @@ async function tryGetCompanyFromEmployee(frappe, userEmail) {
       });
 
       if (methodRes?.data?.message) {
-        const company = methodRes.data.message;
-        if (company) {
-          return company;
+        const companyValue = methodRes.data.message;
+        const extractedCompany = extractCompanyString(companyValue);
+        if (extractedCompany) {
+          if (logInfo) logInfo('Frappe', `Found company via get_value (email) for ${userEmail}: ${extractedCompany}`);
+          return extractedCompany;
         }
       }
     } catch (methodErr) {
-      // Method endpoint failed, but we already tried resource API
-      if (logWarn) logWarn('Frappe', `Method endpoint failed for Employee: ${methodErr.message}`);
+      if (logWarn) logWarn('Frappe', `Method endpoint failed for Employee (email): ${methodErr.message}`);
     }
+
+    // Approach 5: Try method endpoint with username
+    try {
+      const methodRes = await frappe.get('/api/method/frappe.client.get_value', {
+        params: {
+          doctype: 'Employee',
+          filters: JSON.stringify({ user_id: username }),
+          fieldname: 'company',
+        },
+      });
+
+      if (methodRes?.data?.message) {
+        const companyValue = methodRes.data.message;
+        const extractedCompany = extractCompanyString(companyValue);
+        if (extractedCompany) {
+          if (logInfo) logInfo('Frappe', `Found company via get_value (username) for ${userEmail}: ${extractedCompany}`);
+          return extractedCompany;
+        }
+      }
+    } catch (methodErr2) {
+      if (logWarn) logWarn('Frappe', `Method endpoint failed for Employee (username): ${methodErr2.message}`);
+    }
+
+    // If all approaches fail, log for debugging
+    if (logWarn) logWarn('Frappe', `Could not find Employee record for user ${userEmail} (tried email and username)`);
   } catch (employeeErr) {
-    if (logWarn) logWarn('Frappe', `Could not get company from Employee doctype: ${employeeErr.message}`);
+    if (logWarn) logWarn('Frappe', `Error getting company from Employee doctype: ${employeeErr.message}`);
   }
+  return null;
+}
+
+// Helper function to extract company string from various formats
+function extractCompanyString(companyValue) {
+  if (!companyValue) return null;
+  
+  // Handle string directly
+  if (typeof companyValue === 'string') {
+    return companyValue.trim() || null;
+  }
+  
+  // Handle object with name property
+  if (typeof companyValue === 'object' && companyValue.name) {
+    return typeof companyValue.name === 'string' ? companyValue.name.trim() : null;
+  }
+  
+  // Handle object - try to find string value
+  if (typeof companyValue === 'object') {
+    const stringValue = Object.values(companyValue).find(v => typeof v === 'string' && v.trim());
+    return stringValue ? stringValue.trim() : null;
+  }
+  
   return null;
 }
 
@@ -263,5 +375,5 @@ async function getUserRoleProfile(userEmail) {
   }
 }
 
-module.exports = { login, logout, getCurrentUser, getUserCompany, getUserRoleProfile, setLoggers };
+module.exports = { login, logout, getCurrentUser, getUserCompany, getUserRoleProfile, setLoggers, extractCompanyString };
 

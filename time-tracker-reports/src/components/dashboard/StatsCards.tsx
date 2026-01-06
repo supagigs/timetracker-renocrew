@@ -25,7 +25,7 @@ const STATS = [
     accent: "bg-orange-100 text-orange-600",
   },
   {
-    title: "Client Rating",
+    title: "Manager Rating",
     value: "4.9",
     change: "Based on 24 reviews",
     Icon: Star,

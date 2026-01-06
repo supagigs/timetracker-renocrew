@@ -4,7 +4,7 @@ import { Calendar, AlertCircle, Clock } from "lucide-react";
 
 const EVENTS = [
   {
-    title: "Client Meeting - ABC Corp",
+    title: "Manager Meeting - ABC Corp",
     time: "Today, 2:00 PM",
     iconBg: "bg-blue-100",
     iconColor: "text-blue-600",

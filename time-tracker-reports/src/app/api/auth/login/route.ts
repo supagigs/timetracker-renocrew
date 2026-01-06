@@ -7,7 +7,7 @@ type UserRecord = {
   id: number;
   email: string;
   display_name: string | null;
-  role: 'Client' | 'Freelancer' | null;
+  role: string | null; // Stores role_profile_name from Frappe directly
   created_at: string;
 };
 
@@ -43,11 +43,12 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check user role profile to determine if user is a client
+    // Get role profile from Frappe - store it directly in database
     // Use session-based auth (recommended) - role_profile_name is the correct field
     const userProfile = await getFrappeCurrentUserRoleProfile();
     const roleProfile = userProfile?.role_profile || null;
-    const isClient = roleProfile === 'SuperAdmin';
+    
+    // Store role_profile_name directly from Frappe (not converted)
 
     // Get company from Frappe using the email we already have
     const { getFrappeCompanyForUser } = await import('@/lib/frappeClient');
@@ -69,9 +70,6 @@ export async function POST(request: Request) {
 
     let user = existingUser;
 
-    // Determine role based on Frappe role
-    const userRole: 'Client' | 'Freelancer' = isClient ? 'Client' : 'Freelancer';
-
     // If user doesn't exist in Supabase, create a basic record
     // This ensures the user exists in Supabase for the reports to work
     if (!user) {
@@ -81,7 +79,7 @@ export async function POST(request: Request) {
         .insert({
           email: email,
           display_name: null,
-          role: userRole,
+          role: roleProfile, // Store role_profile_name directly from Frappe
           company: company || null,
         })
         .select('id, email, display_name, role, company, created_at')
@@ -94,7 +92,7 @@ export async function POST(request: Request) {
           user: {
             email: email,
             displayName: null,
-            role: userRole,
+            role: roleProfile, // Return role_profile_name directly
             createdAt: null,
             projects: [],
           },
@@ -102,25 +100,34 @@ export async function POST(request: Request) {
       }
 
       user = insertedUser;
-    } else if (user.role !== userRole || user.company !== company) {
-      // Update role and/or company if they have changed (e.g., role or company was updated in Frappe)
-      const updateData: { role?: string; company?: string | null } = {};
-      if (user.role !== userRole) {
-        updateData.role = userRole;
-      }
-      if (user.company !== company) {
-        updateData.company = company || null;
-      }
-      
-      const { data: updatedUser, error: updateError } = await supabase
-        .from('users')
-        .update(updateData)
-        .eq('id', user.id)
-        .select('id, email, display_name, role, company, created_at')
-        .maybeSingle();
+    } else {
+      // Only update fields when we have non-null values from Frappe, to avoid overwriting existing data with null
+      const newRole = roleProfile ?? user.role ?? null;
+      const newCompany = company ?? user.company ?? null;
 
-      if (!updateError && updatedUser) {
-        user = updatedUser;
+      const shouldUpdate =
+        (newRole !== user.role) ||
+        (newCompany !== user.company);
+
+      if (shouldUpdate) {
+        const updateData: { role?: string | null; company?: string | null } = {};
+        if (newRole !== user.role) {
+          updateData.role = newRole; // Store role_profile_name directly
+        }
+        if (newCompany !== user.company) {
+          updateData.company = newCompany;
+        }
+        
+        const { data: updatedUser, error: updateError } = await supabase
+          .from('users')
+          .update(updateData)
+          .eq('id', user.id)
+          .select('id, email, display_name, role, company, created_at')
+          .maybeSingle();
+
+        if (!updateError && updatedUser) {
+          user = updatedUser;
+        }
       }
     }
 

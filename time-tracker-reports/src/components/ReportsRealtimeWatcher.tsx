@@ -13,7 +13,7 @@ type ReportsRealtimeWatcherProps = {
  * Subscribes to Supabase changes for the given user's time sessions and screenshots
  * and triggers a soft refresh of the current page whenever new data arrives.
  *
- * This keeps the Reports and Screenshots views up-to-date while a freelancer is
+ * This keeps the Reports and Screenshots views up-to-date while an employee is
  * actively working without requiring a manual page reload.
  */
 export function ReportsRealtimeWatcher({ userEmail }: ReportsRealtimeWatcherProps) {

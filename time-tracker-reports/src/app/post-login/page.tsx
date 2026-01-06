@@ -10,7 +10,7 @@ import { WEB_USER_STORAGE_KEY } from "@/lib/constants";
 type StoredUser = {
   email: string;
   displayName: string | null;
-  role: "Client" | "Freelancer" | null;
+  role: "Manager" | "Employee" | null;
   projects?: string[];
 };
 

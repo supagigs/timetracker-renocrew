@@ -6,11 +6,11 @@ export type ProjectRecord = {
   name: string;
   description: string | null;
   createdAt: string | null;
-  clientEmail?: string | null;
-  clientName?: string | null;
+  managerEmail?: string | null;
+  managerName?: string | null;
 };
 
-export async function fetchClientProjects({
+export async function fetchManagerProjects({
   email,
   userId,
   company,
@@ -19,7 +19,7 @@ export async function fetchClientProjects({
   userId: number | null;
   company?: string | null;
 }): Promise<ProjectRecord[]> {
-  // For clients, fetch projects from Frappe filtered by company
+  // For managers, fetch projects from Frappe filtered by company
   try {
     const frappeProjects = await getAllFrappeProjects(company || undefined);
     
@@ -43,7 +43,7 @@ export async function fetchClientProjects({
           );
         
         if (error) {
-          console.warn('[client-projects] Failed to upsert project:', error);
+          console.warn('[manager-projects] Failed to upsert project:', error);
         }
       }
     }
@@ -52,21 +52,21 @@ export async function fetchClientProjects({
       id: index + 1, // Use index as ID since Frappe projects don't have numeric IDs
       name: project.name,
       description: null,
-      clientEmail: null,
-      clientName: null,
+      managerEmail: null,
+      managerName: null,
       createdAt: null,
     }));
   } catch (error) {
-    console.error('[client-projects] Failed to fetch Frappe projects:', error);
+    console.error('[manager-projects] Failed to fetch Frappe projects:', error);
     return [];
   }
 }
 
-export async function fetchFreelancerProjects(email: string): Promise<ProjectRecord[]> {
+export async function fetchEmployeeProjects(email: string): Promise<ProjectRecord[]> {
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail) return [];
 
-  // For freelancers, fetch projects assigned to them from Frappe
+  // For employees, fetch projects assigned to them from Frappe
   try {
     const frappeProjects = await getFrappeProjectsForUser(normalizedEmail);
     
@@ -100,7 +100,7 @@ export async function fetchFreelancerProjects(email: string): Promise<ProjectRec
             );
           
           if (error) {
-            console.warn('[freelancer-projects] Failed to upsert project:', error);
+            console.warn('[employee-projects] Failed to upsert project:', error);
           }
         }
       }
@@ -111,12 +111,12 @@ export async function fetchFreelancerProjects(email: string): Promise<ProjectRec
       id: index + 1000000, // Use generated ID since we don't have database IDs
       name: project.name,
       description: null,
-      clientEmail: null,
-      clientName: null,
+      managerEmail: null,
+      managerName: null,
       createdAt: null,
     }));
   } catch (error) {
-    console.error('[freelancer-projects] Failed to fetch Frappe projects:', error);
+    console.error('[employee-projects] Failed to fetch Frappe projects:', error);
     return [];
   }
 }

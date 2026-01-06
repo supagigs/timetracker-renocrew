@@ -1,27 +1,31 @@
 'use client';
 
+// Note: This component has been renamed to EmployeeSelector
+// The file name is kept as FreelancerSelector.tsx for now to avoid breaking imports
+// but all internal references use "Employee" terminology
+
 import { useState, useEffect, useTransition } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 
-type Freelancer = {
+type Employee = {
   email: string;
   display_name: string | null;
 };
 
-type FreelancerSelectorProps = {
-  clientEmail: string;
-  currentFreelancerEmail?: string;
+type EmployeeSelectorProps = {
+  managerEmail: string;
+  currentEmployeeEmail?: string;
   redirectBasePath?: string;
   autoSelectFirst?: boolean;
 };
 
-export default function FreelancerSelector({
-  clientEmail,
-  currentFreelancerEmail,
+export default function EmployeeSelector({
+  managerEmail,
+  currentEmployeeEmail,
   redirectBasePath,
   autoSelectFirst = true,
-}: FreelancerSelectorProps) {
-  const [freelancers, setFreelancers] = useState<Freelancer[]>([]);
+}: EmployeeSelectorProps) {
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedEmail, setSelectedEmail] = useState<string>('');
   const router = useRouter();
@@ -30,37 +34,53 @@ export default function FreelancerSelector({
   const [isPending, startTransition] = useTransition();
 
   useEffect(() => {
-    fetchFreelancers();
-  }, [clientEmail]);
+    fetchEmployees();
+  }, [managerEmail]);
 
   useEffect(() => {
-    const emailFromParams = searchParams?.get('freelancer');
+    const emailFromParams = searchParams?.get('employee');
     if (emailFromParams) {
       setSelectedEmail(emailFromParams);
-    } else if (currentFreelancerEmail) {
-      setSelectedEmail(currentFreelancerEmail);
+    } else if (currentEmployeeEmail) {
+      setSelectedEmail(currentEmployeeEmail);
     } else {
       setSelectedEmail('');
     }
-  }, [currentFreelancerEmail, searchParams]);
+  }, [currentEmployeeEmail, searchParams]);
 
-  async function fetchFreelancers() {
+  async function fetchEmployees() {
     try {
       setLoading(true);
       const response = await fetch(
-        `/api/freelancers?clientEmail=${encodeURIComponent(clientEmail)}`
+        `/api/employees?managerEmail=${encodeURIComponent(managerEmail)}`
       );
-      if (!response.ok) {
-        throw new Error('Failed to fetch freelancers');
-      }
-      const data = await response.json();
-      setFreelancers(data);
       
-      const currentFromParams = searchParams?.get('freelancer') ?? '';
+      if (!response.ok) {
+        // Try to get error message from response
+        let errorMessage = 'Failed to fetch employees';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          // If response is not JSON, use default message
+        }
+        console.error('Error fetching employees:', errorMessage, response.status);
+        // Set empty array on error instead of throwing
+        setEmployees([]);
+        return;
+      }
+      
+      const data = await response.json();
+      
+      // Ensure data is an array
+      const employeesList = Array.isArray(data) ? data : [];
+      setEmployees(employeesList);
+      
+      const currentFromParams = searchParams?.get('employee') ?? '';
 
       if (!currentFromParams) {
-        if (autoSelectFirst && data.length > 0) {
-          const nextEmail = data[0].email;
+        if (autoSelectFirst && employeesList.length > 0) {
+          const nextEmail = employeesList[0].email;
           setSelectedEmail(nextEmail);
           updateRoute(nextEmail, { replace: true });
         } else {
@@ -68,20 +88,22 @@ export default function FreelancerSelector({
         }
       }
     } catch (error) {
-      console.error('Error fetching freelancers:', error);
+      console.error('Error fetching employees:', error);
+      // Set empty array on error to prevent UI breakage
+      setEmployees([]);
     } finally {
       setLoading(false);
     }
   }
 
-  function handleFreelancerChange(event: React.ChangeEvent<HTMLSelectElement>) {
+  function handleEmployeeChange(event: React.ChangeEvent<HTMLSelectElement>) {
     const newEmail = event.target.value;
     setSelectedEmail(newEmail);
 
     if (!newEmail) {
       startTransition(() => {
         const params = new URLSearchParams(searchParams?.toString() ?? '');
-        params.delete('freelancer');
+        params.delete('employee');
         const basePath = redirectBasePath ?? pathname;
         const url = params.toString() ? `${basePath}?${params.toString()}` : basePath;
         router.push(url);
@@ -95,7 +117,7 @@ export default function FreelancerSelector({
   function updateRoute(email: string, options?: { replace?: boolean }) {
     startTransition(() => {
       const params = new URLSearchParams(searchParams?.toString() ?? '');
-      params.set('freelancer', email);
+      params.set('employee', email);
       const basePath = redirectBasePath ?? pathname;
       const url = `${basePath}?${params.toString()}`;
       if (options?.replace) {
@@ -109,15 +131,15 @@ export default function FreelancerSelector({
   if (loading) {
     return (
       <div className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
-        Loading freelancers...
+        Loading employees...
       </div>
     );
   }
 
-  if (freelancers.length === 0) {
+  if (employees.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
-        No freelancers assigned to you.
+        No employees assigned to you.
       </div>
     );
   }
@@ -125,20 +147,20 @@ export default function FreelancerSelector({
   return (
     <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-        <label htmlFor="freelancer-select" className="text-sm font-medium text-foreground">
-          Select Freelancer:
+        <label htmlFor="employee-select" className="text-sm font-medium text-foreground">
+          Select Employee:
         </label>
         <select
-          id="freelancer-select"
+          id="employee-select"
           value={selectedEmail}
-          onChange={handleFreelancerChange}
+          onChange={handleEmployeeChange}
           className="min-w-[250px] rounded-lg border border-border bg-white px-4 py-2 text-sm text-foreground shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           disabled={isPending}
         >
-          <option value="">Select a freelancer</option>
-          {freelancers.map((freelancer) => (
-            <option key={freelancer.email} value={freelancer.email}>
-              {freelancer.display_name || freelancer.email}
+          <option value="">Select an employee</option>
+          {employees.map((employee) => (
+            <option key={employee.email} value={employee.email}>
+              {employee.display_name || employee.email}
             </option>
           ))}
         </select>

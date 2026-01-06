@@ -1,99 +1,99 @@
 import { createServerSupabaseClient } from './supabaseServer';
 
-export type ClientSettings = {
-  client_email: string;
-  freelancer_intervals: Record<string, number>;
+export type ManagerSettings = {
+  manager_email: string;
+  employee_intervals: Record<string, number>;
   updated_at: string | null;
 };
 
-export async function getClientSettings(
-  clientEmail: string,
-): Promise<ClientSettings | null> {
+export async function getManagerSettings(
+  managerEmail: string,
+): Promise<ManagerSettings | null> {
   const supabase = createServerSupabaseClient();
-  const normalizedEmail = clientEmail.trim().toLowerCase();
+  const normalizedEmail = managerEmail.trim().toLowerCase();
 
   const { data, error } = await supabase
     .from('client_settings')
     .select(
-      'client_email, freelancer_intervals, updated_at',
+      'client_email, employee_intervals, updated_at',
     )
     .eq('client_email', normalizedEmail)
     .maybeSingle();
 
   if (error) {
-    console.error('[clientSettings] Failed to fetch settings:', error);
+    console.error('[managerSettings] Failed to fetch settings:', error);
     return null;
   }
 
   if (!data) return null;
 
   return {
-    client_email: data.client_email,
-    freelancer_intervals: (data.freelancer_intervals ??
+    manager_email: data.client_email,
+    employee_intervals: (data.employee_intervals ??
       {}) as Record<string, number>,
     updated_at: data.updated_at ?? null,
   };
 }
 
-export async function upsertClientFreelancerInterval(
-  clientEmail: string,
-  freelancerEmail: string,
+export async function upsertManagerEmployeeInterval(
+  managerEmail: string,
+  employeeEmail: string,
   intervalSeconds: number,
-): Promise<ClientSettings | null> {
+): Promise<ManagerSettings | null> {
   const supabase = createServerSupabaseClient();
-  const normalizedClient = clientEmail.trim().toLowerCase();
-  const normalizedFreelancer = freelancerEmail.trim().toLowerCase();
+  const normalizedManager = managerEmail.trim().toLowerCase();
+  const normalizedEmployee = employeeEmail.trim().toLowerCase();
 
   // 1) Load current JSON map only
   const { data: existing, error: fetchError } = await supabase
     .from('client_settings')
-    .select('client_email, freelancer_intervals, updated_at')
-    .eq('client_email', normalizedClient)
+    .select('client_email, employee_intervals, updated_at')
+    .eq('client_email', normalizedManager)
     .maybeSingle();
 
   if (fetchError) {
     console.error(
-      '[clientSettings] Failed to fetch settings for update:',
+      '[managerSettings] Failed to fetch settings for update:',
       fetchError,
     );
     return null;
   }
 
   const currentMap =
-    (existing?.freelancer_intervals as Record<string, number> | null) ?? {};
+    (existing?.employee_intervals as Record<string, number> | null) ?? {};
 
   const newMap = {
     ...currentMap,
-    [normalizedFreelancer]: intervalSeconds,
+    [normalizedEmployee]: intervalSeconds,
   };
 
-  // 2) Upsert the freelancer intervals map
+  // 2) Upsert the employee intervals map
   const { data, error } = await supabase
     .from('client_settings')
     .upsert(
       {
-        client_email: normalizedClient,
-        freelancer_intervals: newMap,
+        client_email: normalizedManager,
+        employee_intervals: newMap,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'client_email' },
     )
     .select(
-      'client_email, freelancer_intervals, updated_at',
+      'client_email, employee_intervals, updated_at',
     )
     .maybeSingle();
 
   if (error) {
     console.error(
-      '[clientSettings] Failed to upsert freelancer interval:',
+      '[managerSettings] Failed to upsert employee interval:',
       error,
     );
     return null;
   }
 
   return {
-    client_email: data!.client_email,
-    freelancer_intervals: (data!.freelancer_intervals ??
+    manager_email: data!.client_email,
+    employee_intervals: (data!.employee_intervals ??
       {}) as Record<string, number>,
     updated_at: data!.updated_at ?? null,
   };

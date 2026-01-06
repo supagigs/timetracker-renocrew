@@ -21,21 +21,21 @@ type OverviewMetrics = {
   totalActiveToday: string;
 };
 
-type ClientOverviewProps = {
-  clientName: string | null;
-  clientEmail: string;
+type ManagerOverviewProps = {
+  managerName: string | null;
+  managerEmail: string;
   members: OverviewMember[];
   metrics: OverviewMetrics;
 };
 
-export default function ClientOverview({
-  clientName,
-  clientEmail,
+export default function ManagerOverview({
+  managerName,
+  managerEmail,
   members,
   metrics,
-}: ClientOverviewProps) {
+}: ManagerOverviewProps) {
   const hasMembers = members.length > 0;
-  const title = clientName ? `${clientName}'s team` : 'Your team';
+  const title = managerName ? `${managerName}'s team` : 'Your team';
 
   return (
     <div className="space-y-6">
@@ -47,7 +47,7 @@ export default function ClientOverview({
           </p>
           <h2 className="text-2xl font-bold text-foreground">{title}</h2>
           <p className="text-sm text-muted-foreground">
-            Track how your freelancers are doing today and quickly dive into their detailed reports when
+            Track how your employees are doing today and quickly dive into their detailed reports when
             you need more context.
           </p>
         </div>
@@ -68,7 +68,7 @@ export default function ClientOverview({
           <div>
             <h3 className="text-xl font-semibold text-foreground">Team members</h3>
             <p className="text-sm text-muted-foreground">
-              Select a freelancer to open their detailed activity report.
+              Select an employee to open their detailed activity report.
             </p>
           </div>
         </div>
@@ -122,7 +122,7 @@ export default function ClientOverview({
                     {/* ACTION BUTTON */}
                     <td className="px-4 py-4 text-right">
                       <Link
-                        href={`/reports/${encodeURIComponent(clientEmail)}?freelancer=${encodeURIComponent(member.email)}`}
+                        href={`/reports/${encodeURIComponent(managerEmail)}?employee=${encodeURIComponent(member.email)}`}
                         className="inline-flex items-center justify-center rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 active:bg-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 whitespace-nowrap"
                         aria-label={`View detailed report for ${member.displayName}`}
                       >
@@ -137,7 +137,7 @@ export default function ClientOverview({
                     className="px-4 py-10 text-center text-muted-foreground text-sm"
                     colSpan={6}
                   >
-                    <p className="font-medium mb-1">No freelancers assigned yet</p>
+                    <p className="font-medium mb-1">No employees assigned yet</p>
                     <p className="text-xs">
                       Invite team members from the desktop app to start tracking activity here.
                     </p>

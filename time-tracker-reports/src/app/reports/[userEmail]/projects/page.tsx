@@ -2,9 +2,10 @@ import { format } from 'date-fns';
 import { FolderOpen } from 'lucide-react';
 import { DashboardShell } from '@/components/dashboard';
 import { fetchUserProfile } from '@/lib/userProfile';
-import { fetchClientProjects, fetchFreelancerProjects } from '@/lib/projects';
+import { fetchManagerProjects, fetchEmployeeProjects } from '@/lib/projects';
+import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
 
-export default async function ClientProjectsPage({
+export default async function ManagerProjectsPage({
   params,
 }: {
   params: Promise<{ userEmail: string }>;
@@ -29,13 +30,15 @@ export default async function ClientProjectsPage({
     );
   }
 
-  const isClient = profile.role === 'Client';
-  const isFreelancer = profile.role === 'Freelancer';
+  // Convert role_profile_name to Manager/Employee for logic
+  const convertedRole = determineRoleFromRoleProfile(profile.role);
+  const isManager = convertedRole === 'Manager';
+  const isEmployee = convertedRole === 'Employee';
 
-  const projects = isClient
-    ? await fetchClientProjects({ email: profile.email, userId: profile.id, company: profile.company })
-    : isFreelancer
-      ? await fetchFreelancerProjects(profile.email)
+  const projects = isManager
+    ? await fetchManagerProjects({ email: profile.email, userId: profile.id, company: profile.company })
+    : isEmployee
+      ? await fetchEmployeeProjects(profile.email)
       : [];
 
   return (
@@ -48,18 +51,18 @@ export default async function ClientProjectsPage({
         <header className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Projects</h1>
           <p className="text-sm text-muted-foreground">
-            {isClient
-              ? "Review the projects you've created and assigned to your freelancers."
-              : isFreelancer
-                ? "See the projects your clients have assigned to you."
-                : "Projects are managed by clients. Log in with a client account to view project listings."}
+            {isManager
+              ? "Review the projects you've created and assigned to your employees."
+              : isEmployee
+                ? "See the projects your managers have assigned to you."
+                : "Projects are managed by managers. Log in with a manager account to view project listings."}
           </p>
         </header>
 
-        {!isClient && !isFreelancer ? (
+        {!isManager && !isEmployee ? (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <p className="text-sm text-muted-foreground">
-              Projects are managed by clients. Log in with a client account to view project listings.
+              Projects are managed by managers. Log in with a manager account to view project listings.
             </p>
           </section>
         ) : projects.length === 0 ? (
@@ -69,9 +72,9 @@ export default async function ClientProjectsPage({
             </div>
             <h2 className="mt-4 text-xl font-semibold text-foreground">No projects yet</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              {isClient
-                ? 'Create a project from the desktop app to start tracking time and assigning freelancers.'
-                : 'Your client has not assigned any projects to you yet.'}
+              {isManager
+                ? 'Create a project from the desktop app to start tracking time and assigning employees.'
+                : 'Your manager has not assigned any projects to you yet.'}
             </p>
           </section>
         ) : (
@@ -84,9 +87,9 @@ export default async function ClientProjectsPage({
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-semibold text-foreground">{project.name}</h2>
                 </div>
-                {project.clientEmail && (
+                {project.managerEmail && (
                   <p className="mt-1 text-xs font-medium text-muted-foreground">
-                    Assigned by {project.clientName ?? project.clientEmail}
+                    Assigned by {project.managerName ?? project.managerEmail}
                   </p>
                 )}
                 {project.description ? (

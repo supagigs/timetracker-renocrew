@@ -5,11 +5,12 @@ import { fetchUserProfile } from '@/lib/userProfile';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { type DateRange, defaultDateRange, normalizeDateRange } from '@/lib/dateRange';
 import { LocalTime } from '@/components/LocalTime';
+import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
 
 type TimesheetRow = {
   id: number;
-  freelancerEmail: string;
-  freelancerName: string | null;
+  employeeEmail: string;
+  employeeName: string | null;
   projectName: string | null;
   sessionDate: string;
   startTime: string | null;
@@ -104,7 +105,7 @@ async function fetchSessionsForEmails(emails: string[], dateRange: DateRange): P
   })) as RawSessionRow[];
 }
 
-async function fetchClientTimesheet({
+async function fetchManagerTimesheet({
   email,
   dateRange,
   company,
@@ -115,12 +116,12 @@ async function fetchClientTimesheet({
 }): Promise<TimesheetRow[]> {
   const supabase = createServerSupabaseClient();
 
-  // Try to fetch freelancers from assignments table first
-  let freelancerEmails: string[] = [];
+  // Try to fetch employees from assignments table first
+  let employeeEmails: string[] = [];
   const { data: assignments, error: assignmentsError } = await supabase
-    .from('client_freelancer_assignments')
-    .select('freelancer_email')
-    .eq('client_email', email)
+    .from('manager_employee_assignments')
+    .select('employee_email')
+    .eq('manager_email', email)
     .eq('is_active', true);
 
   if (assignmentsError) {
@@ -128,25 +129,25 @@ async function fetchClientTimesheet({
     // silently continue to fallback approach
     // Only log if it's not an empty error object (which might indicate RLS/permission issue)
     if (Object.keys(assignmentsError).length > 0) {
-      console.warn('[client-timesheet] Failed to fetch assignments, trying fallback:', assignmentsError);
+      console.warn('[manager-timesheet] Failed to fetch assignments, trying fallback:', assignmentsError);
     }
   } else if (assignments && assignments.length > 0) {
-    freelancerEmails = Array.from(
+    employeeEmails = Array.from(
       new Set(
         assignments
-          .map((entry) => entry.freelancer_email)
+          .map((entry) => entry.employee_email)
           .filter((value): value is string => Boolean(value)),
       ),
     );
   }
 
-  // If no assignments found, try fetching freelancers by company (fallback approach)
-  if (freelancerEmails.length === 0 && company) {
+  // If no assignments found, try fetching employees by company (fallback approach)
+  if (employeeEmails.length === 0 && company) {
     try {
-      // Import and use Frappe client to get users by company
+      // Import and use Frappe manager to get users by company
       const { getAllFrappeUsers } = await import('@/lib/frappeClient');
       const frappeUsers = await getAllFrappeUsers(company);
-      freelancerEmails = frappeUsers
+      employeeEmails = frappeUsers
         .filter((user) => user.email.toLowerCase() !== email.toLowerCase())
         .map((user) => user.email);
     } catch (fallbackError: any) {
@@ -160,28 +161,28 @@ async function fetchClientTimesheet({
           .neq('email', email);
         
         if (!usersError && supabaseUsers && supabaseUsers.length > 0) {
-          freelancerEmails = supabaseUsers.map(u => u.email);
+          employeeEmails = supabaseUsers.map(u => u.email);
         }
       }
       
       // If still no emails, return empty array
-      if (freelancerEmails.length === 0) {
+      if (employeeEmails.length === 0) {
         return [];
       }
     }
   }
 
-  if (freelancerEmails.length === 0) {
+  if (employeeEmails.length === 0) {
     return [];
   }
 
   const { data: userRows, error: usersError } = await supabase
     .from('users')
     .select('email, display_name')
-    .in('email', freelancerEmails);
+    .in('email', employeeEmails);
 
   if (usersError) {
-    console.error('[client-timesheet] Failed to fetch freelancer names:', usersError);
+    console.error('[manager-timesheet] Failed to fetch employee names:', usersError);
     return [];
   }
 
@@ -190,7 +191,7 @@ async function fetchClientTimesheet({
     nameMap.set(row.email, row.display_name ?? null);
   });
 
-  const sessions = await fetchSessionsForEmails(freelancerEmails, dateRange);
+  const sessions = await fetchSessionsForEmails(employeeEmails, dateRange);
 
   // Fetch project names
   const projectIds = sessions.map((s: any) => s.frappe_project_id).filter(Boolean) as string[];
@@ -202,8 +203,8 @@ async function fetchClientTimesheet({
 
     return {
       id: session.id,
-      freelancerEmail: session.user_email,
-      freelancerName: nameMap.get(session.user_email) ?? session.user_email,
+      employeeEmail: session.user_email,
+      employeeName: nameMap.get(session.user_email) ?? session.user_email,
       projectName,
       sessionDate: session.session_date,
       startTime: session.start_time,
@@ -219,7 +220,7 @@ async function fetchClientTimesheet({
   });
 }
 
-async function fetchFreelancerTimesheet({
+async function fetchEmployeeTimesheet({
   email,
   dateRange,
 }: {
@@ -234,7 +235,7 @@ async function fetchFreelancerTimesheet({
     .maybeSingle();
 
   if (userError) {
-    console.warn('[freelancer-timesheet] Could not load display name.', userError);
+    console.warn('[employee-timesheet] Could not load display name.', userError);
   }
 
   const displayName = userRow?.display_name ?? email;
@@ -251,8 +252,8 @@ async function fetchFreelancerTimesheet({
 
     return {
       id: session.id,
-      freelancerEmail: session.user_email,
-      freelancerName: displayName,
+      employeeEmail: session.user_email,
+      employeeName: displayName,
       projectName,
       sessionDate: session.session_date,
       startTime: session.start_time,
@@ -313,17 +314,19 @@ export default async function TimesheetPage({
 
   const dateRange = normalizeDateRange(resolvedSearchParams);
 
-  const isClient = profile.role === 'Client';
-  const isFreelancer = profile.role === 'Freelancer';
+  // Convert role_profile_name to Manager/Employee for logic
+  const convertedRole = determineRoleFromRoleProfile(profile.role);
+  const isManager = convertedRole === 'Manager';
+  const isEmployee = convertedRole === 'Employee';
 
-  const timesheetRows = isClient
-    ? await fetchClientTimesheet({ email: profile.email, dateRange, company: profile.company })
-    : isFreelancer
-      ? await fetchFreelancerTimesheet({ email: profile.email, dateRange })
+  const timesheetRows = isManager
+    ? await fetchManagerTimesheet({ email: profile.email, dateRange, company: profile.company })
+    : isEmployee
+      ? await fetchEmployeeTimesheet({ email: profile.email, dateRange })
       : [];
 
-  const emptyStateMessage = isClient
-    ? 'Once your freelancers track time in the desktop app, their sessions will show up here.'
+  const emptyStateMessage = isManager
+    ? 'Once your employees track time in the desktop app, their sessions will show up here.'
     : 'You have no tracked sessions for the selected date range.';
 
   return (
@@ -336,9 +339,9 @@ export default async function TimesheetPage({
         <header className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Timesheet</h1>
           <p className="text-sm text-muted-foreground">
-            {isFreelancer
+            {isEmployee
               ? 'Your recent sessions with login and logout times. Use the filter to view a specific range.'
-              : 'Review detailed session logs for each freelancer assigned to your projects.'}
+              : 'Review detailed session logs for each employee assigned to your projects.'}
           </p>
         </header>
 
@@ -396,7 +399,7 @@ export default async function TimesheetPage({
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
                     <th className="px-4 py-3 font-medium">Date</th>
-                    {isClient && <th className="px-4 py-3 font-medium">Freelancer</th>}
+                    {isManager && <th className="px-4 py-3 font-medium">Employee</th>}
                     <th className="px-4 py-3 font-medium">Project</th>
                     <th className="px-4 py-3 font-medium">Active</th>
                     <th className="px-4 py-3 font-medium">Break</th>
@@ -410,10 +413,10 @@ export default async function TimesheetPage({
                   {timesheetRows.map((row) => (
                     <tr key={row.id} className="border-b border-border/60 transition-colors hover:bg-secondary/60">
                       <td className="px-4 py-3 text-foreground">{format(new Date(row.sessionDate), 'PPP')}</td>
-                      {isClient && (
+                      {isManager && (
                         <td className="px-4 py-3 text-foreground">
-                          <div className="font-semibold">{row.freelancerName || row.freelancerEmail}</div>
-                          <div className="text-xs text-muted-foreground">{row.freelancerEmail}</div>
+                          <div className="font-semibold">{row.employeeName || row.employeeEmail}</div>
+                          <div className="text-xs text-muted-foreground">{row.employeeEmail}</div>
                         </td>
                       )}
                       <td className="px-4 py-3 text-foreground">{row.projectName ?? '—'}</td>

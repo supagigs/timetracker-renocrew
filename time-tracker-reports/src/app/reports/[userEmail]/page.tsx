@@ -1,13 +1,14 @@
 import { format, formatDistanceToNow } from 'date-fns';
 import SummaryCard from '@/components/SummaryCard';
 import WeeklyActivityChart from '@/components/WeeklyActivityChart';
-import FreelancerSelector from '@/components/FreelancerSelector';
-import ClientOverview from '@/components/ClientOverview';
+import EmployeeSelector from '@/components/FreelancerSelector';
+import ManagerOverview from '@/components/ClientOverview';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { DashboardShell } from '@/components/dashboard';
-import { fetchFreelancerProjects, type ProjectRecord } from '@/lib/projects';
+import { fetchEmployeeProjects, type ProjectRecord } from '@/lib/projects';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { redirect } from 'next/navigation';
+import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
 
 type TimeSession = {
   id: number;
@@ -86,49 +87,49 @@ async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]>
   return (data ?? []) as TimeSession[];
 }
 
-async function fetchClientTeamMembers(clientEmail: string, clientCompany: string | null): Promise<TeamMemberSummary[]> {
+async function fetchManagerTeamMembers(managerEmail: string, managerCompany: string | null): Promise<TeamMemberSummary[]> {
   const supabase = createServerSupabaseClient();
 
-  // For clients, fetch users from Frappe filtered by company, then get their data from Supabase
-  let freelancerEmails: string[] = [];
+  // For managers, fetch users from Frappe filtered by company, then get their data from Supabase
+  let employeeEmails: string[] = [];
   
   try {
     // Get users from Frappe filtered by company
     const { getAllFrappeUsers } = await import('@/lib/frappeClient');
-    const frappeUsers = await getAllFrappeUsers(clientCompany || undefined);
-    // Exclude the client themselves from the list
-    freelancerEmails = frappeUsers
-      .filter(u => u.email.toLowerCase() !== clientEmail.toLowerCase())
+    const frappeUsers = await getAllFrappeUsers(managerCompany || undefined);
+    // Exclude the manager themselves from the list
+    employeeEmails = frappeUsers
+      .filter(u => u.email.toLowerCase() !== managerEmail.toLowerCase())
       .map(u => u.email);
   } catch (error) {
     console.error('[reports-page] Failed to fetch Frappe users, falling back to Supabase:', error);
     // Fall back to Supabase users with same company
-    if (clientCompany) {
+    if (managerCompany) {
       const { data: supabaseUsers, error: usersError } = await supabase
         .from('users')
         .select('email')
-        .eq('company', clientCompany)
-        .neq('email', clientEmail); // Exclude the client themselves
+        .eq('company', managerCompany)
+        .neq('email', managerEmail); // Exclude the manager themselves
       
       if (!usersError && supabaseUsers) {
-        freelancerEmails = supabaseUsers.map(u => u.email);
+        employeeEmails = supabaseUsers.map(u => u.email);
       }
     }
     
-    if (freelancerEmails.length === 0) {
+    if (employeeEmails.length === 0) {
       return [];
     }
   }
 
-  const uniqueFreelancerEmails = Array.from(new Set(freelancerEmails));
+  const uniqueEmployeeEmails = Array.from(new Set(employeeEmails));
 
   const { data: users, error: usersError } = await supabase
     .from('users')
     .select('email, display_name')
-    .in('email', uniqueFreelancerEmails);
+    .in('email', uniqueEmployeeEmails);
 
   if (usersError) {
-    console.error('Error fetching freelancer details:', usersError);
+    console.error('Error fetching employee details:', usersError);
     throw usersError;
   }
 
@@ -151,13 +152,13 @@ async function fetchClientTeamMembers(clientEmail: string, clientCompany: string
   const { data: sessionRows, error: sessionsError } = await supabase
     .from('time_sessions')
     .select('user_email, session_date, start_time, end_time, active_duration')
-    .in('user_email', uniqueFreelancerEmails)
+    .in('user_email', uniqueEmployeeEmails)
     .gte('session_date', startDateStr)
     .lte('session_date', endDateStr)
     .order('start_time', { ascending: false });
 
   if (sessionsError) {
-    console.error('Error fetching freelancer sessions:', sessionsError);
+    console.error('Error fetching employee sessions:', sessionsError);
     throw sessionsError;
   }
 
@@ -168,7 +169,7 @@ async function fetchClientTeamMembers(clientEmail: string, clientCompany: string
     sessionsByUser.set(session.user_email, list);
   });
 
-  return uniqueFreelancerEmails.map((email) => {
+  return uniqueEmployeeEmails.map((email) => {
     const memberSessions = sessionsByUser.get(email) ?? [];
 
     const todayActiveSeconds = memberSessions
@@ -224,6 +225,7 @@ async function fetchUserName(userEmail: string): Promise<string | null> {
 }
 
 async function fetchUserRole(userEmail: string): Promise<string | null> {
+  // First try to get role from database (which stores role_profile_name from Frappe)
   const supabase = createServerSupabaseClient();
   
   const { data, error } = await supabase
@@ -232,12 +234,21 @@ async function fetchUserRole(userEmail: string): Promise<string | null> {
     .eq('email', userEmail)
     .maybeSingle();
 
-  if (error) {
-    console.error('Error fetching user role:', error.message || JSON.stringify(error));
-    return null;
+  if (!error && data?.role) {
+    // Return the stored role_profile_name from database
+    return data.role;
   }
 
-  return data?.role || null;
+  // Fallback: Fetch role_profile_name from Frappe if not in database
+  const { getFrappeRoleProfileForEmail } = await import('@/lib/frappeClient');
+  
+  try {
+    const roleProfile = await getFrappeRoleProfileForEmail(userEmail);
+    return roleProfile;
+  } catch (error) {
+    console.error('Error fetching user role from Frappe:', error);
+    return null;
+  }
 }
 
 function buildMonthlySummary(sessions: TimeSession[]) {
@@ -402,8 +413,8 @@ export default async function ReportsPage({
 }) {
   const [{ userEmail }, resolvedSearchParams] = await Promise.all([params, searchParams]);
   const decodedEmail = decodeURIComponent(userEmail);
-  const requestedFreelancer = (() => {
-    const value = resolvedSearchParams?.freelancer;
+  const requestedEmployee = (() => {
+    const value = resolvedSearchParams?.employee;
     if (Array.isArray(value)) {
       return value[0];
     }
@@ -435,9 +446,9 @@ export default async function ReportsPage({
   let viewerName: string | null = null;
   let reportOwnerName: string | null = null;
   let userRole: string | null = null;
-  let isClient = false;
+  let isManager = false;
   let reportEmail: string | null = decodedEmail;
-  const clientEmailForSelector = decodedEmail;
+  const managerEmailForSelector = decodedEmail;
   let teamMembers: TeamMemberSummary[] = [];
   let showTeamOverview = false;
   let assignedProjects: ProjectRecord[] = [];
@@ -446,29 +457,31 @@ export default async function ReportsPage({
     // Fetch viewer details (the person whose email is in the URL)
     viewerName = await fetchUserName(decodedEmail);
 
-    // Fetch user role to determine if this is a Client
+    // Fetch user role (role_profile_name from Frappe)
     userRole = await fetchUserRole(decodedEmail);
-    isClient = userRole === 'Client';
+    // Convert role_profile_name to Manager/Employee for logic
+    const convertedRole = determineRoleFromRoleProfile(userRole);
+    isManager = convertedRole === 'Manager';
 
-    // If the user is a Client, build team overview and decide whether to show an individual report
-    if (isClient) {
-      // Get client's company from profile
-      const clientProfile = await fetchUserProfile(decodedEmail);
-      const clientCompany = clientProfile?.company || null;
-      teamMembers = await fetchClientTeamMembers(decodedEmail, clientCompany);
-      const assignedFreelancers = teamMembers.map((member) => member.email);
-      const hasRequestedFreelancer =
-        requestedFreelancer && assignedFreelancers.includes(requestedFreelancer);
+    // If the user is a Manager, build team overview and decide whether to show an individual report
+    if (isManager) {
+      // Get manager's company from profile
+      const managerProfile = await fetchUserProfile(decodedEmail);
+      const managerCompany = managerProfile?.company || null;
+      teamMembers = await fetchManagerTeamMembers(decodedEmail, managerCompany);
+      const assignedEmployees = teamMembers.map((member) => member.email);
+      const hasRequestedEmployee =
+        requestedEmployee && assignedEmployees.includes(requestedEmployee);
 
-      if (requestedFreelancer && !hasRequestedFreelancer) {
+      if (requestedEmployee && !hasRequestedEmployee) {
         redirect(`/reports/${encodeURIComponent(decodedEmail)}`);
       }
 
-      showTeamOverview = !hasRequestedFreelancer;
-      reportEmail = hasRequestedFreelancer ? requestedFreelancer : decodedEmail;
+      showTeamOverview = !hasRequestedEmployee;
+      reportEmail = hasRequestedEmployee ? requestedEmployee : decodedEmail;
       
-      // For clients, validate that the requested freelancer is from the same company
-      if (hasRequestedFreelancer && reportEmail && clientCompany) {
+      // For managers, validate that the requested employee is from the same company
+      if (hasRequestedEmployee && reportEmail && managerCompany) {
         const { getFrappeCompanyForUser } = await import('@/lib/frappeClient');
         const userCompany = await getFrappeCompanyForUser(reportEmail);
         
@@ -483,7 +496,7 @@ export default async function ReportsPage({
         const userCompanyFromDb = userData?.company || userCompany;
         
         // Only allow if company matches, otherwise redirect to team overview
-        if (userCompanyFromDb !== clientCompany) {
+        if (userCompanyFromDb !== managerCompany) {
           redirect(`/reports/${encodeURIComponent(decodedEmail)}`);
         }
       }
@@ -504,8 +517,8 @@ export default async function ReportsPage({
       const projectNamesMap = await fetchProjectNamesMap(supabase, projectIds);
       projectSummary = buildProjectSummary(sessions, projectNamesMap);
       
-      if (!isClient) {
-        assignedProjects = await fetchFreelancerProjects(reportEmail);
+      if (!isManager) {
+        assignedProjects = await fetchEmployeeProjects(reportEmail);
       }
     }
   } catch (error) {
@@ -516,15 +529,15 @@ export default async function ReportsPage({
     projectSummary = [];
   }
 
-  if (!errorMessage && isClient) {
-    const queryEmail = requestedFreelancer ?? null;
+  if (!errorMessage && isManager) {
+    const queryEmail = requestedEmployee ?? null;
     if (reportEmail === decodedEmail) {
-      // Viewing own data; remove stale freelancer param if present
+      // Viewing own data; remove stale employee param if present
       if (queryEmail) {
         redirect(`/reports/${userEmail}`);
       }
     } else if (queryEmail !== reportEmail) {
-      redirect(`/reports/${userEmail}?freelancer=${encodeURIComponent(reportEmail)}`);
+      redirect(`/reports/${userEmail}?employee=${encodeURIComponent(reportEmail)}`);
     }
   }
   // Use display name if available, otherwise fallback to email
@@ -571,7 +584,7 @@ export default async function ReportsPage({
     projectHoursMap.set(project.id, { totalHours: project.totalHours });
   });
 
-  const freelancerProjectOverview = assignedProjects.map((project) => ({
+  const employeeProjectOverview = assignedProjects.map((project) => ({
     ...project,
     totalHours: projectHoursMap.get(project.id)?.totalHours ?? 0,
   }));
@@ -595,7 +608,7 @@ export default async function ReportsPage({
             </h1>
             <p className="text-sm text-muted-foreground">
               {showTeamOverview
-                ? 'Monitor your freelancers at a glance and jump into detailed reports when needed.'
+                ? 'Monitor your employees at a glance and jump into detailed reports when needed.'
                 : 'Summary of the last 30 days'}
             </p>
             {!showTeamOverview && reportOwnerName && (
@@ -609,21 +622,21 @@ export default async function ReportsPage({
           )}
         </header>
 
-        {isClient && !showTeamOverview && (
-          <FreelancerSelector
-            clientEmail={clientEmailForSelector}
-            currentFreelancerEmail={reportEmail}
+        {isManager && !showTeamOverview && (
+          <EmployeeSelector
+            managerEmail={managerEmailForSelector}
+            currentEmployeeEmail={reportEmail}
           />
         )}
 
         {showTeamOverview ? (
-          <ClientOverview
-            clientName={viewerName}
-            clientEmail={decodedEmail}
+          <ManagerOverview
+            managerName={viewerName}
+            managerEmail={decodedEmail}
             members={overviewMembers}
             metrics={overviewMetrics}
           />
-        ) : isClient ? (
+        ) : isManager ? (
           <>
             <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <SummaryCard title="Total Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
@@ -681,7 +694,7 @@ export default async function ReportsPage({
         ) : (
           <>
             <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <SummaryCard title="Assigned Projects" value={freelancerProjectOverview.length.toString()} />
+              <SummaryCard title="Assigned Projects" value={employeeProjectOverview.length.toString()} />
               <SummaryCard title="Total Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
               <SummaryCard title="Active Today" value={formatSecondsToHoursMinutes(todayActiveSeconds)} />
               <SummaryCard title="Avg. Daily Work" value={formatHoursMinutes(summary.avgDailyHours)} />
@@ -689,13 +702,13 @@ export default async function ReportsPage({
 
             <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
               <h2 className="mb-4 text-xl font-semibold text-foreground">Assigned Projects</h2>
-              {freelancerProjectOverview.length === 0 ? (
+              {employeeProjectOverview.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  Your client hasn&apos;t assigned any projects to you yet.
+                  Your manager hasn&apos;t assigned any projects to you yet.
                 </p>
               ) : (
                 <div className="space-y-4">
-                  {freelancerProjectOverview.map((project) => (
+                  {employeeProjectOverview.map((project) => (
                     <div
                       key={project.id}
                       className="rounded-xl border border-border/80 bg-card/60 p-4 shadow-sm transition hover:shadow-md"
@@ -703,9 +716,9 @@ export default async function ReportsPage({
                       <div className="flex items-center justify-between">
                         <div>
                           <h3 className="text-lg font-semibold text-foreground">{project.name}</h3>
-                          {project.clientEmail && (
+                          {project.managerEmail && (
                             <p className="text-xs text-muted-foreground">
-                              Assigned by {project.clientName ?? project.clientEmail}
+                              Assigned by {project.managerName ?? project.managerEmail}
                             </p>
                           )}
                           {project.description && (

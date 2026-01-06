@@ -155,8 +155,11 @@ export async function getFrappeCurrentUserRoleProfile(): Promise<{
 }
 
 /**
- * Get role profile from Frappe for a specific user email (API key-based)
- * Uses API key authentication - fallback when session is not available
+ * Get role profile from Frappe for a specific user email
+ * Matches the app's getUserRoleProfile logic:
+ * 1. First tries API key authentication with method endpoint
+ * 2. Falls back to querying User doctype directly with API key
+ * 3. Falls back to session-based authentication
  * 
  * Note: This requires a whitelisted Frappe method: get_user_role_profile_by_email
  * Add this to your Frappe instance:
@@ -171,25 +174,60 @@ export async function getFrappeRoleProfileForEmail(userEmail: string): Promise<s
       return null;
     }
 
-    const frappe = createFrappeClient(true); // Use API key auth
-    
-    // Try method endpoint first (if whitelisted method exists)
-    try {
-      const methodRes = await frappe.get('/api/method/get_user_role_profile_by_email', {
-        params: {
-          email: userEmail,
-        },
-      });
+    // Frappe stores role_profile_name on User doctype
+    // This is the correct way to check for Role Profile (not roles list)
 
-      if (methodRes?.data?.message) {
-        return methodRes.data.message || null;
+    // First, try with API key authentication (has broader permissions)
+    const apiKey = process.env.FRAPPE_API_KEY;
+    const apiSecret = process.env.FRAPPE_API_SECRET;
+    
+    if (apiKey && apiSecret) {
+      try {
+        const frappeApiKey = createFrappeClient(true); // Use API key auth
+        
+        // Try method endpoint first (if whitelisted method exists)
+        try {
+          const methodRes = await frappeApiKey.get('/api/method/get_user_role_profile_by_email', {
+            params: {
+              email: userEmail,
+            },
+          });
+
+          if (methodRes?.data?.message) {
+            const roleProfile = methodRes.data.message || null;
+            console.log(`[frappeClient] Role profile for user ${userEmail} (via API key method): ${roleProfile || 'None'}`);
+            return roleProfile;
+          }
+        } catch (methodErr) {
+          // Method endpoint not available, fallback to resource API
+          console.warn(`[frappeClient] Method endpoint failed, trying resource API: ${methodErr}`);
+        }
+
+        // Fallback: Query User doctype directly with API key
+        const res = await frappeApiKey.get('/api/resource/User', {
+          params: {
+            fields: JSON.stringify(['name', 'role_profile_name']),
+            filters: JSON.stringify([['name', '=', userEmail]]),
+            limit_page_length: 1,
+          },
+        });
+
+        const users = res?.data?.data || [];
+        if (users.length > 0) {
+          const roleProfile = users[0]?.role_profile_name || null;
+          console.log(`[frappeClient] Role profile for user ${userEmail} (via API key resource): ${roleProfile || 'None'}`);
+          return roleProfile;
+        }
+      } catch (apiKeyErr: any) {
+        const errorMsg = apiKeyErr.response?.data?.exception || apiKeyErr.message || 'Unknown error';
+        console.warn(`[frappeClient] API key auth failed, trying session-based: ${errorMsg}`);
       }
-    } catch (methodErr) {
-      // Method endpoint not available, fallback to resource API
-      console.warn('[frappeClient] Method endpoint failed, trying resource API:', methodErr);
     }
 
-    // Fallback: Query User doctype directly with API key
+    // Fallback: Try with session-based authentication
+    const frappe = createFrappeClient(false); // Use session-based auth
+    
+    // Query User doctype directly
     const res = await frappe.get('/api/resource/User', {
       params: {
         fields: JSON.stringify(['name', 'role_profile_name']),
@@ -200,14 +238,25 @@ export async function getFrappeRoleProfileForEmail(userEmail: string): Promise<s
 
     const users = res?.data?.data || [];
     if (users.length > 0) {
-      return users[0]?.role_profile_name || null;
+      const roleProfile = users[0]?.role_profile_name || null;
+      console.log(`[frappeClient] Role profile for user ${userEmail} (via session): ${roleProfile || 'None'}`);
+      return roleProfile;
     }
 
+    console.warn(`[frappeClient] No role profile found for user ${userEmail}`);
     return null;
   } catch (err) {
     console.error(`[frappeClient] Error getting role profile for user ${userEmail}:`, err);
     return null;
   }
+}
+
+/**
+ * Determine user role from Frappe role profile
+ * Matches the app's logic: If role_profile_name is "SuperAdmin", user is a Manager, else Employee
+ */
+export function determineRoleFromRoleProfile(roleProfile: string | null): 'Manager' | 'Employee' {
+  return roleProfile === 'SuperAdmin' ? 'Manager' : 'Employee';
 }
 
 /**
@@ -334,11 +383,35 @@ export async function getAllFrappeUsers(company?: string | null): Promise<Array<
       full_name: user.full_name || null,
     }));
   } catch (err: any) {
-    console.error('[frappeClient] get_users failed', {
-      status: err?.response?.status,
-      contentType: err?.response?.headers?.['content-type'],
-      message: err?.message,
-    });
+    // Log error details for debugging, but don't throw - return empty array
+    // This allows callers to gracefully fall back to Supabase
+    const errorDetails: Record<string, any> = {};
+    
+    if (err?.response) {
+      errorDetails.status = err.response.status;
+      errorDetails.statusText = err.response.statusText;
+      errorDetails.data = err.response.data;
+      if (err.response.headers) {
+        errorDetails.contentType = err.response.headers['content-type'];
+      }
+    }
+    
+    if (err?.message) {
+      errorDetails.message = err.message;
+    }
+    
+    if (err?.code) {
+      errorDetails.code = err.code;
+    }
+    
+    // Only log if there's actual error information
+    if (Object.keys(errorDetails).length > 0) {
+      console.warn('[frappeClient] get_users failed:', errorDetails);
+    } else {
+      // If error object is empty or malformed, log the raw error
+      console.warn('[frappeClient] get_users failed with unknown error:', err);
+    }
+    
     return [];
   }
 }
@@ -571,52 +644,24 @@ export async function getFrappeUserCompany(): Promise<string | null> {
   try {
     // Try API key auth first (for server-side)
     const frappe = createFrappeClient(true);
-    const userEmail = await getFrappeCurrentUser();
+    let userEmail = await getFrappeCurrentUser();
     
     if (!userEmail) {
       // If API key auth doesn't work, try session-based
       const frappeSession = createFrappeClient(false);
       const sessionRes = await frappeSession.get('/api/method/frappe.auth.get_logged_user').catch(() => null);
-      const sessionEmail = sessionRes?.data?.message;
+      userEmail = sessionRes?.data?.message;
       
-      if (!sessionEmail) {
+      if (!userEmail) {
         return null;
       }
       
-      // Query Employee doctype with user_id filter
-      const res = await frappeSession.get('/api/resource/Employee', {
-        params: {
-          fields: JSON.stringify(['company']),
-          filters: JSON.stringify([['user_id', '=', sessionEmail]]),
-          limit_page_length: 1,
-        },
-      });
-
-      const employees = res?.data?.data || [];
-      if (employees.length === 0) {
-        return null;
-      }
-
-      const company = employees[0]?.company;
-      return company || null;
+      // Use the improved getFrappeCompanyForUser function
+      return await getFrappeCompanyForUser(userEmail);
     }
 
-    // Query Employee doctype with user_id filter
-    const res = await frappe.get('/api/resource/Employee', {
-      params: {
-        fields: JSON.stringify(['company']),
-        filters: JSON.stringify([['user_id', '=', userEmail]]),
-        limit_page_length: 1,
-      },
-    });
-
-    const employees = res?.data?.data || [];
-    if (employees.length === 0) {
-      return null;
-    }
-
-    const company = employees[0]?.company;
-    return company || null;
+    // Use the improved getFrappeCompanyForUser function
+    return await getFrappeCompanyForUser(userEmail);
   } catch (err) {
     console.error('[frappeClient] Error getting user company from Employee:', err);
     return null;
@@ -633,28 +678,159 @@ export async function getFrappeUserCompany(): Promise<string | null> {
  */
 export async function getFrappeCompanyForUser(userEmail: string): Promise<string | null> {
   try {
-    const frappe = createFrappeClient();
+    const frappe = createFrappeClient(true); // Use API key auth for broader permissions
     
     if (!userEmail) {
       return null;
     }
 
-    // Query Employee doctype with user_id filter
-    const res = await frappe.get('/api/resource/Employee', {
-      params: {
-        fields: JSON.stringify(['company']),
-        filters: JSON.stringify([['user_id', '=', userEmail]]),
-        limit_page_length: 1,
-      },
-    });
+    // Extract username part (before @) in case user_id stores just the username
+    const username = userEmail.split('@')[0];
 
-    const employees = res?.data?.data || [];
-    if (employees.length === 0) {
+    // Helper function to extract company string from various formats
+    const extractCompanyString = (companyValue: any): string | null => {
+      if (!companyValue) return null;
+      
+      // Handle string directly
+      if (typeof companyValue === 'string') {
+        return companyValue.trim() || null;
+      }
+      
+      // Handle object with name property
+      if (typeof companyValue === 'object' && companyValue.name) {
+        return typeof companyValue.name === 'string' ? companyValue.name.trim() : null;
+      }
+      
+      // Handle object - try to find string value
+      if (typeof companyValue === 'object') {
+        const stringValue = Object.values(companyValue).find((v: any) => typeof v === 'string' && v.trim());
+        return stringValue ? (stringValue as string).trim() : null;
+      }
+      
       return null;
+    };
+
+    // Approach 1: Query by full email in user_id field
+    try {
+      const res = await frappe.get('/api/resource/Employee', {
+        params: {
+          fields: JSON.stringify(['company', 'user_id', 'name']),
+          filters: JSON.stringify([['user_id', '=', userEmail]]),
+          limit_page_length: 1,
+        },
+      });
+
+      const employees = res?.data?.data || [];
+      if (employees.length > 0) {
+        const companyValue = employees[0]?.company || null;
+        if (companyValue) {
+          const extractedCompany = extractCompanyString(companyValue);
+          if (extractedCompany) {
+            console.log(`[frappeClient] Found company via user_id (email) for ${userEmail}: ${extractedCompany}`);
+            return extractedCompany;
+          }
+        }
+      }
+    } catch (err1) {
+      console.warn(`[frappeClient] Failed to query Employee by email user_id: ${err1}`);
     }
 
-    const company = employees[0]?.company;
-    return company || null;
+    // Approach 2: Query by username (before @) in user_id field
+    try {
+      const res = await frappe.get('/api/resource/Employee', {
+        params: {
+          fields: JSON.stringify(['company', 'user_id', 'name']),
+          filters: JSON.stringify([['user_id', '=', username]]),
+          limit_page_length: 1,
+        },
+      });
+
+      const employees = res?.data?.data || [];
+      if (employees.length > 0) {
+        const companyValue = employees[0]?.company || null;
+        if (companyValue) {
+          const extractedCompany = extractCompanyString(companyValue);
+          if (extractedCompany) {
+            console.log(`[frappeClient] Found company via user_id (username) for ${userEmail}: ${extractedCompany}`);
+            return extractedCompany;
+          }
+        }
+      }
+    } catch (err2) {
+      console.warn(`[frappeClient] Failed to query Employee by username user_id: ${err2}`);
+    }
+
+    // Approach 3: Query by email in name field (some setups use email as Employee name)
+    try {
+      const res = await frappe.get('/api/resource/Employee', {
+        params: {
+          fields: JSON.stringify(['company', 'user_id', 'name']),
+          filters: JSON.stringify([['name', '=', userEmail]]),
+          limit_page_length: 1,
+        },
+      });
+
+      const employees = res?.data?.data || [];
+      if (employees.length > 0) {
+        const companyValue = employees[0]?.company || null;
+        if (companyValue) {
+          const extractedCompany = extractCompanyString(companyValue);
+          if (extractedCompany) {
+            console.log(`[frappeClient] Found company via name (email) for ${userEmail}: ${extractedCompany}`);
+            return extractedCompany;
+          }
+        }
+      }
+    } catch (err3) {
+      console.warn(`[frappeClient] Failed to query Employee by name (email): ${err3}`);
+    }
+
+    // Approach 4: Try method endpoint with email
+    try {
+      const methodRes = await frappe.get('/api/method/frappe.client.get_value', {
+        params: {
+          doctype: 'Employee',
+          filters: JSON.stringify({ user_id: userEmail }),
+          fieldname: 'company',
+        },
+      });
+
+      if (methodRes?.data?.message) {
+        const companyValue = methodRes.data.message;
+        const extractedCompany = extractCompanyString(companyValue);
+        if (extractedCompany) {
+          console.log(`[frappeClient] Found company via get_value (email) for ${userEmail}: ${extractedCompany}`);
+          return extractedCompany;
+        }
+      }
+    } catch (methodErr) {
+      console.warn(`[frappeClient] Method endpoint failed for Employee (email): ${methodErr}`);
+    }
+
+    // Approach 5: Try method endpoint with username
+    try {
+      const methodRes = await frappe.get('/api/method/frappe.client.get_value', {
+        params: {
+          doctype: 'Employee',
+          filters: JSON.stringify({ user_id: username }),
+          fieldname: 'company',
+        },
+      });
+
+      if (methodRes?.data?.message) {
+        const companyValue = methodRes.data.message;
+        const extractedCompany = extractCompanyString(companyValue);
+        if (extractedCompany) {
+          console.log(`[frappeClient] Found company via get_value (username) for ${userEmail}: ${extractedCompany}`);
+          return extractedCompany;
+        }
+      }
+    } catch (methodErr2) {
+      console.warn(`[frappeClient] Method endpoint failed for Employee (username): ${methodErr2}`);
+    }
+
+    console.warn(`[frappeClient] Could not find Employee record for user ${userEmail} (tried email and username)`);
+    return null;
   } catch (err) {
     console.error('[frappeClient] Error getting company for user from Employee:', err);
     return null;

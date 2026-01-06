@@ -162,19 +162,17 @@ async function syncUserRoles() {
         // Get role_profile_name from Frappe (not roles list)
         const roleProfile = await getFrappeRoleProfileForEmail(email);
         
-        // Determine new role based on role_profile_name
-        // If role_profile_name is "SuperAdmin", user is a Client
-        const isClient = roleProfile === 'SuperAdmin';
-        const newRole: 'Client' | 'Freelancer' = isClient ? 'Client' : 'Freelancer';
+        // Store role_profile_name directly from Frappe (not converted)
+        const newRole = roleProfile || null;
 
         // Only update if role has changed
         if (currentRole === newRole) {
-          console.log(`  ✓ Role unchanged (${newRole})${roleProfile ? ` [role_profile: ${roleProfile}]` : ''}\n`);
+          console.log(`  ✓ Role unchanged (${newRole || 'null'})\n`);
           unchanged++;
           continue;
         }
 
-        // Update role in Supabase
+        // Update role in Supabase - store role_profile_name directly
         const { error: updateError } = await supabase
           .from('users')
           .update({ role: newRole })
@@ -184,7 +182,7 @@ async function syncUserRoles() {
           console.error(`  ❌ Error updating role: ${updateError.message}\n`);
           errors++;
         } else {
-          console.log(`  ✅ Updated: ${currentRole || 'null'} → ${newRole}${roleProfile ? ` (role_profile: ${roleProfile})` : ' (no role_profile)'}\n`);
+          console.log(`  ✅ Updated: ${currentRole || 'null'} → ${newRole || 'null'}\n`);
           updated++;
         }
       } catch (err: any) {

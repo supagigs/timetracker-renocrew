@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { upsertClientFreelancerInterval } from '@/lib/clientSettings';
+import { upsertManagerEmployeeInterval } from '@/lib/clientSettings';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { getFrappeCompanyForUser } from '@/lib/frappeClient';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
@@ -8,15 +8,15 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
 
-    const clientEmail =
-      typeof body.clientEmail === 'string' ? body.clientEmail : '';
-    const freelancerEmail =
-      typeof body.freelancerEmail === 'string' ? body.freelancerEmail : '';
+    const managerEmail =
+      typeof body.managerEmail === 'string' ? body.managerEmail : '';
+    const employeeEmail =
+      typeof body.employeeEmail === 'string' ? body.employeeEmail : '';
     const intervalSeconds = Number(body.intervalSeconds);
 
     if (
-      !clientEmail ||
-      !freelancerEmail ||
+      !managerEmail ||
+      !employeeEmail ||
       !Number.isFinite(intervalSeconds) ||
       intervalSeconds <= 0
     ) {
@@ -26,42 +26,42 @@ export async function POST(request: Request) {
       );
     }
 
-    // Validate that freelancer is from the same company as client
-    const clientProfile = await fetchUserProfile(clientEmail);
-    if (!clientProfile || clientProfile.role !== 'Client') {
+    // Validate that employee is from the same company as manager
+    const managerProfile = await fetchUserProfile(managerEmail);
+    if (!managerProfile || managerProfile.role !== 'Manager') {
       return NextResponse.json(
-        { error: 'Unauthorized: Client access required' },
+        { error: 'Unauthorized: Manager access required' },
         { status: 403 },
       );
     }
 
-    const clientCompany = clientProfile.company;
-    if (clientCompany) {
-      // Check freelancer's company from Frappe
-      const freelancerCompany = await getFrappeCompanyForUser(freelancerEmail);
+    const managerCompany = managerProfile.company;
+    if (managerCompany) {
+      // Check employee's company from Frappe
+      const employeeCompany = await getFrappeCompanyForUser(employeeEmail);
       
       // Also check Supabase as fallback
       const supabase = createServerSupabaseClient();
       const { data: userData } = await supabase
         .from('users')
         .select('company')
-        .eq('email', freelancerEmail)
+        .eq('email', employeeEmail)
         .maybeSingle();
       
-      const freelancerCompanyFromDb = userData?.company || freelancerCompany;
+      const employeeCompanyFromDb = userData?.company || employeeCompany;
       
       // Only allow if company matches
-      if (freelancerCompanyFromDb !== clientCompany) {
+      if (employeeCompanyFromDb !== managerCompany) {
         return NextResponse.json(
-          { error: 'Unauthorized: Freelancer must be from the same company' },
+          { error: 'Unauthorized: Employee must be from the same company' },
           { status: 403 },
         );
       }
     }
 
-    const settings = await upsertClientFreelancerInterval(
-      clientEmail,
-      freelancerEmail,
+    const settings = await upsertManagerEmployeeInterval(
+      managerEmail,
+      employeeEmail,
       intervalSeconds,
     );
 

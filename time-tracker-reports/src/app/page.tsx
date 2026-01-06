@@ -6,8 +6,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard";
 import { WEB_USER_STORAGE_KEY } from "@/lib/constants";
+import { determineRoleFromRoleProfile } from "@/lib/frappeClient";
 
-type Role = "Client" | "Freelancer" | null;
+type Role = "Manager" | "Employee" | null;
 
 type AuthenticatedUser = {
   email: string;
@@ -56,7 +57,9 @@ export default function Home() {
     }
 
     const normalized = normalizeUser(saved);
-    const isClientUser = normalized.role === "Client";
+    // Convert role_profile_name to Manager/Employee for logic
+    const convertedRole = determineRoleFromRoleProfile(normalized.role);
+    const isManagerUser = convertedRole === "Manager";
 
     const restoreSession = () => {
       setUser({ ...normalized, projects: normalized.projects ?? [] });
@@ -246,12 +249,12 @@ const normalizeRole = (role: Role | string | null | undefined): Role => {
 
   const normalized = role.toString().trim().toLowerCase();
 
-  if (normalized === "client") {
-    return "Client";
+  if (normalized === "manager") {
+    return "Manager";
   }
 
-  if (normalized === "freelancer") {
-    return "Freelancer";
+  if (normalized === "employee") {
+    return "Employee";
   }
 
   return null;

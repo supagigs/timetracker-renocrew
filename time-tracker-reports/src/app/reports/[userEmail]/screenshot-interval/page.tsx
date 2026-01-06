@@ -1,7 +1,7 @@
 import { DashboardShell } from '@/components/dashboard';
 import { ScreenshotIntervalForm } from '@/components/ScreenshotIntervalForm';
-import FreelancerSelector from '@/components/FreelancerSelector';
-import { getClientSettings } from '@/lib/clientSettings';
+import EmployeeSelector from '@/components/FreelancerSelector';
+import { getManagerSettings } from '@/lib/clientSettings';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { redirect } from 'next/navigation';
 
@@ -20,8 +20,8 @@ export default async function ScreenshotIntervalPage({
   ]);
   const decodedEmail = decodeURIComponent(userEmail);
 
-  const selectedFreelancerEmail = (() => {
-    const value = resolvedSearchParams?.freelancer;
+  const selectedEmployeeEmail = (() => {
+    const value = resolvedSearchParams?.employee;
     if (Array.isArray(value)) return value[0];
     return value ?? null;
   })();
@@ -46,42 +46,42 @@ export default async function ScreenshotIntervalPage({
     );
   }
 
-  if (profile.role !== 'Client') {
+  if (profile.role !== 'Manager') {
     redirect(`/reports/${encodeURIComponent(decodedEmail)}`);
   }
 
-  // Validate that selected freelancer is from the same company
-  if (selectedFreelancerEmail && profile.company) {
+  // Validate that selected employee is from the same company
+  if (selectedEmployeeEmail && profile.company) {
     const { getFrappeCompanyForUser } = await import('@/lib/frappeClient');
     const { createServerSupabaseClient } = await import('@/lib/supabaseServer');
-    const freelancerCompany = await getFrappeCompanyForUser(selectedFreelancerEmail);
+    const employeeCompany = await getFrappeCompanyForUser(selectedEmployeeEmail);
     
     // Also check Supabase as fallback
     const supabase = createServerSupabaseClient();
     const { data: userData } = await supabase
       .from('users')
       .select('company')
-      .eq('email', selectedFreelancerEmail)
+      .eq('email', selectedEmployeeEmail)
       .maybeSingle();
     
-    const freelancerCompanyFromDb = userData?.company || freelancerCompany;
+    const employeeCompanyFromDb = userData?.company || employeeCompany;
     
     // Only allow if company matches, otherwise redirect
-    if (freelancerCompanyFromDb !== profile.company) {
+    if (employeeCompanyFromDb !== profile.company) {
       redirect(`/reports/${encodeURIComponent(decodedEmail)}/screenshot-interval`);
     }
   }
 
-  const existingSettings = await getClientSettings(decodedEmail);
+  const existingSettings = await getManagerSettings(decodedEmail);
 
-  const perFreelancerInterval =
-    selectedFreelancerEmail && existingSettings?.freelancer_intervals
-      ? existingSettings.freelancer_intervals[
-          selectedFreelancerEmail.trim().toLowerCase()
+  const perEmployeeInterval =
+    selectedEmployeeEmail && existingSettings?.employee_intervals
+      ? existingSettings.employee_intervals[
+          selectedEmployeeEmail.trim().toLowerCase()
         ]
       : undefined;
 
-  const intervalSeconds = perFreelancerInterval ?? DEFAULT_INTERVAL_SECONDS;
+  const intervalSeconds = perEmployeeInterval ?? DEFAULT_INTERVAL_SECONDS;
 
   return (
     <DashboardShell
@@ -100,34 +100,34 @@ export default async function ScreenshotIntervalPage({
         </header>
 
         <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <FreelancerSelector
-            clientEmail={decodedEmail}
-            currentFreelancerEmail={selectedFreelancerEmail ?? undefined}
+          <EmployeeSelector
+            managerEmail={decodedEmail}
+            currentEmployeeEmail={selectedEmployeeEmail ?? undefined}
             autoSelectFirst={false}
           />
         </section>
 
-        {selectedFreelancerEmail && (
+        {selectedEmployeeEmail && (
           <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
             <p className="text-sm font-medium text-primary">
               Managing settings for:{' '}
-              <strong>{selectedFreelancerEmail}</strong>
+              <strong>{selectedEmployeeEmail}</strong>
             </p>
           </div>
         )}
 
-        {selectedFreelancerEmail ? (
+        {selectedEmployeeEmail ? (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm max-w-xl">
             <ScreenshotIntervalForm
-              clientEmail={decodedEmail}
-              freelancerEmail={selectedFreelancerEmail}
+              managerEmail={decodedEmail}
+              employeeEmail={selectedEmployeeEmail}
               initialIntervalSeconds={intervalSeconds}
             />
           </section>
         ) : (
           <section className="rounded-2xl border border-yellow-200 bg-yellow-50 p-6">
             <p className="text-sm text-yellow-800">
-              Please select a freelancer from the dropdown above to manage their
+              Please select an employee from the dropdown above to manage their
               screenshot settings.
             </p>
           </section>

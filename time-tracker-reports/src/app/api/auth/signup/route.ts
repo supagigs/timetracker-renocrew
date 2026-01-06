@@ -4,8 +4,8 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 type SignupPayload = {
   email: string;
   displayName?: string;
-  // Role is no longer chosen by the user – all accounts are treated as freelancers.
-  role?: 'Freelancer';
+  // Role is no longer chosen by the user – all accounts are treated as employees.
+  role?: 'Employee';
   projects: string[];
 };
 
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
         email: payload.email,
         display_name: payload.displayName ?? null,
         // Force the single user type for all new accounts
-        role: 'Freelancer',
+        role: 'Employee',
       })
       .select('id, email, display_name, role, created_at')
       .single();
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Projects were previously only stored for clients. With a single freelancer
+    // Projects were previously only stored for managers. With a single employee
     // user type we skip automatic project creation here and let the desktop app
     // manage projects directly.
     const savedProjects: string[] = [];
@@ -93,8 +93,8 @@ function normalizePayload(raw: Partial<SignupPayload>): SignupPayload {
   const displayName = typeof raw.displayName === 'string' && raw.displayName.trim().length > 0
     ? raw.displayName.trim()
     : undefined;
-  // Ignore any role provided by callers – everything is treated as 'Freelancer'.
-  const role: SignupPayload['role'] = 'Freelancer';
+  // Ignore any role provided by callers – everything is treated as 'Employee'.
+  const role: SignupPayload['role'] = 'Employee';
   const projectsInput = Array.isArray(raw.projects) ? raw.projects : [];
 
   const projects = Array.from(new Set(

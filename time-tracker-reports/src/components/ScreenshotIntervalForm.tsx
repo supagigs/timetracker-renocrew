@@ -20,14 +20,14 @@ const DELETE_OPTIONS: Array<{ label: string; days: number }> = [
 ];
 
 type ScreenshotIntervalFormProps = {
-  clientEmail: string;
-  freelancerEmail: string;
+  managerEmail: string;
+  employeeEmail: string;
   initialIntervalSeconds: number;
 };
 
 export function ScreenshotIntervalForm({
-  clientEmail,
-  freelancerEmail,
+  managerEmail,
+  employeeEmail,
   initialIntervalSeconds,
 }: ScreenshotIntervalFormProps) {
   const [selected, setSelected] = useState<number>(initialIntervalSeconds);
@@ -40,7 +40,7 @@ export function ScreenshotIntervalForm({
   const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
-  // Keep select in sync when parent changes freelancer / initial value
+  // Keep select in sync when parent changes employee / initial value
   useEffect(() => {
     setSelected(initialIntervalSeconds);
   }, [initialIntervalSeconds]);
@@ -52,12 +52,12 @@ export function ScreenshotIntervalForm({
     setError(null);
 
     try {
-      const response = await fetch('/api/client-settings/screenshot-interval', {
+      const response = await fetch('/api/manager-settings/screenshot-interval', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          clientEmail,
-          freelancerEmail,          // ✅ per‑freelancer
+          managerEmail,
+          employeeEmail,          // ✅ per‑employee
           intervalSeconds: selected,
         }),
       });
@@ -72,21 +72,21 @@ export function ScreenshotIntervalForm({
 
       // Optional: normalize from server response
       const settings = payload.settings as {
-        freelancer_intervals?: Record<string, number>;
+        employee_intervals?: Record<string, number>;
       };
-      const key = freelancerEmail.trim().toLowerCase();
-      const perFreelancerFromServer = Number(
-        settings?.freelancer_intervals?.[key],
+      const key = employeeEmail.trim().toLowerCase();
+      const perEmployeeFromServer = Number(
+        settings?.employee_intervals?.[key],
       );
       if (
-        Number.isFinite(perFreelancerFromServer) &&
-        perFreelancerFromServer > 0
+        Number.isFinite(perEmployeeFromServer) &&
+        perEmployeeFromServer > 0
       ) {
-        setSelected(perFreelancerFromServer);
+        setSelected(perEmployeeFromServer);
       }
 
       setMessage(
-        'Screenshot interval updated for this freelancer. New captures will follow this setting.',
+        'Screenshot interval updated for this employee. New captures will follow this setting.',
       );
     } catch (err) {
       console.error('[ScreenshotIntervalForm] Failed to save interval:', err);
@@ -101,8 +101,8 @@ export function ScreenshotIntervalForm({
 
     console.log('[handleDelete] Starting deletion with:', {
       days: deleteDays,
-      clientEmail,
-      freelancerEmail,
+      managerEmail,
+      employeeEmail,
     });
 
     setDeleting(true);
@@ -112,8 +112,8 @@ export function ScreenshotIntervalForm({
     try {
       const requestBody = {
         days: deleteDays,
-        clientEmail,
-        freelancerEmail,
+        managerEmail,
+        employeeEmail,
       };
 
       console.log('[handleDelete] Request body:', requestBody);
@@ -140,7 +140,7 @@ export function ScreenshotIntervalForm({
       const filesDeleted = result.filesDeleted ?? 0;
 
       setDeleteMsg(
-        `Successfully deleted ${deletedCount} screenshot(s) and ${filesDeleted} file(s) older than ${deleteDays} days for ${freelancerEmail}.`,
+        `Successfully deleted ${deletedCount} screenshot(s) and ${filesDeleted} file(s) older than ${deleteDays} days for ${employeeEmail}.`,
       );
     } catch (err: any) {
       console.error('[handleDelete] Error:', err);

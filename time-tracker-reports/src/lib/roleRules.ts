@@ -6,14 +6,14 @@ export const ROLE_ROUTES = {
   'SuperAdmin': [
     '/reports',
     '/reports/[userEmail]',
-    '/reports/[userEmail]/freelancers',
+    '/reports/[userEmail]/employees',
     '/reports/[userEmail]/reports',
     '/reports/[userEmail]/projects',
     '/reports/[userEmail]/screenshots',
     '/reports/[userEmail]/screenshot-interval',
     '/reports/[userEmail]/timesheet',
   ],
-  'Freelancer': [
+  'Employee': [
     '/reports',
     '/reports/[userEmail]',
     '/reports/[userEmail]/reports',
@@ -24,7 +24,7 @@ export const ROLE_ROUTES = {
 
 /**
  * Check if a route is accessible for a given role profile
- * @param roleProfile - User's role profile from Frappe (e.g., 'SuperAdmin', 'Freelancer')
+ * @param roleProfile - User's role profile from Frappe (e.g., 'SuperAdmin', 'Employee')
  * @param pathname - Route pathname to check
  * @returns true if route is accessible, false otherwise
  */
@@ -62,7 +62,7 @@ export function getDefaultRouteForRole(roleProfile: string | null): string {
   if (roleProfile === 'SuperAdmin') {
     return '/reports';
   }
-  if (roleProfile === 'Freelancer') {
+  if (roleProfile === 'Employee') {
     return '/reports';
   }
   return '/login';

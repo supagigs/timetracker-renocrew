@@ -1,6 +1,6 @@
 import SummaryCard from '@/components/SummaryCard';
 import WeeklyActivityChart from '@/components/WeeklyActivityChart';
-import FreelancerSelector from '@/components/FreelancerSelector';
+import EmployeeSelector from '@/components/FreelancerSelector';
 import { DashboardShell } from '@/components/dashboard';
 import { ReportsRealtimeWatcher } from '@/components/ReportsRealtimeWatcher';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
@@ -8,6 +8,7 @@ import { fetchUserProfile } from '@/lib/userProfile';
 import { redirect } from 'next/navigation';
 import { format } from 'date-fns';
 import { type DateRange, normalizeDateRange } from '@/lib/dateRange';
+import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
 
 type TimeSession = {
   id: number;
@@ -225,11 +226,13 @@ export default async function ReportsAnalyticsPage({
     );
   }
 
-  const isClient = profile.role === 'Client';
-  const isFreelancer = profile.role === 'Freelancer';
+  // Convert role_profile_name to Manager/Employee for logic
+  const convertedRole = determineRoleFromRoleProfile(profile.role);
+  const isManager = convertedRole === 'Manager';
+  const isEmployee = convertedRole === 'Employee';
 
-  const requestedFreelancer = (() => {
-    const value = resolvedSearchParams?.freelancer;
+  const requestedEmployee = (() => {
+    const value = resolvedSearchParams?.employee;
     if (Array.isArray(value)) {
       return value[0];
     }
@@ -238,11 +241,11 @@ export default async function ReportsAnalyticsPage({
 
   let targetEmail = profile.email;
 
-  if (isClient) {
-    if (requestedFreelancer) {
-      targetEmail = requestedFreelancer;
+  if (isManager) {
+    if (requestedEmployee) {
+      targetEmail = requestedEmployee;
     }
-  } else if (!isFreelancer) {
+  } else if (!isEmployee) {
     // Unsupported role, redirect to overview
     redirect(`/reports/${encodeURIComponent(profile.email)}`);
   }
@@ -276,7 +279,7 @@ export default async function ReportsAnalyticsPage({
           <h1 className="text-3xl font-bold text-foreground">Reports</h1>
           <p className="text-sm text-muted-foreground">
             Detailed analytics for the selected date range
-            {isClient && requestedFreelancer ? ` · ${requestedFreelancer}` : ''}.
+            {isManager && requestedEmployee ? ` · ${requestedEmployee}` : ''}.
           </p>
         </header>
 
@@ -311,8 +314,8 @@ export default async function ReportsAnalyticsPage({
                 min={dateRange.start}
               />
             </div>
-            {isClient && requestedFreelancer ? (
-              <input type="hidden" name="freelancer" value={requestedFreelancer} />
+            {isManager && requestedEmployee ? (
+              <input type="hidden" name="employee" value={requestedEmployee} />
             ) : null}
             <button
               type="submit"
@@ -323,15 +326,15 @@ export default async function ReportsAnalyticsPage({
           </form>
         </section>
 
-        {isClient && (
+        {isManager && (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <p className="text-sm text-muted-foreground">
-              Switch between your assigned freelancers to review their recent activity.
+              Switch between your assigned employees to review their recent activity.
             </p>
             <div className="mt-6">
-              <FreelancerSelector
-                clientEmail={profile.email}
-                currentFreelancerEmail={requestedFreelancer ?? undefined}
+              <EmployeeSelector
+                managerEmail={profile.email}
+                currentEmployeeEmail={requestedEmployee ?? undefined}
                 redirectBasePath={`/reports/${encodeURIComponent(profile.email)}/reports`}
                 autoSelectFirst={false}
               />
