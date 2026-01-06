@@ -65,22 +65,8 @@ async function fetchClientFreelancers(clientEmail: string, clientCompany: string
     nameMap.set(row.email, row.display_name ?? null);
   });
 
-  const { data: sessionStates, error: sessionStateError } = await supabase
-    .from('user_sessions')
-    .select('email, app_logged_in, updated_at')
-    .in('email', freelancerEmails);
-
-  if (sessionStateError) {
-    console.warn('[client-freelancers] Failed to fetch session states:', sessionStateError);
-  }
-
+  // No-op: user_sessions table is no longer used
   const sessionStateMap = new Map<string, { app_logged_in: boolean | null; updated_at: string | null }>();
-  (sessionStates ?? []).forEach((row) => {
-    sessionStateMap.set(row.email, {
-      app_logged_in: row.app_logged_in ?? null,
-      updated_at: row.updated_at ?? null,
-    });
-  });
 
   const endDate = new Date();
   const startDate = new Date();
@@ -127,14 +113,8 @@ async function fetchClientFreelancers(clientEmail: string, clientCompany: string
       ? lastSession.end_time ?? lastSession.start_time ?? null
       : null;
 
-    const sessionState = sessionStateMap.get(email);
-    const updatedAtMs = sessionState?.updated_at ? Date.parse(sessionState.updated_at) : Number.NaN;
-    const isStatusRecent = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs < 1000 * 60 * 60 * 6 : false;
-
-    const lastActiveAt = Number.isFinite(updatedAtMs)
-      ? new Date(updatedAtMs).toISOString()
-      : lastSessionTimestamp;
-
+    // No-op: user_sessions table is no longer used
+    // Determine status based on time_sessions only
     const activeSession = memberSessions.find(
       (session) => session.end_time === null && session.session_date === todayStr,
     );
@@ -142,11 +122,13 @@ async function fetchClientFreelancers(clientEmail: string, clientCompany: string
     let status: FreelancerSummary['status'] = 'no-data';
     if (memberSessions.length === 0) {
       status = 'no-data';
-    } else if (sessionState?.app_logged_in === true && (activeSession || isStatusRecent)) {
+    } else if (activeSession) {
       status = 'active';
     } else {
       status = 'offline';
     }
+
+    const lastActiveAt = lastSessionTimestamp;
 
     return {
       email,

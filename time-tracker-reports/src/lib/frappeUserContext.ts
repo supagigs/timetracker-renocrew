@@ -1,4 +1,4 @@
-import { createServerSupabaseClient } from '@/lib/supabaseServer';
+// No-op: user_context table is no longer used
 
 /**
  * Sync user context from Frappe and cache it in Supabase
@@ -47,29 +47,8 @@ export async function syncUserContextFromFrappe() {
     throw new Error('Invalid user context from Frappe');
   }
 
-  const supabase = createServerSupabaseClient();
-
-  // Upsert user context to cache
-  const { error: upsertError } = await supabase
-    .from('user_context')
-    .upsert(
-      {
-        email: context.email,
-        full_name: context.full_name || null,
-        role_profile: context.role_profile || null,
-        company: context.company || null,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: 'email',
-      }
-    );
-
-  if (upsertError) {
-    console.error('[frappeUserContext] Failed to upsert user context:', upsertError);
-    // Don't throw - return context even if cache update fails
-  }
-
+  // No-op: user_context table is no longer used
+  // Return context without caching
   return context;
 }
 

@@ -16,27 +16,7 @@ export type CachedUserContext = {
  * @returns Cached user context or null if not found
  */
 export async function getCachedUserContext(email: string): Promise<CachedUserContext | null> {
-  if (!email) {
-    return null;
-  }
-
-  const supabase = createServerSupabaseClient();
-
-  const { data, error } = await supabase
-    .from('user_context')
-    .select('*')
-    .eq('email', email.trim().toLowerCase())
-    .maybeSingle();
-
-  if (error) {
-    // If table doesn't exist, return null (non-fatal)
-    if (error.code === '42P01' || error.code === 'PGRST116') {
-      return null;
-    }
-    console.error('[getCachedUserContext] Error fetching cached context:', error);
-    return null;
-  }
-
-  return data;
+  // No-op: user_context table is no longer used
+  return null;
 }
 

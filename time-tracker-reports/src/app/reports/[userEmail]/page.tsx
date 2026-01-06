@@ -137,19 +137,8 @@ async function fetchClientTeamMembers(clientEmail: string, clientCompany: string
     userMap.set(user.email, user.display_name ?? null);
   });
 
-  const { data: sessionStates, error: sessionStateError } = await supabase
-    .from('user_sessions')
-    .select('email, app_logged_in, updated_at')
-    .in('email', uniqueFreelancerEmails);
-
-  if (sessionStateError) {
-    console.warn('Error fetching user session states:', sessionStateError);
-  }
-
+  // No-op: user_sessions table is no longer used
   const sessionStateMap = new Map<string, { app_logged_in: boolean | null; updated_at: string | null }>();
-  (sessionStates ?? []).forEach((row) => {
-    sessionStateMap.set(row.email, { app_logged_in: row.app_logged_in ?? null, updated_at: row.updated_at ?? null });
-  });
 
   const endDate = new Date();
   const startDate = new Date();
@@ -196,26 +185,14 @@ async function fetchClientTeamMembers(clientEmail: string, clientCompany: string
       ? lastSession.end_time ?? lastSession.start_time ?? null
       : null;
 
-    const sessionState = sessionStateMap.get(email);
-    const updatedAtMs = sessionState?.updated_at ? Date.parse(sessionState.updated_at) : Number.NaN;
-    const isStatusRecent = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs < 1000 * 60 * 60 * 6 : false;
-
-    const lastActiveAt = Number.isFinite(updatedAtMs)
-      ? new Date(updatedAtMs).toISOString()
-      : lastSessionTimestamp;
-
+    // No-op: user_sessions table is no longer used
+    // Determine active session based on time_sessions only
     const activeSession = memberSessions.find(
       (session) => session.end_time === null && session.session_date === todayStr,
     );
 
-    let hasActiveSession = false;
-    if (sessionState?.app_logged_in === false) {
-      hasActiveSession = false;
-    } else if (sessionState?.app_logged_in === true) {
-      hasActiveSession = Boolean(activeSession) || isStatusRecent;
-    } else {
-      hasActiveSession = Boolean(activeSession);
-    }
+    const hasActiveSession = Boolean(activeSession);
+    const lastActiveAt = lastSessionTimestamp;
 
     return {
       email,

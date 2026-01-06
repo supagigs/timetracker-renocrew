@@ -32,60 +32,8 @@ export default function Home() {
 
   const updateWebSession = useCallback(
     async (email: string, loggedIn: boolean) => {
-      try {
-        const res = await fetch('/api/session/update', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email,
-            web_logged_in: loggedIn,
-          }),
-        });
-
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`API failed: ${res.status} ${text}`);
-        }
-
-        // Some APIs return no body
-        const text = await res.text();
-        if (!text) {
-          console.warn('[page] updateWebSession: empty response');
-          return;
-        }
-
-        const data = JSON.parse(text);
-
-        if (!data || Object.keys(data).length === 0) {
-          console.warn('[page] updateWebSession: empty JSON payload');
-          return;
-        }
-
-        // Success - data contains the updated session state
-        console.log('[page] updateWebSession: success', data);
-      } catch (err) {
-        // Log the real failure with full context
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        const errorStack = err instanceof Error ? err.stack : undefined;
-        
-        // Check if it's an authentication error
-        const isAuthError = errorMessage.includes('authentication') || 
-                            errorMessage.includes('API key') || 
-                            errorMessage.includes('SUPABASE_SERVICE_ROLE_KEY');
-        
-        if (isAuthError) {
-          console.error(
-            '[page] Failed to update web session state - Authentication Error:', 
-            errorMessage,
-            '\n💡 Hint: Check your .env.local file and ensure SUPABASE_SERVICE_ROLE_KEY is set correctly.'
-          );
-        } else {
-          console.warn('[page] Failed to update web session state (non-critical):', errorMessage);
-        }
-        
-        // Don't throw - this is a non-critical operation
-        // The app should continue to work even if session state update fails
-      }
+      // No-op: user_sessions table is no longer used
+      // Session state updates are no longer tracked
     },
     [],
   );

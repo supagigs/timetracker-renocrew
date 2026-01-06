@@ -1,10 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter , useSearchParams } from "next/navigation";
 
-import { createSupabaseBrowserClient } from "@/lib/supabaseBrowser";
-import { setUserSessionState } from "@/lib/userSessions";
 import { WEB_USER_STORAGE_KEY } from "@/lib/constants";
 
 type StoredUser = {
@@ -13,7 +11,6 @@ type StoredUser = {
 };
 
 export default function LogoutPage() {
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const searchParams = useSearchParams();
   const router = useRouter();
   const [status, setStatus] = useState<"pending" | "complete">("pending");
@@ -28,7 +25,8 @@ export default function LogoutPage() {
         if (raw) {
           const stored = JSON.parse(raw) as StoredUser | null;
           if (stored?.email) {
-            await setUserSessionState(supabase, stored.email, { web_logged_in: false });
+            // No-op: user_sessions table is no longer used
+            // await setUserSessionState(supabase, stored.email, { web_logged_in: false });
           }
         }
       } catch (error) {
@@ -63,7 +61,7 @@ export default function LogoutPage() {
     return () => {
       active = false;
     };
-  }, [supabase, router]);
+  }, [router]);
 
   const headline =
     origin === "app"
