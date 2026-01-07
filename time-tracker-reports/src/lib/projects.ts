@@ -4,6 +4,7 @@ import { createServerSupabaseClient } from './supabaseServer';
 export type ProjectRecord = {
   id: number;
   name: string;
+  frappeProjectId?: string; // Frappe project ID (e.g., "PROJ-0021")
   description: string | null;
   createdAt: string | null;
   managerEmail?: string | null;
@@ -19,9 +20,9 @@ export async function fetchManagerProjects({
   userId: number | null;
   company?: string | null;
 }): Promise<ProjectRecord[]> {
-  // For managers, fetch projects from Frappe filtered by company
+  // For managers, fetch ALL projects from Frappe (not filtered by company)
   try {
-    const frappeProjects = await getAllFrappeProjects(company || undefined);
+    const frappeProjects = await getAllFrappeProjects(); // No company filter - get all projects
     
     // Store projects in database if user_id is available
     if (userId && frappeProjects.length > 0) {
@@ -51,6 +52,7 @@ export async function fetchManagerProjects({
     return frappeProjects.map((project, index) => ({
       id: index + 1, // Use index as ID since Frappe projects don't have numeric IDs
       name: project.name,
+      frappeProjectId: project.id, // Store the Frappe project ID for later use
       description: null,
       managerEmail: null,
       managerName: null,

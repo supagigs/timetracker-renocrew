@@ -8,7 +8,7 @@ import { fetchUserProfile } from '@/lib/userProfile';
 import { redirect } from 'next/navigation';
 import { format } from 'date-fns';
 import { type DateRange, normalizeDateRange } from '@/lib/dateRange';
-import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
+import { determineRoleFromRoleProfile, getAllFrappeProjects } from '@/lib/frappeClient';
 
 type TimeSession = {
   id: number;
@@ -19,6 +19,7 @@ type TimeSession = {
   break_duration: number;
   idle_duration: number | null;
   project_id: number | null;
+  frappe_project_id: string | null;
   projects?: {
     id: number;
     project_name: string;
@@ -121,7 +122,7 @@ function buildProjectSummary(sessions: TimeSession[], projectNamesMap: Map<strin
   const projectMap = new Map<string, { name: string; totalSeconds: number }>();
 
   sessions.forEach((session) => {
-    const projectId = (session as any).frappe_project_id;
+    const projectId = session.frappe_project_id;
     if (projectId) {
       const projectName = projectNamesMap.get(projectId) || projectId || 'Untitled project';
       const activeDuration = session.active_duration ?? 0;
@@ -154,16 +155,36 @@ function buildProjectSummary(sessions: TimeSession[], projectNamesMap: Map<strin
 async function fetchSessionsInRange(userEmail: string, dateRange: DateRange): Promise<TimeSession[]> {
   const supabase = createServerSupabaseClient();
 
-  const { data, error } = await supabase
+  // Try to select frappe_project_id, but fallback to select('*') if column doesn't exist
+  let { data, error } = await supabase
     .from('time_sessions')
-    .select('*')
+    .select('id, session_date, start_time, end_time, active_duration, break_duration, idle_duration, frappe_project_id')
     .eq('user_email', userEmail)
     .gte('session_date', dateRange.start)
     .lte('session_date', dateRange.end)
     .order('start_time', { ascending: false });
 
+  // If frappe_project_id or project_id column doesn't exist, fallback to select('*')
+  if (error && (error.message?.includes('frappe_project_id') || error.message?.includes('project_id') || error.code === '42703')) {
+    const fallback = await supabase
+      .from('time_sessions')
+      .select('*')
+      .eq('user_email', userEmail)
+      .gte('session_date', dateRange.start)
+      .lte('session_date', dateRange.end)
+      .order('start_time', { ascending: false });
+    data = fallback.data;
+    error = fallback.error;
+  }
+
   if (error) {
-    console.error('[reports-page] Failed to load sessions', error);
+    console.error('[reports-page] Failed to load sessions', {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      error,
+    });
     return [];
   }
 
@@ -196,6 +217,30 @@ async function fetchProjectNamesMap(supabase: ReturnType<typeof createServerSupa
       projectMap.set(project.frappe_project_id, project.project_name);
     }
   });
+
+  // Fallback: for any missing IDs, try to fetch names directly from Frappe
+  const missingIds = uniqueProjectIds.filter((id) => !projectMap.has(id));
+  if (missingIds.length > 0) {
+    try {
+      const frappeProjects = await getAllFrappeProjects(); // no company filter; returns id + human name
+      const frappeMap = new Map<string, string>();
+      frappeProjects.forEach((p) => {
+        if (p.id && p.name) {
+          frappeMap.set(p.id, p.name);
+        }
+      });
+      
+      // Add missing projects from Frappe
+      missingIds.forEach((id) => {
+        const frappeName = frappeMap.get(id);
+        if (frappeName) {
+          projectMap.set(id, frappeName);
+        }
+      });
+    } catch (frappeErr) {
+      console.warn('[reports-page] Failed to fetch project names from Frappe:', frappeErr);
+    }
+  }
 
   return projectMap;
 }
@@ -244,6 +289,9 @@ export default async function ReportsAnalyticsPage({
   if (isManager) {
     if (requestedEmployee) {
       targetEmail = requestedEmployee;
+    } else {
+      // Manager must select an employee to view reports
+      // Show empty state or redirect
     }
   } else if (!isEmployee) {
     // Unsupported role, redirect to overview
@@ -256,7 +304,7 @@ export default async function ReportsAnalyticsPage({
   
   // Fetch project names
   const supabase = createServerSupabaseClient();
-  const projectIds = sessions.map((s: any) => s.frappe_project_id).filter(Boolean) as string[];
+  const projectIds = sessions.map((s) => s.frappe_project_id).filter(Boolean) as string[];
   const projectNamesMap = await fetchProjectNamesMap(supabase, projectIds);
   
   const summary = buildMonthlySummary(sessions, dateRange);
@@ -278,69 +326,74 @@ export default async function ReportsAnalyticsPage({
         <header className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Reports</h1>
           <p className="text-sm text-muted-foreground">
-            Detailed analytics for the selected date range
-            {isManager && requestedEmployee ? ` · ${requestedEmployee}` : ''}.
+            {isManager
+              ? 'Select an employee to view their detailed analytics for the selected date range.'
+              : 'Detailed analytics for the selected date range.'}
           </p>
         </header>
 
-        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <form className="flex flex-col gap-4 sm:flex-row sm:items-end" method="get">
-            <div>
-              <label
-                htmlFor="from"
-                className="block text-xs font-medium uppercase tracking-wide text-muted-foreground"
-              >
-                From
-              </label>
-              <input
-                type="date"
-                id="from"
-                name="from"
-                className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                defaultValue={dateRange.start}
-                max={dateRange.end}
-              />
-            </div>
-            <div>
-              <label htmlFor="to" className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                To
-              </label>
-              <input
-                type="date"
-                id="to"
-                name="to"
-                className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-                defaultValue={dateRange.end}
-                min={dateRange.start}
-              />
-            </div>
-            {isManager && requestedEmployee ? (
-              <input type="hidden" name="employee" value={requestedEmployee} />
-            ) : null}
-            <button
-              type="submit"
-              className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
-            >
-              Apply Filters
-            </button>
-          </form>
-        </section>
-
         {isManager && (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-            <p className="text-sm text-muted-foreground">
-              Switch between your assigned employees to review their recent activity.
-            </p>
-            <div className="mt-6">
-              <EmployeeSelector
-                managerEmail={profile.email}
-                currentEmployeeEmail={requestedEmployee ?? undefined}
-                redirectBasePath={`/reports/${encodeURIComponent(profile.email)}/reports`}
-                autoSelectFirst={false}
-              />
-            </div>
+            <EmployeeSelector
+              managerEmail={profile.email}
+              currentEmployeeEmail={requestedEmployee ?? undefined}
+              redirectBasePath={`/reports/${encodeURIComponent(profile.email)}/reports`}
+              autoSelectFirst={false}
+            />
           </section>
         )}
+
+        {isManager && !requestedEmployee ? (
+          <section className="rounded-2xl border border-dashed border-border/60 bg-card p-10 text-center shadow-sm">
+            <h2 className="text-xl font-semibold text-foreground">Select an employee</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Please select an employee from the dropdown above to view their reports.
+            </p>
+          </section>
+        ) : (
+          <>
+            <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+              <form className="flex flex-col gap-4 sm:flex-row sm:items-end" method="get">
+                {isManager && requestedEmployee && (
+                  <input type="hidden" name="employee" value={requestedEmployee} />
+                )}
+                <div>
+                  <label
+                    htmlFor="from"
+                    className="block text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                  >
+                    From
+                  </label>
+                  <input
+                    type="date"
+                    id="from"
+                    name="from"
+                    className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                    defaultValue={dateRange.start}
+                    max={dateRange.end}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="to" className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    To
+                  </label>
+                  <input
+                    type="date"
+                    id="to"
+                    name="to"
+                    className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                    defaultValue={dateRange.end}
+                    min={dateRange.start}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90"
+                >
+                  Apply Filters
+                </button>
+              </form>
+            </section>
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <SummaryCard title="Total Work" value={formatHoursMinutes(summary.totalHours)} />
@@ -393,6 +446,8 @@ export default async function ReportsAnalyticsPage({
               idleHours={[]}
             />
           </section>
+        )}
+          </>
         )}
       </div>
     </DashboardShell>

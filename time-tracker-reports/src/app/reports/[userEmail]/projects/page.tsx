@@ -3,7 +3,8 @@ import { FolderOpen } from 'lucide-react';
 import { DashboardShell } from '@/components/dashboard';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { fetchManagerProjects, fetchEmployeeProjects } from '@/lib/projects';
-import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
+import { determineRoleFromRoleProfile, createFrappeClient } from '@/lib/frappeClient';
+import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
 export default async function ManagerProjectsPage({
   params,
@@ -40,6 +41,134 @@ export default async function ManagerProjectsPage({
     : isEmployee
       ? await fetchEmployeeProjects(profile.email)
       : [];
+
+  // For managers, get assigned users for each project
+  // Use the frappeProjectId stored in the project record
+  const projectsWithUsers = isManager
+    ? await Promise.all(
+        projects.map(async (project) => {
+          try {
+            const frappe = createFrappeClient(true);
+            const supabase = createServerSupabaseClient();
+            
+            // Use the Frappe project ID from the project record
+            const frappeProjectId = project.frappeProjectId || project.name; // Use stored ID or fallback to name
+            
+            // Get users assigned to this project via multiple methods
+            const assignedUsers: string[] = [];
+            
+            // Method 1: Get users from tasks assigned to this project
+            try {
+              const taskRes = await frappe.get('/api/resource/Task', {
+                params: {
+                  fields: JSON.stringify(['_assign']),
+                  filters: JSON.stringify([
+                    ['project', '=', frappeProjectId],
+                    ['_assign', '!=', ''],
+                  ]),
+                  limit_page_length: 1000,
+                },
+              });
+              
+              const tasks = taskRes?.data?.data || [];
+              tasks.forEach((task: any) => {
+                if (task._assign) {
+                  // _assign is a JSON string array
+                  try {
+                    const assignees = typeof task._assign === 'string' ? JSON.parse(task._assign) : task._assign;
+                    if (Array.isArray(assignees)) {
+                      assignees.forEach((email: string) => {
+                        if (email && !assignedUsers.includes(email)) {
+                          assignedUsers.push(email);
+                        }
+                      });
+                    }
+                  } catch {
+                    // If parsing fails, treat as string
+                    if (typeof task._assign === 'string' && !assignedUsers.includes(task._assign)) {
+                      assignedUsers.push(task._assign);
+                    }
+                  }
+                }
+              });
+            } catch (err) {
+              console.warn(`[projects] Failed to get users from tasks for project ${project.name}:`, err);
+            }
+            
+            // Method 2: Get users directly assigned via _assign field on Project
+            try {
+              const projectRes = await frappe.get(`/api/resource/Project/${frappeProjectId}`, {
+                params: {
+                  fields: JSON.stringify(['_assign']),
+                },
+              });
+              
+              const projectDoc = projectRes?.data?.data;
+              if (projectDoc?._assign) {
+                try {
+                  const assignees = typeof projectDoc._assign === 'string' ? JSON.parse(projectDoc._assign) : projectDoc._assign;
+                  if (Array.isArray(assignees)) {
+                    assignees.forEach((email: string) => {
+                      if (email && !assignedUsers.includes(email)) {
+                        assignedUsers.push(email);
+                      }
+                    });
+                  }
+                } catch {
+                  if (typeof projectDoc._assign === 'string' && !assignedUsers.includes(projectDoc._assign)) {
+                    assignedUsers.push(projectDoc._assign);
+                  }
+                }
+              }
+            } catch (err) {
+              console.warn(`[projects] Failed to get users from project _assign for ${project.name}:`, err);
+            }
+            
+            // Get display names from Supabase and Frappe
+            const userDisplayNames = new Map<string, string>();
+            if (assignedUsers.length > 0) {
+              // First, try to get names from Supabase
+              const { data: userRows } = await supabase
+                .from('users')
+                .select('email, display_name')
+                .in('email', assignedUsers);
+              
+              (userRows || []).forEach((row) => {
+                userDisplayNames.set(row.email, row.display_name || row.email);
+              });
+              
+              // For users not found in Supabase, try to get full_name from Frappe
+              const { getAllFrappeUsers } = await import('@/lib/frappeClient');
+              const frappeUsers = await getAllFrappeUsers();
+              assignedUsers.forEach((email) => {
+                if (!userDisplayNames.has(email)) {
+                  const frappeUser = frappeUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
+                  if (frappeUser?.full_name) {
+                    userDisplayNames.set(email, frappeUser.full_name);
+                  } else {
+                    userDisplayNames.set(email, email); // Fallback to email
+                  }
+                }
+              });
+            }
+            
+            return {
+              ...project,
+              assignedUsers: assignedUsers.map((email) => ({
+                email,
+                displayName: userDisplayNames.get(email) || email,
+              })),
+            };
+          } catch (error) {
+            console.warn(`[projects] Failed to get assigned users for project ${project.name}:`, error);
+            return {
+              ...project,
+              assignedUsers: [],
+            };
+          }
+        })
+      )
+    : projects.map((p) => ({ ...p, assignedUsers: [] }));
 
   return (
     <DashboardShell
@@ -79,7 +208,7 @@ export default async function ManagerProjectsPage({
           </section>
         ) : (
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {projects.map((project) => (
+            {projectsWithUsers.map((project) => (
               <article
                 key={project.id}
                 className="flex flex-col rounded-2xl border border-border bg-card p-5 shadow-sm transition hover:shadow-md"
@@ -87,6 +216,26 @@ export default async function ManagerProjectsPage({
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-semibold text-foreground">{project.name}</h2>
                 </div>
+                {isManager && 'assignedUsers' in project && project.assignedUsers.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Assigned to:</p>
+                    <div className="flex flex-wrap gap-1">
+                      {project.assignedUsers.slice(0, 3).map((user) => (
+                        <span
+                          key={user.email}
+                          className="inline-flex items-center rounded-full bg-secondary px-2 py-1 text-xs text-secondary-foreground"
+                        >
+                          {user.displayName}
+                        </span>
+                      ))}
+                      {project.assignedUsers.length > 3 && (
+                        <span className="inline-flex items-center rounded-full bg-secondary px-2 py-1 text-xs text-secondary-foreground">
+                          +{project.assignedUsers.length - 3} more
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
                 {project.managerEmail && (
                   <p className="mt-1 text-xs font-medium text-muted-foreground">
                     Assigned by {project.managerName ?? project.managerEmail}

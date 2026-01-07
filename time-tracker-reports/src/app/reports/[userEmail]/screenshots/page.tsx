@@ -1,10 +1,11 @@
 import ScreenshotSelector from '@/components/ScreenshotSelector';
-import FreelancerSelector from '@/components/FreelancerSelector';
+import EmployeeSelector from '@/components/FreelancerSelector';
 import { DashboardShell } from '@/components/dashboard';
 import  {ReportsRealtimeWatcher}  from '@/components/ReportsRealtimeWatcher';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { type DateRange, normalizeDateRange } from '@/lib/dateRange';
+import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
 
 type TimeSession = {
   id: number;
@@ -131,24 +132,38 @@ export default async function ScreenshotsPage({
     );
   }
 
-  const isClient = profile.role === 'Client';
+  // Convert role_profile_name to Manager/Employee for logic
+  const convertedRole = determineRoleFromRoleProfile(profile.role);
+  const isManager = convertedRole === 'Manager';
+  const isEmployee = convertedRole === 'Employee';
 
-  const requestedFreelancer = (() => {
-    const value = resolvedSearchParams?.freelancer;
+  const requestedEmployee = (() => {
+    const value = resolvedSearchParams?.employee;
     if (Array.isArray(value)) {
       return value[0];
     }
     return value ?? null;
   })();
 
-  const targetEmail = isClient ? requestedFreelancer ?? null : profile.email;
+  const requestedSessionId = (() => {
+    const value = resolvedSearchParams?.session;
+    if (Array.isArray(value)) {
+      return value[0];
+    }
+    return value ?? null;
+  })();
+
+  const targetEmail = isManager ? requestedEmployee ?? null : profile.email;
   const dateRange = normalizeDateRange(resolvedSearchParams);
 
   const sessions = targetEmail ? await fetchSessionsInRange(targetEmail, dateRange) : [];
-  const latestSessionId = sessions[0]?.id;
-  const screenshots = targetEmail ? await fetchScreenshots(targetEmail, latestSessionId) : [];
+  // Use requested session ID if provided, otherwise use latest session
+  const selectedSessionId = requestedSessionId 
+    ? (typeof requestedSessionId === 'string' ? parseInt(requestedSessionId, 10) : requestedSessionId)
+    : sessions[0]?.id;
+  const screenshots = targetEmail ? await fetchScreenshots(targetEmail, selectedSessionId) : [];
 
-  const showPicker = isClient;
+  const showPicker = isManager;
   const hasSelection = Boolean(targetEmail);
 
   return (
@@ -162,7 +177,9 @@ export default async function ScreenshotsPage({
         <header className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Screenshots</h1>
           <p className="text-sm text-muted-foreground">
-            Browse captured screenshots by session{isClient ? '. Choose a freelancer to get started.' : '.'}
+            {isManager
+              ? 'Browse captured screenshots by session. Select an employee and session to view screenshots.'
+              : 'Browse captured screenshots by session.'}
           </p>
         </header>
 
@@ -199,8 +216,8 @@ export default async function ScreenshotsPage({
                 suppressHydrationWarning
               />
             </div>
-            {isClient && requestedFreelancer ? (
-              <input type="hidden" name="freelancer" value={requestedFreelancer} />
+            {isManager && requestedEmployee ? (
+              <input type="hidden" name="employee" value={requestedEmployee} />
             ) : null}
             <button
               type="submit"
@@ -214,33 +231,28 @@ export default async function ScreenshotsPage({
 
         {showPicker && (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-            <p className="text-sm text-muted-foreground">
-              Select a freelancer to load their latest sessions and screenshots.
-            </p>
-            <div className="mt-6">
-              <FreelancerSelector
-                clientEmail={profile.email}
-                currentFreelancerEmail={requestedFreelancer ?? undefined}
-                redirectBasePath={`/reports/${encodeURIComponent(profile.email)}/screenshots`}
-                autoSelectFirst={false}
-              />
-            </div>
+            <EmployeeSelector
+              managerEmail={profile.email}
+              currentEmployeeEmail={requestedEmployee ?? undefined}
+              redirectBasePath={`/reports/${encodeURIComponent(profile.email)}/screenshots`}
+              autoSelectFirst={false}
+            />
           </section>
         )}
 
         {!hasSelection && showPicker ? (
           <section className="rounded-2xl border border-dashed border-border/60 bg-card p-10 text-center shadow-sm">
-            <h2 className="text-xl font-semibold text-foreground">No freelancer selected</h2>
+            <h2 className="text-xl font-semibold text-foreground">No employee selected</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Pick a freelancer from the selector above to view their screenshots.
+              Pick an employee from the selector above to view their screenshots.
             </p>
           </section>
         ) : sessions.length === 0 ? (
           <section className="rounded-2xl border border-dashed border-border/60 bg-card p-10 text-center shadow-sm">
             <h2 className="text-xl font-semibold text-foreground">No sessions available</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              {isClient
-                ? 'We could not find any recent sessions for this freelancer.'
+              {isManager
+                ? 'We could not find any recent sessions for this employee during the selected period.'
                 : 'You have not captured any screenshots during the selected period.'}
             </p>
           </section>
@@ -249,7 +261,7 @@ export default async function ScreenshotsPage({
             <ScreenshotSelector
               userEmail={targetEmail ?? profile.email}
               sessions={sessions}
-              initialSessionId={latestSessionId}
+              initialSessionId={selectedSessionId}
               initialScreenshots={screenshots}
             />
           </section>

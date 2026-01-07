@@ -79,11 +79,11 @@ export function Sidebar({
   const pathname = usePathname();
   const normalizedEmail = userEmail ? userEmail.trim().toLowerCase() : null;
   
-  // Convert role_profile_name to Manager/Employee for navigation logic
-  // role_profile_name is stored directly from Frappe (e.g., "SuperAdmin", "Employee", etc.)
-  const convertedRole = determineRoleFromRoleProfile(userRole ?? null);
+  // Convert role_profile_name to Manager/Employee for navigation logic.
+  // If role is not yet known, leave it null so we don't default to "employee" and hide manager tabs.
+  const convertedRole = userRole ? determineRoleFromRoleProfile(userRole) : null;
   const roleForNav: "manager" | "employee" | null =
-    convertedRole === "Manager" ? "manager" : "employee";
+    convertedRole === "Manager" ? "manager" : convertedRole === "Employee" ? "employee" : null;
 
   const navItems = buildReportsNavItems(pathname, roleForNav, normalizedEmail ?? undefined);
 

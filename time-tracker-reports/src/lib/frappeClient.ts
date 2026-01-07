@@ -245,7 +245,12 @@ export async function getFrappeRoleProfileForEmail(userEmail: string): Promise<s
 
     console.warn(`[frappeClient] No role profile found for user ${userEmail}`);
     return null;
-  } catch (err) {
+  } catch (err: any) {
+    const status = err?.response?.status;
+    if (status === 403) {
+      console.warn(`[frappeClient] 403 getting role profile for ${userEmail}; returning null (will fallback)`);
+      return null;
+    }
     console.error(`[frappeClient] Error getting role profile for user ${userEmail}:`, err);
     return null;
   }

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
-import { frappeLogin, getFrappeCurrentUserRoleProfile, getFrappeUserCompany } from '@/lib/frappeClient';
+import { frappeLogin, getFrappeCurrentUserRoleProfile, getFrappeUserCompany, getFrappeRoleProfileForEmail } from '@/lib/frappeClient';
 import { syncUserContextFromFrappe } from '@/lib/frappeUserContext';
 
 type UserRecord = {
@@ -44,9 +44,17 @@ export async function POST(request: Request) {
     }
 
     // Get role profile from Frappe - store it directly in database
-    // Use session-based auth (recommended) - role_profile_name is the correct field
-    const userProfile = await getFrappeCurrentUserRoleProfile();
-    const roleProfile = userProfile?.role_profile || null;
+    // Try API key (email-based) first for consistency with the desktop app, then session-based
+    let roleProfile: string | null = null;
+    try {
+      roleProfile = (await getFrappeRoleProfileForEmail(email)) || null;
+    } catch (err) {
+      console.warn('[auth/login] getFrappeRoleProfileForEmail failed, will try session-based:', err);
+    }
+    if (!roleProfile) {
+      const userProfile = await getFrappeCurrentUserRoleProfile();
+      roleProfile = userProfile?.role_profile || null;
+    }
     
     // Store role_profile_name directly from Frappe (not converted)
 

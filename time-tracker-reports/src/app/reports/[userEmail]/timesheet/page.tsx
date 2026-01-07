@@ -6,6 +6,7 @@ import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { type DateRange, defaultDateRange, normalizeDateRange } from '@/lib/dateRange';
 import { LocalTime } from '@/components/LocalTime';
 import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
+import EmployeeSelector from '@/components/FreelancerSelector';
 
 type TimesheetRow = {
   id: number;
@@ -319,15 +320,29 @@ export default async function TimesheetPage({
   const isManager = convertedRole === 'Manager';
   const isEmployee = convertedRole === 'Employee';
 
-  const timesheetRows = isManager
-    ? await fetchManagerTimesheet({ email: profile.email, dateRange, company: profile.company })
-    : isEmployee
-      ? await fetchEmployeeTimesheet({ email: profile.email, dateRange })
-      : [];
+  // For managers, check if a specific user is selected
+  const selectedUserEmail = (() => {
+    const value = resolvedSearchParams?.employee;
+    if (Array.isArray(value)) return value[0];
+    return value ?? null;
+  })();
 
-  const emptyStateMessage = isManager
-    ? 'Once your employees track time in the desktop app, their sessions will show up here.'
-    : 'You have no tracked sessions for the selected date range.';
+  // Determine target email for timesheet data
+  const targetEmail = isManager && selectedUserEmail ? selectedUserEmail : profile.email;
+
+  const timesheetRows = isManager && selectedUserEmail
+    ? await fetchEmployeeTimesheet({ email: selectedUserEmail, dateRange })
+    : isManager
+      ? await fetchManagerTimesheet({ email: profile.email, dateRange, company: profile.company })
+      : isEmployee
+        ? await fetchEmployeeTimesheet({ email: profile.email, dateRange })
+        : [];
+
+  const emptyStateMessage = isManager && selectedUserEmail
+    ? 'This employee has no tracked sessions for the selected date range.'
+    : isManager
+      ? 'Select an employee from the dropdown above to view their timesheet.'
+      : 'You have no tracked sessions for the selected date range.';
 
   return (
     <DashboardShell
@@ -345,8 +360,22 @@ export default async function TimesheetPage({
           </p>
         </header>
 
+        {isManager && (
+          <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+            <EmployeeSelector
+              managerEmail={profile.email}
+              currentEmployeeEmail={selectedUserEmail ?? undefined}
+              redirectBasePath={`/reports/${encodeURIComponent(profile.email)}/timesheet`}
+              autoSelectFirst={false}
+            />
+          </section>
+        )}
+
         <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
           <form className="flex flex-col gap-4 sm:flex-row sm:items-end" method="get">
+            {isManager && selectedUserEmail && (
+              <input type="hidden" name="employee" value={selectedUserEmail} />
+            )}
             <div>
               <label htmlFor="from" className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 From
@@ -382,7 +411,17 @@ export default async function TimesheetPage({
           </form>
         </section>
 
-        {timesheetRows.length === 0 ? (
+        {isManager && !selectedUserEmail ? (
+          <section className="rounded-2xl border border-dashed border-border/60 bg-card p-10 text-center shadow-sm">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary/70 text-secondary-foreground">
+              <CalendarClock size={24} />
+            </div>
+            <h2 className="mt-4 text-xl font-semibold text-foreground">Select an employee</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Please select an employee from the dropdown above to view their timesheet.
+            </p>
+          </section>
+        ) : timesheetRows.length === 0 ? (
           <section className="rounded-2xl border border-dashed border-border/60 bg-card p-10 text-center shadow-sm">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary/70 text-secondary-foreground">
               <CalendarClock size={24} />

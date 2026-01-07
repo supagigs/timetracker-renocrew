@@ -8,7 +8,7 @@ import { DashboardShell } from '@/components/dashboard';
 import { fetchEmployeeProjects, type ProjectRecord } from '@/lib/projects';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { redirect } from 'next/navigation';
-import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
+import { determineRoleFromRoleProfile, getAllFrappeProjects } from '@/lib/frappeClient';
 
 type TimeSession = {
   id: number;
@@ -19,7 +19,7 @@ type TimeSession = {
   break_duration: number;
   idle_duration: number | null;
   break_count: number | null;
-  project_id: number | null;
+  frappe_project_id: string | null;
   projects?: {
     id: number;
     project_name: string;
@@ -49,9 +49,10 @@ async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]>
   console.log('Fetching sessions for:', { userEmail, startDate: startDateStr, endDate: endDateStr });
 
   // Try user_email first (legacy schema), fallback to user_id if needed
+  // Explicitly select frappe_project_id to ensure it's included (project_id column doesn't exist)
   let { data, error } = await supabase
     .from('time_sessions')
-    .select('*')
+    .select('id, session_date, start_time, end_time, active_duration, break_duration, idle_duration, break_count, frappe_project_id')
     .eq('user_email', userEmail)
     .gte('session_date', startDateStr)
     .lte('session_date', endDateStr)
@@ -68,7 +69,7 @@ async function fetchLastMonthSessions(userEmail: string): Promise<TimeSession[]>
     if (userData?.id) {
       const result = await supabase
         .from('time_sessions')
-        .select('*')
+        .select('id, session_date, start_time, end_time, active_duration, break_duration, idle_duration, break_count, frappe_project_id')
         .eq('user_id', userData.id)
         .gte('session_date', startDateStr)
         .lte('session_date', endDateStr)
@@ -364,6 +365,29 @@ async function fetchProjectNamesMap(supabase: ReturnType<typeof createServerSupa
     }
   });
 
+  // Fallback: for any missing IDs, try to fetch names directly from Frappe
+  const missingIds = uniqueProjectIds.filter((id) => !projectMap.has(id));
+  if (missingIds.length > 0) {
+    try {
+      const frappeProjects = await getAllFrappeProjects(); // no company filter; returns id + human name
+      const frappeMap = new Map<string, string>();
+      frappeProjects.forEach((p) => {
+        if (p.id && p.name) {
+          frappeMap.set(p.id, p.name);
+        }
+      });
+
+      missingIds.forEach((id) => {
+        const name = frappeMap.get(id);
+        if (name) {
+          projectMap.set(id, name);
+        }
+      });
+    } catch (err) {
+      console.warn('[reports-page] Failed to fetch project names from Frappe:', err);
+    }
+  }
+
   return projectMap;
 }
 
@@ -371,7 +395,7 @@ function buildProjectSummary(sessions: TimeSession[], projectNamesMap: Map<strin
   const projectMap = new Map<string, { name: string; totalSeconds: number }>();
 
   sessions.forEach((session) => {
-    const projectId = (session as any).frappe_project_id;
+    const projectId = session.frappe_project_id;
     if (projectId) {
       const projectName = projectNamesMap.get(projectId) || projectId || 'Untitled project';
       const activeDuration = session.active_duration ?? 0;
@@ -513,7 +537,7 @@ export default async function ReportsPage({
       
       // Fetch project names
       const supabase = createServerSupabaseClient();
-      const projectIds = sessions.map((s: any) => s.frappe_project_id).filter(Boolean) as string[];
+      const projectIds = sessions.map((s) => s.frappe_project_id).filter(Boolean) as string[];
       const projectNamesMap = await fetchProjectNamesMap(supabase, projectIds);
       projectSummary = buildProjectSummary(sessions, projectNamesMap);
       
@@ -521,7 +545,11 @@ export default async function ReportsPage({
         assignedProjects = await fetchEmployeeProjects(reportEmail);
       }
     }
-  } catch (error) {
+  } catch (error: any) {
+    // Ignore Next.js redirect "errors" which use NEXT_REDIRECT internally
+    if (error && typeof error === 'object' && 'digest' in error && String((error as any).digest).includes('NEXT_REDIRECT')) {
+      throw error;
+    }
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error('Error loading reports:', errorMsg, error);
     errorMessage = errorMsg || 'Failed to load reports';

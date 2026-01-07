@@ -4,66 +4,89 @@ import { DashboardShell } from '@/components/dashboard';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { format } from 'date-fns';
-import { getAllFrappeUsers, determineRoleFromRoleProfile } from '@/lib/frappeClient';
+import { getAllFrappeUsers, determineRoleFromRoleProfile, getFrappeRoleProfileForEmail, getFrappeCompanyForUser } from '@/lib/frappeClient';
 
-type EmployeeSummary = {
+type UserSummary = {
   email: string;
   displayName: string | null;
+  role: string | null;
+  company: string | null;
   status: 'active' | 'offline' | 'no-data';
   todayActiveSeconds: number;
   last30ActiveSeconds: number;
   lastActiveAt: string | null;
 };
 
-async function fetchManagerEmployees(managerEmail: string, managerCompany: string | null): Promise<EmployeeSummary[]> {
+async function fetchAllUsers(): Promise<UserSummary[]> {
   const supabase = createServerSupabaseClient();
 
-  // For managers, fetch users from Frappe filtered by company
-  let employeeEmails: string[] = [];
+  // For managers, fetch ALL users from Frappe (not filtered by company)
+  let allUserEmails: string[] = [];
+  const fullNameMap = new Map<string, string | null>();
   try {
-    const frappeUsers = await getAllFrappeUsers(managerCompany || undefined);
-    // Exclude the manager themselves from the list
-    employeeEmails = frappeUsers
-      .filter((user) => user.email.toLowerCase() !== managerEmail.toLowerCase())
-      .map((user) => user.email);
+    const frappeUsers = await getAllFrappeUsers(); // No company filter - get all users
+    allUserEmails = frappeUsers.map((user) => {
+      fullNameMap.set(user.email, user.full_name ?? null);
+      return user.email;
+    });
   } catch (error) {
-    console.error('[manager-employees] Failed to fetch Frappe users, falling back to Supabase:', error);
-    // Fall back to Supabase users with same company if Frappe fails
-    if (managerCompany) {
-      const { data: supabaseUsers, error: usersError } = await supabase
-        .from('users')
-        .select('email')
-        .eq('company', managerCompany)
-        .neq('email', managerEmail); // Exclude the manager themselves
-      
-      if (!usersError && supabaseUsers) {
-        employeeEmails = supabaseUsers.map(u => u.email);
-      }
+    console.error('[users-page] Failed to fetch Frappe users, falling back to Supabase:', error);
+    // Fall back to Supabase users
+    const { data: supabaseUsers, error: usersError } = await supabase
+      .from('users')
+      .select('email');
+    
+    if (!usersError && supabaseUsers) {
+      allUserEmails = supabaseUsers.map(u => u.email);
     }
     
-    if (employeeEmails.length === 0) {
+    if (allUserEmails.length === 0) {
       return [];
     }
   }
 
-  if (employeeEmails.length === 0) {
+  if (allUserEmails.length === 0) {
     return [];
   }
 
+  // Get display names (prefer Frappe full_name, fallback to Supabase display_name)
   const { data: userRows, error: usersError } = await supabase
     .from('users')
-    .select('email, display_name')
-    .in('email', employeeEmails);
+    .select('email, display_name, role, company')
+    .in('email', allUserEmails);
 
   if (usersError) {
-    console.error('[manager-employees] Failed to fetch employee details:', usersError);
+    console.error('[users-page] Failed to fetch user details:', usersError);
     return [];
   }
 
-  const nameMap = new Map<string, string | null>();
+  const userMap = new Map<string, { displayName: string | null; role: string | null; company: string | null }>();
   (userRows ?? []).forEach((row) => {
-    nameMap.set(row.email, row.display_name ?? null);
+    userMap.set(row.email, {
+      displayName: fullNameMap.get(row.email) ?? row.display_name ?? null,
+      role: row.role ?? null,
+      company: row.company ?? null,
+    });
   });
+
+  // Fetch role and company from Frappe for all users (Frappe is the source of truth for these fields)
+  for (const email of allUserEmails) {
+    try {
+      const [roleProfile, company] = await Promise.all([
+        getFrappeRoleProfileForEmail(email),
+        getFrappeCompanyForUser(email),
+      ]);
+      
+      const existing = userMap.get(email);
+      userMap.set(email, {
+        displayName: existing?.displayName ?? fullNameMap.get(email) ?? null,
+        role: roleProfile ?? existing?.role ?? null,
+        company: company ?? existing?.company ?? null,
+      });
+    } catch (error) {
+      console.warn(`[users-page] Failed to fetch role/company for ${email}:`, error);
+    }
+  }
 
   // No-op: user_sessions table is no longer used
   const sessionStateMap = new Map<string, { app_logged_in: boolean | null; updated_at: string | null }>();
@@ -79,7 +102,7 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
   const { data: sessionRows, error: sessionsError } = await supabase
     .from('time_sessions')
     .select('user_email, session_date, start_time, end_time, active_duration')
-    .in('user_email', employeeEmails)
+    .in('user_email', allUserEmails)
     .gte('session_date', startDateStr)
     .lte('session_date', endDateStr)
     .order('start_time', { ascending: false });
@@ -96,8 +119,9 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
     sessionsByUser.set(session.user_email, list);
   });
 
-  return employeeEmails.map((email) => {
+  return allUserEmails.map((email) => {
     const memberSessions = sessionsByUser.get(email) ?? [];
+    const userData = userMap.get(email);
 
     const todayActiveSeconds = memberSessions
       .filter((session) => session.session_date === todayStr)
@@ -113,13 +137,12 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
       ? lastSession.end_time ?? lastSession.start_time ?? null
       : null;
 
-    // No-op: user_sessions table is no longer used
-    // Determine status based on time_sessions only
+    // Determine status based on time_sessions
     const activeSession = memberSessions.find(
       (session) => session.end_time === null && session.session_date === todayStr,
     );
 
-    let status: EmployeeSummary['status'] = 'no-data';
+    let status: UserSummary['status'] = 'no-data';
     if (memberSessions.length === 0) {
       status = 'no-data';
     } else if (activeSession) {
@@ -132,12 +155,14 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
 
     return {
       email,
-      displayName: nameMap.get(email) ?? null,
+      displayName: userData?.displayName ?? null,
+      role: userData?.role ?? null,
+      company: userData?.company ?? null,
       status,
       todayActiveSeconds,
       last30ActiveSeconds,
       lastActiveAt,
-    } satisfies EmployeeSummary;
+    } satisfies UserSummary;
   });
 }
 
@@ -185,8 +210,9 @@ export default async function ManagerEmployeesPage({
 
   // Convert role_profile_name to Manager/Employee for logic
   const convertedRole = determineRoleFromRoleProfile(profile.role);
-  const employees = convertedRole === 'Manager'
-    ? await fetchManagerEmployees(profile.email, profile.company)
+  const isManager = convertedRole === 'Manager';
+  const users = isManager
+    ? await fetchAllUsers()
     : [];
 
   return (
@@ -199,24 +225,26 @@ export default async function ManagerEmployeesPage({
         <header className="space-y-2">
           <h1 className="text-3xl font-bold text-foreground">Users</h1>
           <p className="text-sm text-muted-foreground">
-            Get a quick status update on every user assigned to your projects.
+            {isManager
+              ? 'View all users in Frappe with their role and company information.'
+              : 'Only manager accounts can view user listings.'}
           </p>
         </header>
 
-        {profile.role !== 'Manager' ? (
+        {!isManager ? (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <p className="text-sm text-muted-foreground">
-              Only manager accounts can manage user assignments.
+              Only manager accounts can view user listings.
             </p>
           </section>
-        ) : employees.length === 0 ? (
+        ) : users.length === 0 ? (
           <section className="rounded-2xl border border-dashed border-border/60 bg-card p-10 text-center shadow-sm">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary/70 text-secondary-foreground">
               <Users size={24} />
             </div>
-            <h2 className="mt-4 text-xl font-semibold text-foreground">No users assigned yet</h2>
+            <h2 className="mt-4 text-xl font-semibold text-foreground">No users found</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Invite users from the desktop app and they will appear here automatically.
+              No users were found in Frappe.
             </p>
           </section>
         ) : (
@@ -226,6 +254,8 @@ export default async function ManagerEmployeesPage({
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
                     <th className="px-4 py-3 font-medium">User</th>
+                    <th className="px-4 py-3 font-medium">Role</th>
+                    <th className="px-4 py-3 font-medium">Company</th>
                     <th className="px-4 py-3 font-medium">Today</th>
                     <th className="px-4 py-3 font-medium">Last 30 days</th>
                     <th className="px-4 py-3 font-medium">Status</th>
@@ -233,30 +263,36 @@ export default async function ManagerEmployeesPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {employees.map((employee) => {
-                    const lastActiveLabel = employee.lastActiveAt
-                      ? formatDistanceToNow(new Date(employee.lastActiveAt), { addSuffix: true })
+                  {users.map((user) => {
+                    const lastActiveLabel = user.lastActiveAt
+                      ? formatDistanceToNow(new Date(user.lastActiveAt), { addSuffix: true })
                       : 'No activity yet';
 
-                    const statusConfig: Record<EmployeeSummary['status'], { label: string; classes: string }> = {
+                    const statusConfig: Record<UserSummary['status'], { label: string; classes: string }> = {
                       active: { label: 'Working now', classes: 'bg-emerald-100 text-emerald-700' },
                       offline: { label: 'Offline', classes: 'bg-slate-200 text-slate-700' },
                       'no-data': { label: 'No activity', classes: 'bg-amber-100 text-amber-700' },
                     };
 
-                    const { label, classes } = statusConfig[employee.status];
+                    const { label, classes } = statusConfig[user.status];
 
                     return (
-                      <tr key={employee.email} className="border-b border-border/60 transition-colors hover:bg-secondary/60">
+                      <tr key={user.email} className="border-b border-border/60 transition-colors hover:bg-secondary/60">
                         <td className="px-4 py-3 text-foreground">
-                          <div className="font-semibold">{employee.displayName || employee.email}</div>
-                          <div className="text-xs text-muted-foreground">{employee.email}</div>
+                          <div className="font-semibold">{user.displayName || user.email}</div>
+                          <div className="text-xs text-muted-foreground">{user.email}</div>
                         </td>
                         <td className="px-4 py-3 text-foreground">
-                          {formatSecondsToHoursMinutes(employee.todayActiveSeconds)}
+                          {user.role || '—'}
                         </td>
                         <td className="px-4 py-3 text-foreground">
-                          {formatSecondsToHoursMinutes(employee.last30ActiveSeconds)}
+                          {user.company || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-foreground">
+                          {formatSecondsToHoursMinutes(user.todayActiveSeconds)}
+                        </td>
+                        <td className="px-4 py-3 text-foreground">
+                          {formatSecondsToHoursMinutes(user.last30ActiveSeconds)}
                         </td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${classes}`}>
