@@ -4,7 +4,7 @@ import { DashboardShell } from '@/components/dashboard';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { format } from 'date-fns';
-import { getAllFrappeUsers, determineRoleFromRoleProfile, getFrappeRoleProfileForEmail, getFrappeCompanyForUser } from '@/lib/frappeClient';
+import { getAllFrappeUsers, determineRoleFromRoleProfile, getFrappeRoleProfileForEmail, getFrappeCompanyForUser, batchGetFrappeCompaniesForUsers } from '@/lib/frappeClient';
 
 type UserSummary = {
   email: string;
@@ -23,12 +23,18 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
   // For managers, fetch ALL users from Frappe (not filtered by company)
   let allUserEmails: string[] = [];
   const fullNameMap = new Map<string, string | null>();
+  const companyMap = new Map<string, string | null>();
   try {
     const frappeUsers = await getAllFrappeUsers(); // No company filter - get all users
     allUserEmails = frappeUsers.map((user) => {
       fullNameMap.set(user.email, user.full_name ?? null);
+      companyMap.set(user.email, user.company ?? null);
       return user.email;
     });
+    
+    // Log company information availability
+    const usersWithCompany = Array.from(companyMap.values()).filter(c => c).length;
+    console.log(`[users-page] Fetched ${allUserEmails.length} users from Frappe, ${usersWithCompany} have company information from batch fetch`);
   } catch (error) {
     console.error('[users-page] Failed to fetch Frappe users, falling back to Supabase:', error);
     // Fall back to Supabase users
@@ -65,26 +71,48 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
     userMap.set(row.email, {
       displayName: fullNameMap.get(row.email) ?? row.display_name ?? null,
       role: row.role ?? null,
-      company: row.company ?? null,
+      // Prefer company from Frappe (companyMap) if available, otherwise use Supabase value
+      company: companyMap.get(row.email) ?? row.company ?? null,
     });
   });
 
-  // Fetch role and company from Frappe for all users (Frappe is the source of truth for these fields)
+  // Batch fetch company information from Employee doctype for users missing company info
+  const usersMissingCompany = allUserEmails.filter(email => !companyMap.get(email));
+  if (usersMissingCompany.length > 0) {
+    console.log(`[users-page] Batch fetching company for ${usersMissingCompany.length} users missing company info`);
+    const batchCompanyMap = await batchGetFrappeCompaniesForUsers(usersMissingCompany);
+    // Merge batch results into companyMap
+    batchCompanyMap.forEach((company, emailOrUsername) => {
+      // Check if this matches any of our user emails
+      for (const email of usersMissingCompany) {
+        const normalizedEmail = email.toLowerCase().trim();
+        if (emailOrUsername === normalizedEmail || emailOrUsername === normalizedEmail.split('@')[0]) {
+          if (!companyMap.has(email)) {
+            companyMap.set(email, company);
+          }
+        }
+      }
+    });
+  }
+  
+  // Fetch role from Frappe for all users
   for (const email of allUserEmails) {
     try {
-      const [roleProfile, company] = await Promise.all([
-        getFrappeRoleProfileForEmail(email),
-        getFrappeCompanyForUser(email),
-      ]);
+      const roleProfile = await getFrappeRoleProfileForEmail(email);
       
       const existing = userMap.get(email);
+      const companyFromFrappe = companyMap.get(email);
+      
+      // Use company from Frappe (batch or individual), fallback to Supabase
+      const company = companyFromFrappe ?? existing?.company ?? null;
+      
       userMap.set(email, {
         displayName: existing?.displayName ?? fullNameMap.get(email) ?? null,
         role: roleProfile ?? existing?.role ?? null,
-        company: company ?? existing?.company ?? null,
+        company: company,
       });
     } catch (error) {
-      console.warn(`[users-page] Failed to fetch role/company for ${email}:`, error);
+      console.warn(`[users-page] Failed to fetch role for ${email}:`, error);
     }
   }
 

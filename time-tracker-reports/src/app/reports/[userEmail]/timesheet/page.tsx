@@ -7,6 +7,7 @@ import { type DateRange, defaultDateRange, normalizeDateRange } from '@/lib/date
 import { LocalTime } from '@/components/LocalTime';
 import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
 import EmployeeSelector from '@/components/FreelancerSelector';
+import { ExportTimesheetButton } from '@/components/ExportTimesheetButton';
 
 type TimesheetRow = {
   id: number;
@@ -433,6 +434,17 @@ export default async function TimesheetPage({
           </section>
         ) : (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+            {isManager && selectedUserEmail && (
+              <div className="mb-4 flex justify-end">
+                <ExportTimesheetButton
+                  timesheetData={timesheetRows}
+                  employeeEmail={selectedUserEmail}
+                  employeeName={timesheetRows[0]?.employeeName ?? null}
+                  dateRange={dateRange}
+                  disabled={timesheetRows.length === 0}
+                />
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>

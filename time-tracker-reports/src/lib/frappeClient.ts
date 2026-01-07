@@ -364,7 +364,7 @@ export async function getFrappeUserRolesForEmail(userEmail: string): Promise<str
  * To create in a simpler location, you can add it to any existing Python file that's already
  * being loaded, or create a new file in your app's root api folder.
  */
-export async function getAllFrappeUsers(company?: string | null): Promise<Array<{ email: string; full_name: string | null }>> {
+export async function getAllFrappeUsers(company?: string | null): Promise<Array<{ email: string; full_name: string | null; company: string | null }>> {
   try {
     const frappe = createFrappeClient(true); // Use API key auth
     
@@ -383,10 +383,32 @@ export async function getAllFrappeUsers(company?: string | null): Promise<Array<
       return [];
     }
     
-    return users.map((user: any) => ({
-      email: user.name || user.email,
-      full_name: user.full_name || null,
-    }));
+    const mappedUsers = users.map((user: any) => {
+      // Extract company string from various formats (string, object with name, etc.)
+      let companyValue: string | null = null;
+      if (user.company) {
+        if (typeof user.company === 'string') {
+          companyValue = user.company.trim() || null;
+        } else if (typeof user.company === 'object' && user.company.name) {
+          companyValue = typeof user.company.name === 'string' ? user.company.name.trim() : null;
+        } else if (typeof user.company === 'object') {
+          const stringValue = Object.values(user.company).find((v: any) => typeof v === 'string' && v.trim());
+          companyValue = stringValue ? (stringValue as string).trim() : null;
+        }
+      }
+      
+      return {
+        email: user.name || user.email,
+        full_name: user.full_name || null,
+        company: companyValue,
+      };
+    });
+    
+    // Log how many users have company information
+    const usersWithCompany = mappedUsers.filter(u => u.company).length;
+    console.log(`[frappeClient] getAllFrappeUsers returned ${mappedUsers.length} users, ${usersWithCompany} with company information`);
+    
+    return mappedUsers;
   } catch (err: any) {
     // Log error details for debugging, but don't throw - return empty array
     // This allows callers to gracefully fall back to Supabase
@@ -637,6 +659,84 @@ export async function getFrappeProjectsForUser(userEmail: string): Promise<Array
 }
 
 /**
+ * Batch fetch company information for multiple users from Employee doctype
+ * More efficient than calling getFrappeCompanyForUser individually for each user
+ * Uses multiple query strategies to find employees
+ */
+export async function batchGetFrappeCompaniesForUsers(userEmails: string[]): Promise<Map<string, string | null>> {
+  const companyMap = new Map<string, string | null>();
+  
+  if (userEmails.length === 0) {
+    return companyMap;
+  }
+  
+  try {
+    const frappe = createFrappeClient(true); // Use API key auth
+    
+    // Helper function to extract company string
+    const extractCompanyString = (companyValue: any): string | null => {
+      if (!companyValue) return null;
+      if (typeof companyValue === 'string') {
+        return companyValue.trim() || null;
+      }
+      if (typeof companyValue === 'object' && companyValue.name) {
+        return typeof companyValue.name === 'string' ? companyValue.name.trim() : null;
+      }
+      if (typeof companyValue === 'object') {
+        const stringValue = Object.values(companyValue).find((v: any) => typeof v === 'string' && v.trim());
+        return stringValue ? (stringValue as string).trim() : null;
+      }
+      return null;
+    };
+    
+    // Strategy 1: Query all employees (if not too many) and filter in memory
+    // This is more efficient than individual queries
+    try {
+      const res = await frappe.get('/api/resource/Employee', {
+        params: {
+          fields: JSON.stringify(['company', 'user_id', 'name']),
+          limit_page_length: 1000,
+        },
+      });
+      
+      const employees = res?.data?.data || [];
+      const userEmailSet = new Set(userEmails.map(e => e.toLowerCase().trim()));
+      
+      // Map user_id to company for matching users
+      employees.forEach((employee: any) => {
+        const userId = employee.user_id;
+        if (userId) {
+          const normalizedUserId = userId.toLowerCase().trim();
+          const username = normalizedUserId.includes('@') ? normalizedUserId.split('@')[0] : null;
+          
+          // Check if this employee matches any of our requested users
+          if (userEmailSet.has(normalizedUserId) || (username && userEmailSet.has(username))) {
+            const company = extractCompanyString(employee.company);
+            if (company) {
+              // Map to all matching email formats
+              for (const email of userEmails) {
+                const normalizedEmail = email.toLowerCase().trim();
+                if (normalizedEmail === normalizedUserId || normalizedEmail === username) {
+                  companyMap.set(email, company);
+                }
+              }
+            }
+          }
+        }
+      });
+      
+      console.log(`[frappeClient] batchGetFrappeCompaniesForUsers: Found company for ${companyMap.size} users out of ${userEmails.length} requested`);
+    } catch (err) {
+      console.warn('[frappeClient] batchGetFrappeCompaniesForUsers failed:', err);
+    }
+  } catch (err) {
+    console.warn('[frappeClient] batchGetFrappeCompaniesForUsers error:', err);
+  }
+  
+  return companyMap;
+}
+
+/**
  * Get company from Frappe for the currently logged in user
  * Returns the company name from the Employee doctype (ERPNext best practice)
  * Frappe/ERPNext does NOT store company directly on User.
@@ -834,7 +934,32 @@ export async function getFrappeCompanyForUser(userEmail: string): Promise<string
       console.warn(`[frappeClient] Method endpoint failed for Employee (username): ${methodErr2}`);
     }
 
-    console.warn(`[frappeClient] Could not find Employee record for user ${userEmail} (tried email and username)`);
+    // Approach 6: Fallback to User.company field (some setups store company directly on User)
+    try {
+      const userRes = await frappe.get('/api/resource/User', {
+        params: {
+          fields: JSON.stringify(['company']),
+          filters: JSON.stringify([['name', '=', userEmail]]),
+          limit_page_length: 1,
+        },
+      });
+
+      const users = userRes?.data?.data || [];
+      if (users.length > 0) {
+        const companyValue = users[0]?.company || null;
+        if (companyValue) {
+          const extractedCompany = extractCompanyString(companyValue);
+          if (extractedCompany) {
+            console.log(`[frappeClient] Found company via User.company for ${userEmail}: ${extractedCompany}`);
+            return extractedCompany;
+          }
+        }
+      }
+    } catch (userErr) {
+      console.warn(`[frappeClient] Failed to query User.company for ${userEmail}: ${userErr}`);
+    }
+
+    console.warn(`[frappeClient] Could not find company for user ${userEmail} in Employee or User doctypes`);
     return null;
   } catch (err) {
     console.error('[frappeClient] Error getting company for user from Employee:', err);
