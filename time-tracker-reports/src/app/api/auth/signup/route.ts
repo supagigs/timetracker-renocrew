@@ -115,29 +115,9 @@ async function upsertProjects(
 ) {
   const response = { projects, error: null as unknown } as { projects: string[]; error: Error | null };
 
-  // Attempt using user_id if the schema has already migrated
-  const userIdPayload = projects.map((project_name) => ({ user_id: userId, project_name }));
-
-  const byUserId = await supabase
-    .from('projects')
-    .upsert(userIdPayload, { onConflict: 'user_id,project_name' })
-    .select('project_name');
-
-  if (!byUserId.error && Array.isArray(byUserId.data)) {
-    response.projects = byUserId.data
-      .map((item) => item.project_name)
-      .filter((name): name is string => Boolean(name && name.trim()))
-      .map((name) => name.trim());
-    return response;
-  }
-
-  if (byUserId.error && !isMissingColumnError(byUserId.error, 'user_id')) {
-    response.error = byUserId.error as unknown as Error;
-    return response;
-  }
-
-  // Fall back to legacy schema that used user_email
-  const emailPayload = projects.map((project_name) => ({ user_email: email, project_name }));
+  // Use user_email to store projects (users are fetched from Frappe via email)
+  const normalizedEmail = email.trim().toLowerCase();
+  const emailPayload = projects.map((project_name) => ({ user_email: normalizedEmail, project_name }));
 
   const byEmail = await supabase
     .from('projects')
@@ -155,13 +135,6 @@ async function upsertProjects(
     .map((name) => name.trim());
 
   return response;
-}
-
-function isMissingColumnError(error: { message?: string | null }, column: string) {
-  if (!error?.message) {
-    return false;
-  }
-  return error.message.includes(`column \"${column}\"`) || error.message.includes(`column ${column}`);
 }
 
 

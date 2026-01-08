@@ -284,15 +284,42 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const session = JSON.parse(frappeSessionStr);
+        console.log('[TRACKER] Parsed Frappe session:', JSON.stringify(session, null, 2));
+        
         if (!session.frappeTimesheetId || !session.frappeTimesheetRowId) {
-          throw new Error('Invalid Frappe session data. Please create a timesheet first.');
+          const errorMsg = `Invalid Frappe session data. Please create a timesheet first. - frappeTimesheetId: ${session.frappeTimesheetId || 'MISSING'}, frappeTimesheetRowId: ${session.frappeTimesheetRowId || 'MISSING'}`;
+          console.error('[TRACKER] Validation failed:', errorMsg);
+          throw new Error(errorMsg);
         }
 
-        // Start the timesheet session
-        await window.frappe.startTimesheetSession({
+        console.log('[TRACKER] Validation passed, starting timesheet session');
+        console.log('[TRACKER] Calling window.frappe.startTimesheetSession with:', {
           timesheet: session.frappeTimesheetId,
           row: session.frappeTimesheetRowId
         });
+
+        // Start the timesheet session
+        const startSessionStartTime = Date.now();
+        try {
+          const startSessionResult = await window.frappe.startTimesheetSession({
+            timesheet: session.frappeTimesheetId,
+            row: session.frappeTimesheetRowId
+          });
+          const startSessionDuration = Date.now() - startSessionStartTime;
+          console.log('[TRACKER] startTimesheetSession completed in', startSessionDuration, 'ms');
+          console.log('[TRACKER] startTimesheetSession result:', JSON.stringify(startSessionResult, null, 2));
+        } catch (startSessionErr) {
+          const startSessionDuration = Date.now() - startSessionStartTime;
+          console.error('[TRACKER] startTimesheetSession FAILED after', startSessionDuration, 'ms');
+          console.error('[TRACKER] Error type:', startSessionErr?.constructor?.name);
+          console.error('[TRACKER] Error message:', startSessionErr?.message);
+          console.error('[TRACKER] Error stack:', startSessionErr?.stack);
+          if (startSessionErr?.response) {
+            console.error('[TRACKER] Error response status:', startSessionErr.response.status);
+            console.error('[TRACKER] Error response data:', JSON.stringify(startSessionErr.response.data, null, 2));
+          }
+          throw startSessionErr;
+        }
 
         // Set session start time (as Date object for timer calculations)
         sessionStartTime = new Date();
@@ -1201,6 +1228,18 @@ document.addEventListener('DOMContentLoaded', () => {
           plugins: {
             legend: {
               position: 'bottom'
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const label = context.label || '';
+                  // For doughnut charts, use context.raw to get the actual data value (seconds)
+                  const value = context.raw || 0;
+                  // Format seconds to hh:mm:ss
+                  const formattedTime = formatTime(value);
+                  return `${label}: ${formattedTime}`;
+                }
+              }
             }
           }
         }

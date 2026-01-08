@@ -199,8 +199,9 @@ async function backgroundCaptureScreenshots() {
   }
 }
 
-const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences, session } = require('electron');
 const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, getUserCompany: frappeGetUserCompany, getUserRoleProfile: frappeGetUserRoleProfile, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
+const { encrypt, decrypt } = require('./credentialEncryption');
 const { 
   getUserProjects: frappeGetUserProjects, 
   setLoggers: setFrappeServiceLoggers, 
@@ -3564,6 +3565,87 @@ function forceStopAllTimers() {
   });
 }
 
+// ============ SAVED CREDENTIALS IPC HANDLERS (Using Local Storage with Encryption) ============
+// Store credentials in encrypted form using localStorage (renderer process)
+// This is simpler and doesn't require database access
+// The encryption ensures passwords are not stored in plain text
+
+ipcMain.handle('auth:save-credentials', async (event, { email, password }) => {
+  try {
+    if (!email || !password) {
+      return { success: false, error: 'Email and password are required' };
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    
+    // Encrypt email and password
+    const encryptedEmail = encrypt(normalizedEmail);
+    const encryptedPassword = encrypt(password);
+
+    // Store in renderer's localStorage (will be sent via IPC)
+    // The renderer process will handle the actual storage
+    logInfo('IPC', `Credentials encrypted for user: ${normalizedEmail}`);
+    
+    // Return encrypted values to renderer for storage
+    return { 
+      success: true,
+      encryptedEmail,
+      encryptedPassword
+    };
+  } catch (error) {
+    logError('IPC', `Error in save-credentials: ${error.message}`, error);
+    return { success: false, error: error.message || 'Failed to save credentials' };
+  }
+});
+
+ipcMain.handle('auth:load-credentials', async () => {
+  try {
+    // Credentials are stored in renderer's localStorage
+    // The renderer will send the encrypted values here for decryption
+    // This handler is kept for backward compatibility but renderer handles storage
+    return { success: true, credentials: null };
+  } catch (error) {
+    logError('IPC', `Error in load-credentials: ${error.message}`, error);
+    return { success: false, error: error.message || 'Failed to load credentials' };
+  }
+});
+
+ipcMain.handle('auth:decrypt-credentials', async (event, { encryptedEmail, encryptedPassword }) => {
+  try {
+    if (!encryptedEmail || !encryptedPassword) {
+      return { success: false, error: 'Encrypted credentials are required' };
+    }
+
+    // Decrypt credentials
+    const decryptedEmail = decrypt(encryptedEmail);
+    const decryptedPassword = decrypt(encryptedPassword);
+    
+    logInfo('IPC', `Credentials decrypted for user: ${decryptedEmail}`);
+    return { 
+      success: true, 
+      credentials: {
+        email: decryptedEmail,
+        password: decryptedPassword
+      }
+    };
+  } catch (error) {
+    logError('IPC', `Error decrypting credentials: ${error.message}`, error);
+    return { success: false, error: 'Failed to decrypt saved credentials' };
+  }
+});
+
+ipcMain.handle('auth:delete-credentials', async () => {
+  try {
+    // Credentials are stored in renderer's localStorage
+    // The renderer will handle deletion
+    logInfo('IPC', 'Credentials deletion requested (handled by renderer)');
+    return { success: true };
+  } catch (error) {
+    logError('IPC', `Error in delete-credentials: ${error.message}`, error);
+    return { success: false, error: error.message || 'Failed to delete credentials' };
+  }
+});
+
 ipcMain.handle('auth:me', async () => {
   try {
     const userEmail = await frappeGetCurrentUser();
@@ -3597,11 +3679,75 @@ ipcMain.handle('frappe:add-time-log-to-timesheet', async (_e, timesheetId, timeL
 });
 
 ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
-  return await getOrCreateTimesheet(payload);
+  const startTime = Date.now();
+  console.log('[IPC] frappe:get-or-create-timesheet called at', new Date().toISOString());
+  console.log('[IPC] Payload received:', JSON.stringify(payload, null, 2));
+  
+  try {
+    const result = await getOrCreateTimesheet(payload);
+    const duration = Date.now() - startTime;
+    console.log('[IPC] frappe:get-or-create-timesheet SUCCESS in', duration, 'ms');
+    console.log('[IPC] Result:', JSON.stringify(result, null, 2));
+    return result;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error('[IPC] frappe:get-or-create-timesheet FAILED after', duration, 'ms');
+    console.error('[IPC] Error name:', error?.name);
+    console.error('[IPC] Error message:', error?.message);
+    console.error('[IPC] Error stack:', error?.stack);
+    
+    if (error?.response) {
+      console.error('[IPC] Error response status:', error.response.status);
+      console.error('[IPC] Error response data:', JSON.stringify(error.response.data, null, 2));
+    }
+    
+    if (error?.config) {
+      console.error('[IPC] Request config:', {
+        url: error.config?.url,
+        method: error.config?.method,
+        data: error.config?.data
+      });
+    }
+    
+    console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    throw error;
+  }
 });
 
 ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
-  return await startTimesheetSession(payload);
+  const startTime = Date.now();
+  console.log('[IPC] frappe:start-timesheet-session called at', new Date().toISOString());
+  console.log('[IPC] Payload received:', JSON.stringify(payload, null, 2));
+  
+  try {
+    const result = await startTimesheetSession(payload);
+    const duration = Date.now() - startTime;
+    console.log('[IPC] frappe:start-timesheet-session SUCCESS in', duration, 'ms');
+    console.log('[IPC] Result:', JSON.stringify(result, null, 2));
+    return result;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error('[IPC] frappe:start-timesheet-session FAILED after', duration, 'ms');
+    console.error('[IPC] Error name:', error?.name);
+    console.error('[IPC] Error message:', error?.message);
+    console.error('[IPC] Error stack:', error?.stack);
+    
+    if (error?.response) {
+      console.error('[IPC] Error response status:', error.response.status);
+      console.error('[IPC] Error response data:', JSON.stringify(error.response.data, null, 2));
+    }
+    
+    if (error?.config) {
+      console.error('[IPC] Request config:', {
+        url: error.config?.url,
+        method: error.config?.method,
+        data: error.config?.data
+      });
+    }
+    
+    console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    throw error;
+  }
 });
 
 ipcMain.handle('frappe:update-timesheet-row', async (_e, payload) => {
@@ -4957,6 +5103,24 @@ ipcMain.handle('open-external-url', async (event, url) => {
 
 // ============ APP LIFECYCLE ============
 app.whenReady().then(() => {
+  // Enable auto-launch on system startup
+  app.setLoginItemSettings({
+    openAtLogin: true
+  });
+  logInfo('App', 'Auto-launch on login enabled');
+
+  // Enable cookie persistence for Frappe sessions
+  // This allows the session cookie (sid) to persist across app restarts
+  const defaultSession = session.defaultSession;
+  
+  // Flush cookies to disk to ensure persistence
+  defaultSession.cookies.flushStore().catch(err => {
+    logWarn('Session', `Failed to flush cookie store: ${err.message}`);
+  });
+  
+  // Set up cookie persistence
+  logInfo('Session', 'Cookie persistence enabled for Frappe sessions');
+  
   createWindow();
 });
 

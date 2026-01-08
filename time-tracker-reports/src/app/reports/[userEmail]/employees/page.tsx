@@ -17,6 +17,26 @@ type UserSummary = {
   lastActiveAt: string | null;
 };
 
+/**
+ * Normalize company value to ensure it's always a string or null, never an object
+ */
+function normalizeCompany(company: any): string | null {
+  if (!company) return null;
+  if (typeof company === 'string') {
+    return company.trim() || null;
+  }
+  if (typeof company === 'object') {
+    // Handle object with name property
+    if (company.name && typeof company.name === 'string') {
+      return company.name.trim() || null;
+    }
+    // Try to find a string value in the object
+    const stringValue = Object.values(company).find((v: any) => typeof v === 'string' && v.trim());
+    return stringValue ? (stringValue as string).trim() : null;
+  }
+  return null;
+}
+
 async function fetchAllUsers(): Promise<UserSummary[]> {
   const supabase = createServerSupabaseClient();
 
@@ -28,7 +48,7 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
     const frappeUsers = await getAllFrappeUsers(); // No company filter - get all users
     allUserEmails = frappeUsers.map((user) => {
       fullNameMap.set(user.email, user.full_name ?? null);
-      companyMap.set(user.email, user.company ?? null);
+      companyMap.set(user.email, normalizeCompany(user.company));
       return user.email;
     });
     
@@ -71,8 +91,8 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
     userMap.set(row.email, {
       displayName: fullNameMap.get(row.email) ?? row.display_name ?? null,
       role: row.role ?? null,
-      // Prefer company from Frappe (companyMap) if available, otherwise use Supabase value
-      company: companyMap.get(row.email) ?? row.company ?? null,
+      // Prefer company from Frappe (companyMap) if available, otherwise use Supabase value (normalized)
+      company: companyMap.get(row.email) ?? normalizeCompany(row.company),
     });
   });
 
@@ -88,7 +108,7 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
         const normalizedEmail = email.toLowerCase().trim();
         if (emailOrUsername === normalizedEmail || emailOrUsername === normalizedEmail.split('@')[0]) {
           if (!companyMap.has(email)) {
-            companyMap.set(email, company);
+            companyMap.set(email, normalizeCompany(company));
           }
         }
       }
@@ -103,8 +123,8 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
       const existing = userMap.get(email);
       const companyFromFrappe = companyMap.get(email);
       
-      // Use company from Frappe (batch or individual), fallback to Supabase
-      const company = companyFromFrappe ?? existing?.company ?? null;
+      // Use company from Frappe (batch or individual), fallback to Supabase (normalized)
+      const company = normalizeCompany(companyFromFrappe ?? existing?.company);
       
       userMap.set(email, {
         displayName: existing?.displayName ?? fullNameMap.get(email) ?? null,
@@ -314,7 +334,7 @@ export default async function ManagerEmployeesPage({
                           {user.role || '—'}
                         </td>
                         <td className="px-4 py-3 text-foreground">
-                          {user.company || '—'}
+                          {normalizeCompany(user.company) || '—'}
                         </td>
                         <td className="px-4 py-3 text-foreground">
                           {formatSecondsToHoursMinutes(user.todayActiveSeconds)}

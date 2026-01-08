@@ -62,23 +62,38 @@ document.addEventListener('DOMContentLoaded', () => {
     // Create Timesheet
     // -----------------------------
     createBtn.addEventListener('click', async () => {
+      const startTime = Date.now();
+      console.log('[CREATE_TIMESHEET] ========== START ==========');
+      console.log('[CREATE_TIMESHEET] Button clicked at:', new Date().toISOString());
+      
       try {
         createBtn.disabled = true;
+        console.log('[CREATE_TIMESHEET] Button disabled');
   
         const userEmail = StorageService.getItem('userEmail');
         const projectId = StorageService.getItem('selectedProjectId');
         let taskId = StorageService.getItem('selectedTaskId'); // Optional
 
+        console.log('[CREATE_TIMESHEET] Input data:', {
+          userEmail: userEmail || 'MISSING',
+          projectId: projectId || 'MISSING',
+          taskId: taskId || 'null/undefined'
+        });
+
         // Ensure taskId is not empty string (treat empty as no task selected)
         if (taskId === '' || taskId === null || taskId === undefined) {
           taskId = null;
           StorageService.removeItem('selectedTaskId'); // Clean up if it's empty
+          console.log('[CREATE_TIMESHEET] TaskId was empty/null, set to null and removed from storage');
         }
 
         if (!userEmail || !projectId) {
-          throw new Error('Missing user or project information');
+          const errorMsg = `Missing user or project information - userEmail: ${userEmail || 'MISSING'}, projectId: ${projectId || 'MISSING'}`;
+          console.error('[CREATE_TIMESHEET] Validation failed:', errorMsg);
+          throw new Error(errorMsg);
         }
 
+        console.log('[CREATE_TIMESHEET] Validation passed, clearing local timer state');
         clearLocalTimerState();
 
         // Task is optional - only include it if provided
@@ -89,24 +104,57 @@ document.addEventListener('DOMContentLoaded', () => {
           timesheetData.task = taskId;
         }
 
+        console.log('[CREATE_TIMESHEET] Prepared timesheet data:', JSON.stringify(timesheetData, null, 2));
+        console.log('[CREATE_TIMESHEET] Calling window.frappe.getOrCreateTimesheet...');
+
         // Get or create timesheet for this project (one timesheet per project)
-        console.log('Getting or creating timesheet for project:', projectId);
-        console.log('Current user:', userEmail);
-        const { timesheet, row } = await window.frappe.getOrCreateTimesheet(timesheetData);
+        const getOrCreateStartTime = Date.now();
+        let timesheetResult;
+        try {
+          timesheetResult = await window.frappe.getOrCreateTimesheet(timesheetData);
+          const getOrCreateDuration = Date.now() - getOrCreateStartTime;
+          console.log('[CREATE_TIMESHEET] getOrCreateTimesheet completed in', getOrCreateDuration, 'ms');
+          console.log('[CREATE_TIMESHEET] Raw response:', JSON.stringify(timesheetResult, null, 2));
+        } catch (getOrCreateErr) {
+          const getOrCreateDuration = Date.now() - getOrCreateStartTime;
+          console.error('[CREATE_TIMESHEET] getOrCreateTimesheet FAILED after', getOrCreateDuration, 'ms');
+          console.error('[CREATE_TIMESHEET] Error type:', getOrCreateErr?.constructor?.name);
+          console.error('[CREATE_TIMESHEET] Error message:', getOrCreateErr?.message);
+          console.error('[CREATE_TIMESHEET] Error stack:', getOrCreateErr?.stack);
+          if (getOrCreateErr?.response) {
+            console.error('[CREATE_TIMESHEET] Error response status:', getOrCreateErr.response.status);
+            console.error('[CREATE_TIMESHEET] Error response data:', JSON.stringify(getOrCreateErr.response.data, null, 2));
+          }
+          throw getOrCreateErr;
+        }
+
+        const { timesheet, row } = timesheetResult;
+        console.log('[CREATE_TIMESHEET] Extracted values:', {
+          timesheet: timesheet,
+          timesheetType: typeof timesheet,
+          row: row,
+          rowType: typeof row
+        });
 
         if (!timesheet) {
-          throw new Error('Invalid timesheet response from server');
+          const errorMsg = 'Invalid timesheet response from server - timesheet is missing or falsy';
+          console.error('[CREATE_TIMESHEET]', errorMsg);
+          console.error('[CREATE_TIMESHEET] Full response object:', JSON.stringify(timesheetResult, null, 2));
+          throw new Error(errorMsg);
         }
 
         if (!row) {
-          throw new Error('Invalid timesheet row response from server');
+          const errorMsg = 'Invalid timesheet row response from server - row is missing or falsy';
+          console.error('[CREATE_TIMESHEET]', errorMsg);
+          console.error('[CREATE_TIMESHEET] Full response object:', JSON.stringify(timesheetResult, null, 2));
+          throw new Error(errorMsg);
         }
 
         // Store in clearly named variables
         const frappeTimesheetId = timesheet;
         const frappeTimesheetRowId = row;
 
-        console.log('Timesheet result:', { 
+        console.log('[CREATE_TIMESHEET] Timesheet creation successful:', { 
           frappeTimesheetId, 
           frappeTimesheetRowId
         });
@@ -116,25 +164,64 @@ document.addEventListener('DOMContentLoaded', () => {
           frappeTimesheetId,
           frappeTimesheetRowId
         };
-        StorageService.setItem('frappeSession', JSON.stringify(currentSession));
+        const sessionJson = JSON.stringify(currentSession);
+        console.log('[CREATE_TIMESHEET] Storing session data:', sessionJson);
+        
+        StorageService.setItem('frappeSession', sessionJson);
 
         // Also store IDs individually for backward compatibility
         StorageService.setItem('frappeTimesheetId', frappeTimesheetId);
         StorageService.setItem('frappeTimesheetRowId', frappeTimesheetRowId);
+        console.log('[CREATE_TIMESHEET] Stored individual IDs to storage');
 
         StorageService.setItem('isActive', 'false');
+        console.log('[CREATE_TIMESHEET] Set isActive to false');
+
+        // Verify storage
+        const storedSession = StorageService.getItem('frappeSession');
+        console.log('[CREATE_TIMESHEET] Verification - stored session:', storedSession);
 
         // Note: Supabase session record will be created when user clicks "Start" on tracker page
         // This ensures we only create the record when tracking actually begins
 
+        const totalDuration = Date.now() - startTime;
+        console.log('[CREATE_TIMESHEET] Total operation completed in', totalDuration, 'ms');
+        console.log('[CREATE_TIMESHEET] Redirecting to tracker.html...');
+        console.log('[CREATE_TIMESHEET] ========== SUCCESS ==========');
+
         window.location.href = 'tracker.html';
   
       } catch (err) {
-        console.error('Create timesheet failed:', err);
+        const totalDuration = Date.now() - startTime;
+        console.error('[CREATE_TIMESHEET] ========== ERROR ==========');
+        console.error('[CREATE_TIMESHEET] Operation failed after', totalDuration, 'ms');
+        console.error('[CREATE_TIMESHEET] Error name:', err?.name);
+        console.error('[CREATE_TIMESHEET] Error message:', err?.message);
+        console.error('[CREATE_TIMESHEET] Error stack:', err?.stack);
+        
+        if (err?.response) {
+          console.error('[CREATE_TIMESHEET] Error response status:', err.response.status);
+          console.error('[CREATE_TIMESHEET] Error response headers:', JSON.stringify(err.response.headers, null, 2));
+          console.error('[CREATE_TIMESHEET] Error response data:', JSON.stringify(err.response.data, null, 2));
+        }
+        
+        if (err?.config) {
+          console.error('[CREATE_TIMESHEET] Request config:', {
+            url: err.config?.url,
+            method: err.config?.method,
+            data: err.config?.data,
+            headers: err.config?.headers
+          });
+        }
+        
+        console.error('[CREATE_TIMESHEET] Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
+        console.error('[CREATE_TIMESHEET] ============================');
+        
         NotificationService.showError(
           err.message || 'Failed to create timesheet'
         );
         createBtn.disabled = false;
+        console.log('[CREATE_TIMESHEET] Button re-enabled after error');
       }
     });
   

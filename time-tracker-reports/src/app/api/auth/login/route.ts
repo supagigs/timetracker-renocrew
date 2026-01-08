@@ -109,9 +109,10 @@ export async function POST(request: Request) {
 
       user = insertedUser;
     } else {
-      // Only update fields when we have non-null values from Frappe, to avoid overwriting existing data with null
-      const newRole = roleProfile ?? user.role ?? null;
-      const newCompany = company ?? user.company ?? null;
+      // Always update role if we successfully fetched it from Frappe (to ensure it's fresh)
+      // Only use existing role if Frappe fetch failed
+      const newRole = roleProfile !== null ? roleProfile : (user.role ?? null);
+      const newCompany = company !== null ? company : (user.company ?? null);
 
       const shouldUpdate =
         (newRole !== user.role) ||
@@ -189,34 +190,11 @@ async function fetchUserProjects(
     return projectNames;
   }
 
-  // Prefer user_id if schema already migrated
-  let queryByUserId:
-    | { data: { project_name: string | null }[] | null; error: { message?: string | null } | null }
-    = { data: null, error: null };
-
-  if (user?.id) {
-    queryByUserId = await supabase
-      .from('projects')
-      .select('project_name')
-      .eq('user_id', user.id)
-      .order('project_name', { ascending: true });
-  }
-
-  if (!queryByUserId.error && Array.isArray(queryByUserId.data) && queryByUserId.data.length > 0) {
-    return queryByUserId.data
-      .map((project) => project.project_name)
-      .filter((name): name is string => Boolean(name && name.trim()))
-      .map((name) => name.trim());
-  }
-
-  if (queryByUserId.error && !isMissingColumnError(queryByUserId.error, 'user_id')) {
-    console.warn('[auth/login] Failed to fetch projects by user_id:', queryByUserId.error);
-  }
-
+  // Use user_email to fetch projects (users are fetched from Frappe via email)
   const { data: byEmail, error: byEmailError } = await supabase
     .from('projects')
     .select('project_name')
-    .eq('user_email', user.email)
+    .eq('user_email', user.email.trim().toLowerCase())
     .order('project_name', { ascending: true });
 
   if (byEmailError) {
@@ -228,13 +206,6 @@ async function fetchUserProjects(
     .map((project) => project.project_name)
     .filter((name): name is string => Boolean(name && name.trim()))
     .map((name) => name.trim());
-}
-
-function isMissingColumnError(error: { message?: string | null }, column: string) {
-  if (!error?.message) {
-    return false;
-  }
-  return error.message.includes(`column \"${column}\"`) || error.message.includes(`column ${column}`);
 }
 
 

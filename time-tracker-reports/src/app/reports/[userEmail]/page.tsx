@@ -226,30 +226,48 @@ async function fetchUserName(userEmail: string): Promise<string | null> {
 }
 
 async function fetchUserRole(userEmail: string): Promise<string | null> {
-  // First try to get role from database (which stores role_profile_name from Frappe)
-  const supabase = createServerSupabaseClient();
-  
-  const { data, error } = await supabase
-    .from('users')
-    .select('role')
-    .eq('email', userEmail)
-    .maybeSingle();
-
-  if (!error && data?.role) {
-    // Return the stored role_profile_name from database
-    return data.role;
-  }
-
-  // Fallback: Fetch role_profile_name from Frappe if not in database
+  // Fetch role from Frappe immediately to ensure we have the most up-to-date role
+  // This ensures the correct view is shown on first load
   const { getFrappeRoleProfileForEmail } = await import('@/lib/frappeClient');
   
-  try {
-    const roleProfile = await getFrappeRoleProfileForEmail(userEmail);
-    return roleProfile;
-  } catch (error) {
-    console.error('Error fetching user role from Frappe:', error);
-    return null;
+  // Fetch from Frappe and database in parallel for faster response
+  const [frappeRole, dbResult] = await Promise.allSettled([
+    getFrappeRoleProfileForEmail(userEmail),
+    (async () => {
+      const supabase = createServerSupabaseClient();
+      const { data, error } = await supabase
+        .from('users')
+        .select('role')
+        .eq('email', userEmail)
+        .maybeSingle();
+      return (!error && data?.role) ? data.role : null;
+    })(),
+  ]);
+
+  // Prefer Frappe result (most up-to-date), fallback to database
+  const roleProfile = frappeRole.status === 'fulfilled' && frappeRole.value
+    ? frappeRole.value
+    : dbResult.status === 'fulfilled' && dbResult.value
+      ? dbResult.value
+      : null;
+
+  // If we got a role from Frappe and it's different from database, update database in background
+  if (frappeRole.status === 'fulfilled' && frappeRole.value && 
+      dbResult.status === 'fulfilled' && frappeRole.value !== dbResult.value) {
+    const supabase = createServerSupabaseClient();
+    supabase
+      .from('users')
+      .update({ role: frappeRole.value })
+      .eq('email', userEmail)
+      .then(() => {
+        // Silently update - no need to wait or handle errors
+      })
+      .catch((err) => {
+        console.warn('[fetchUserRole] Failed to update role in database:', err);
+      });
   }
+
+  return roleProfile;
 }
 
 function buildMonthlySummary(sessions: TimeSession[]) {

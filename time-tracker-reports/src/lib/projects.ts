@@ -21,34 +21,15 @@ export async function fetchManagerProjects({
   company?: string | null;
 }): Promise<ProjectRecord[]> {
   // For managers, fetch ALL projects from Frappe (not filtered by company)
+  // NOTE: We do NOT store these in the projects table because not all projects
+  // are assigned to the manager. The projects table should only contain projects
+  // that are actually assigned to specific users (which happens when employees
+  // fetch their projects via fetchEmployeeProjects).
   try {
-    const frappeProjects = await getAllFrappeProjects(); // No company filter - get all projects
+    const frappeProjects = await getAllFrappeProjects(company);
     
-    // Store projects in database if user_id is available
-    if (userId && frappeProjects.length > 0) {
-      const supabase = createServerSupabaseClient();
-      
-      for (const project of frappeProjects) {
-        const { error } = await supabase
-          .from('projects')
-          .upsert(
-            {
-              user_id: userId,
-              frappe_project_id: project.id,
-              project_name: project.name,
-            },
-            {
-              onConflict: 'user_id,frappe_project_id',
-              ignoreDuplicates: false,
-            }
-          );
-        
-        if (error) {
-          console.warn('[manager-projects] Failed to upsert project:', error);
-        }
-      }
-    }
-    
+    // Return projects without storing them in database
+    // Managers can view all projects, but we shouldn't create "fake" assignments
     return frappeProjects.map((project, index) => ({
       id: index + 1, // Use index as ID since Frappe projects don't have numeric IDs
       name: project.name,
@@ -72,38 +53,27 @@ export async function fetchEmployeeProjects(email: string): Promise<ProjectRecor
   try {
     const frappeProjects = await getFrappeProjectsForUser(normalizedEmail);
     
-    // Store projects in database
+    // Store projects in database using user_email
     if (frappeProjects.length > 0) {
       const supabase = createServerSupabaseClient();
       
-      // Get user_id
-      const { data: userData } = await supabase
-        .from('users')
-        .select('id')
-        .eq('email', normalizedEmail)
-        .maybeSingle();
-      
-      const userId = userData?.id || null;
-      
-      if (userId) {
-        for (const project of frappeProjects) {
-          const { error } = await supabase
-            .from('projects')
-            .upsert(
-              {
-                user_id: userId,
-                frappe_project_id: project.id,
-                project_name: project.name,
-              },
-              {
-                onConflict: 'user_id,frappe_project_id',
-                ignoreDuplicates: false,
-              }
-            );
-          
-          if (error) {
-            console.warn('[employee-projects] Failed to upsert project:', error);
-          }
+      for (const project of frappeProjects) {
+        const { error } = await supabase
+          .from('projects')
+          .upsert(
+            {
+              user_email: normalizedEmail,
+              frappe_project_id: project.id,
+              project_name: project.name,
+            },
+            {
+              onConflict: 'user_email,frappe_project_id',
+              ignoreDuplicates: false,
+            }
+          );
+        
+        if (error) {
+          console.warn('[employee-projects] Failed to upsert project:', error);
         }
       }
     }

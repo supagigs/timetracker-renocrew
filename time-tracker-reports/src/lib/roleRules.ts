@@ -1,9 +1,21 @@
 /**
  * Role-based routing rules
  * Defines which routes are accessible to which role profiles
+ * Manager roles (SuperAdmin, MainAdmin, etc.) have access to all routes
+ * Employee role has limited access
  */
 export const ROLE_ROUTES = {
   'SuperAdmin': [
+    '/reports',
+    '/reports/[userEmail]',
+    '/reports/[userEmail]/employees',
+    '/reports/[userEmail]/reports',
+    '/reports/[userEmail]/projects',
+    '/reports/[userEmail]/screenshots',
+    '/reports/[userEmail]/screenshot-interval',
+    '/reports/[userEmail]/timesheet',
+  ],
+  'MainAdmin': [
     '/reports',
     '/reports/[userEmail]',
     '/reports/[userEmail]/employees',
@@ -24,7 +36,7 @@ export const ROLE_ROUTES = {
 
 /**
  * Check if a route is accessible for a given role profile
- * @param roleProfile - User's role profile from Frappe (e.g., 'SuperAdmin', 'Employee')
+ * @param roleProfile - User's role profile from Frappe (e.g., 'SuperAdmin', 'MainAdmin', 'Employee')
  * @param pathname - Route pathname to check
  * @returns true if route is accessible, false otherwise
  */
@@ -37,7 +49,17 @@ export function isRouteAccessible(roleProfile: string | null, pathname: string):
   const normalizedPath = pathname.split('?')[0].replace(/\/$/, '');
 
   // Get allowed routes for this role profile
-  const allowedRoutes = ROLE_ROUTES[roleProfile as keyof typeof ROLE_ROUTES] || [];
+  // If role profile is not explicitly defined, treat non-Employee roles as Manager (SuperAdmin access)
+  let allowedRoutes = ROLE_ROUTES[roleProfile as keyof typeof ROLE_ROUTES];
+  
+  if (!allowedRoutes && roleProfile !== 'Employee') {
+    // Default to SuperAdmin routes for any admin role not explicitly defined
+    allowedRoutes = ROLE_ROUTES['SuperAdmin'];
+  }
+
+  if (!allowedRoutes) {
+    return false;
+  }
 
   // Check if pathname matches any allowed route pattern
   for (const route of allowedRoutes) {
@@ -59,7 +81,8 @@ export function isRouteAccessible(roleProfile: string | null, pathname: string):
  * @returns Default route path for the role
  */
 export function getDefaultRouteForRole(roleProfile: string | null): string {
-  if (roleProfile === 'SuperAdmin') {
+  // Manager roles (SuperAdmin, MainAdmin, etc.) - treat all non-Employee roles as Manager
+  if (roleProfile && roleProfile !== 'Employee') {
     return '/reports';
   }
   if (roleProfile === 'Employee') {

@@ -258,10 +258,16 @@ export async function getFrappeRoleProfileForEmail(userEmail: string): Promise<s
 
 /**
  * Determine user role from Frappe role profile
- * Matches the app's logic: If role_profile_name is "SuperAdmin", user is a Manager, else Employee
+ * Manager roles: SuperAdmin, MainAdmin, and any other non-Employee role profiles
+ * Employee role: Only when role_profile_name is exactly "Employee"
+ * 
+ * @param roleProfile - The role_profile_name from Frappe (e.g., 'SuperAdmin', 'MainAdmin', 'Employee')
+ * @returns 'Manager' for admin roles, 'Employee' for Employee role, 'Manager' as default for null/unknown roles
  */
 export function determineRoleFromRoleProfile(roleProfile: string | null): 'Manager' | 'Employee' {
-  return roleProfile === 'SuperAdmin' ? 'Manager' : 'Employee';
+  // Only 'Employee' is treated as Employee, everything else (including null) is Manager
+  // This ensures admin roles like SuperAdmin, MainAdmin, etc. are all treated as Managers
+  return roleProfile === 'Employee' ? 'Employee' : 'Manager';
 }
 
 /**

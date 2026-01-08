@@ -46,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
   StorageService.removeItem('selectedTaskName');
 
   // ---- Fetch tasks ----
+  // If no tasks exist, skip this screen and go directly to createTimesheet
   loadTasks();
 
   async function loadTasks() {
@@ -61,19 +62,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const tasks = await window.frappe.getTasksForProject(projectId);
 
+      // If no tasks exist for this project assigned to the user, skip task selection
       if (!Array.isArray(tasks) || tasks.length === 0) {
-        showNoTasks(
-          'No active tasks assigned to you for this project.'
-        );
+        console.log('No tasks found for project. Skipping task selection screen.');
+        // Redirect directly to createTimesheet without showing task selection screen
+        window.location.href = 'createTimesheet.html';
         return;
       }
 
+      // Tasks exist - show the task selection screen
       populateTaskDropdown(tasks);
     } catch (err) {
       console.error('Failed to load tasks:', err);
-      showNoTasks(
-        err.message || 'Failed to load tasks. Please try again.'
-      );
+      // On error, also skip task selection and proceed to createTimesheet
+      // This ensures the user can still start a session even if task fetching fails
+      console.log('Error loading tasks. Skipping task selection screen.');
+      window.location.href = 'createTimesheet.html';
     }
   }
 

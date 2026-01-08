@@ -31,18 +31,66 @@ function forceResetEmailField() {
 }
 
 // Initialize login page
-function initializeLoginPage() {
+async function initializeLoginPage() {
   console.log('Initializing login page');
   if (window.electronAPI?.setUserLoggedIn) {
     window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state:', err));
   }
   
-  // Clear any stored email to ensure fresh login
+  // Clear any stored email to ensure fresh login (but not if we have saved credentials)
   StorageService.removeItem('userEmail');
   
   // Ensure email field is editable
   const emailInput = document.getElementById('email');
+  const passwordInput = document.getElementById('password');
+  const rememberMeCheckbox = document.getElementById('rememberMe');
   const loginBtn = document.getElementById('loginBtn');
+
+  // Check for saved credentials in localStorage and auto-fill form (but don't auto-login)
+  let hasSavedCredentials = false;
+  if (emailInput && passwordInput && window.auth && window.auth.decryptCredentials) {
+    try {
+      console.log('Checking for saved credentials in localStorage...');
+      
+      // Load encrypted credentials from localStorage
+      const encryptedEmail = StorageService.getItem('saved_encrypted_email');
+      const encryptedPassword = StorageService.getItem('saved_encrypted_password');
+      
+      if (encryptedEmail && encryptedPassword) {
+        // Decrypt credentials via IPC (main process has encryption key)
+        const decryptResult = await window.auth.decryptCredentials(encryptedEmail, encryptedPassword);
+        
+        if (decryptResult && decryptResult.success && decryptResult.credentials) {
+          const { email, password } = decryptResult.credentials;
+          console.log('Found saved credentials, auto-filling form...');
+          hasSavedCredentials = true;
+          
+          // Auto-fill the form fields only (don't auto-login)
+          emailInput.value = email;
+          passwordInput.value = password;
+          if (rememberMeCheckbox) {
+            rememberMeCheckbox.checked = true;
+          }
+          
+          console.log('Form auto-filled with saved credentials. Waiting for user to click login button.');
+          // User must click the login button manually - no auto-login
+        } else {
+          console.log('Failed to decrypt saved credentials, clearing invalid data');
+          // Clear invalid encrypted data
+          StorageService.removeItem('saved_encrypted_email');
+          StorageService.removeItem('saved_encrypted_password');
+        }
+      } else {
+        console.log('No saved credentials found in localStorage');
+      }
+    } catch (error) {
+      console.error('Error loading saved credentials:', error);
+      // Clear potentially corrupted data
+      StorageService.removeItem('saved_encrypted_email');
+      StorageService.removeItem('saved_encrypted_password');
+      // Continue with normal login flow
+    }
+  }
   
   console.log('Email input found:', emailInput);
   console.log('Login button found:', loginBtn);
@@ -51,7 +99,10 @@ function initializeLoginPage() {
     // Reset all input properties to ensure it's interactive
     emailInput.readOnly = false;
     emailInput.disabled = false;
-    emailInput.value = ''; // Clear any existing value
+    // Only clear email if we don't have saved credentials
+    if (!hasSavedCredentials) {
+      emailInput.value = ''; // Clear any existing value
+    }
     emailInput.style.pointerEvents = 'auto';
     emailInput.style.cursor = 'text';
     emailInput.style.userSelect = 'text';
@@ -82,7 +133,6 @@ function initializeLoginPage() {
     });
     
     // Handle Enter key in password field to trigger login
-    const passwordInput = document.getElementById('password');
     if (passwordInput) {
       passwordInput.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') {
@@ -358,6 +408,39 @@ async function handleLogin() {
 
     console.log('Frappe login successful for:', email);
     NotificationService.showLoginSuccess(email);
+    
+    // Handle "Remember me" functionality
+    // Store encrypted credentials in localStorage (not database)
+    const rememberMeCheckbox = document.getElementById('rememberMe');
+    const rememberMe = rememberMeCheckbox ? rememberMeCheckbox.checked : false;
+    
+    if (rememberMe && window.auth && window.auth.saveCredentials) {
+      try {
+        console.log('Saving credentials for Remember Me...');
+        const saveResult = await window.auth.saveCredentials(email, password);
+        if (saveResult && saveResult.success && saveResult.encryptedEmail && saveResult.encryptedPassword) {
+          // Store encrypted values in localStorage
+          StorageService.setItem('saved_encrypted_email', saveResult.encryptedEmail);
+          StorageService.setItem('saved_encrypted_password', saveResult.encryptedPassword);
+          console.log('Credentials encrypted and saved to localStorage');
+        } else {
+          console.warn('Failed to save credentials:', saveResult?.error);
+        }
+      } catch (saveError) {
+        console.error('Error saving credentials:', saveError);
+        // Don't block login if save fails
+      }
+    } else if (!rememberMe) {
+      // If "Remember me" is unchecked, delete any saved credentials from localStorage
+      try {
+        StorageService.removeItem('saved_encrypted_email');
+        StorageService.removeItem('saved_encrypted_password');
+        console.log('Deleted saved credentials from localStorage');
+      } catch (deleteError) {
+        console.error('Error deleting credentials:', deleteError);
+        // Don't block login if delete fails
+      }
+    }
     
     // Store user email (always treat as Freelancer since we removed client concept)
     StorageService.setItem('userEmail', email);
