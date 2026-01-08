@@ -2314,6 +2314,163 @@ async function saveTimesheetWithSavedocs(timesheetDoc) {
   }
 }
 
+/**
+ * Get all users assigned to a specific project in Frappe
+ * Returns an array of user emails assigned to the project via:
+ * 1. Tasks assigned to the project (check _assign field on tasks)
+ * 2. Direct assignment via _assign field on Project
+ * 3. Project User doctype assignments
+ * 
+ * @param {string} projectId - Frappe project ID
+ * @returns {Promise<string[]>} Array of user emails assigned to the project
+ */
+async function getUsersAssignedToProject(projectId) {
+  if (!projectId) {
+    if (logError) logError('Frappe', 'getUsersAssignedToProject: projectId is required');
+    return [];
+  }
+
+  try {
+    if (logInfo) {
+      logInfo('Frappe', `Fetching users assigned to project: ${projectId}`);
+    }
+
+    const frappe = createFrappeClient();
+    const assignedUsers = new Set();
+
+    // Method 1: Get users from tasks assigned to this project
+    try {
+      const taskRes = await frappe.get('/api/resource/Task', {
+        params: {
+          fields: JSON.stringify(['_assign']),
+          filters: JSON.stringify([
+            ['project', '=', projectId],
+            ['_assign', '!=', ''],
+          ]),
+          limit_page_length: 1000,
+        },
+      });
+
+      const tasks = Array.isArray(taskRes?.data?.data) ? taskRes.data.data : [];
+      
+      tasks.forEach((task) => {
+        if (task._assign) {
+          // _assign field can be a JSON string array or comma-separated string
+          let assignees = [];
+          try {
+            // Try parsing as JSON first
+            assignees = typeof task._assign === 'string' ? JSON.parse(task._assign) : task._assign;
+            if (!Array.isArray(assignees)) {
+              assignees = [task._assign];
+            }
+          } catch {
+            // If not JSON, treat as comma-separated string
+            assignees = typeof task._assign === 'string' 
+              ? task._assign.split(',').map(e => e.trim()).filter(e => e)
+              : [task._assign];
+          }
+          
+          assignees.forEach(email => {
+            if (email && typeof email === 'string') {
+              assignedUsers.add(email.trim().toLowerCase());
+            }
+          });
+        }
+      });
+
+      if (logInfo) {
+        logInfo('Frappe', `Found ${assignedUsers.size} unique user(s) from tasks in project ${projectId}`);
+      }
+    } catch (taskErr) {
+      if (logError) {
+        logError('Frappe', `Error fetching users from tasks for project ${projectId}: ${taskErr.message}`);
+      }
+    }
+
+    // Method 2: Get users directly assigned via _assign field on Project
+    try {
+      const projectRes = await frappe.get(`/api/resource/Project/${projectId}`, {
+        params: {
+          fields: JSON.stringify(['_assign']),
+        },
+      });
+
+      const project = projectRes?.data?.data;
+      if (project && project._assign) {
+        let assignees = [];
+        try {
+          assignees = typeof project._assign === 'string' ? JSON.parse(project._assign) : project._assign;
+          if (!Array.isArray(assignees)) {
+            assignees = [project._assign];
+          }
+        } catch {
+          assignees = typeof project._assign === 'string' 
+            ? project._assign.split(',').map(e => e.trim()).filter(e => e)
+            : [project._assign];
+        }
+        
+        assignees.forEach(email => {
+          if (email && typeof email === 'string') {
+            assignedUsers.add(email.trim().toLowerCase());
+          }
+        });
+
+        if (logInfo) {
+          logInfo('Frappe', `Found ${assignees.length} user(s) directly assigned to project ${projectId}`);
+        }
+      }
+    } catch (projectErr) {
+      if (logError) {
+        logError('Frappe', `Error fetching direct assignments for project ${projectId}: ${projectErr.message}`);
+      }
+    }
+
+    // Method 3: Get users via Project User doctype
+    try {
+      const projectUserRes = await frappe.get('/api/resource/Project User', {
+        params: {
+          fields: JSON.stringify(['user']),
+          filters: JSON.stringify([
+            ['project', '=', projectId],
+          ]),
+          limit_page_length: 1000,
+        },
+      });
+
+      const projectUsers = Array.isArray(projectUserRes?.data?.data) ? projectUserRes.data.data : [];
+      projectUsers.forEach((pu) => {
+        if (pu.user && typeof pu.user === 'string') {
+          assignedUsers.add(pu.user.trim().toLowerCase());
+        }
+      });
+
+      if (logInfo) {
+        logInfo('Frappe', `Found ${projectUsers.length} user(s) via Project User doctype for project ${projectId}`);
+      }
+    } catch (projectUserErr) {
+      // Project User doctype might not exist, that's okay
+      if (logInfo) {
+        logInfo('Frappe', `Project User doctype not available or no assignments found for project ${projectId}`);
+      }
+    }
+
+    const userArray = Array.from(assignedUsers);
+    if (logInfo) {
+      logInfo('Frappe', `Total unique users assigned to project ${projectId}: ${userArray.length}`);
+      userArray.forEach((email, idx) => {
+        logInfo('Frappe', `  User ${idx + 1}: ${email}`);
+      });
+    }
+
+    return userArray;
+  } catch (err) {
+    if (logError) {
+      logError('Frappe', `Error getting users assigned to project ${projectId}: ${err.message}`, err);
+    }
+    return [];
+  }
+}
+
 module.exports = { 
   getUserProjects, 
   getUserProjectsDirect, 
@@ -2327,6 +2484,7 @@ module.exports = {
   updateTimesheetRow,
   getTimesheetById,
   saveTimesheetWithSavedocs,
-  getFrappeServerTime
+  getFrappeServerTime,
+  getUsersAssignedToProject
 };
 

@@ -226,7 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   
     backBtn?.addEventListener('click', () => {
-      window.location.href = 'selectTask.html';
+      window.location.href = 'home.html';
     });
   });
   

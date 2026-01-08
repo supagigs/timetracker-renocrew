@@ -201,7 +201,6 @@ async function backgroundCaptureScreenshots() {
 
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences, session } = require('electron');
 const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, getUserCompany: frappeGetUserCompany, getUserRoleProfile: frappeGetUserRoleProfile, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
-const { encrypt, decrypt } = require('./credentialEncryption');
 const { 
   getUserProjects: frappeGetUserProjects, 
   setLoggers: setFrappeServiceLoggers, 
@@ -213,7 +212,8 @@ const {
   updateTimesheetRow,
   getTimesheetById,
   saveTimesheetWithSavedocs,
-  getFrappeServerTime
+  getFrappeServerTime,
+  getUsersAssignedToProject
 } = require('./frappeService');
 const path = require('path');
 const fs = require('fs');
@@ -3582,6 +3582,16 @@ ipcMain.handle('frappe:get-user-projects', async () => {
   } catch (error) {
     logError('IPC', `Frappe getProjects error: ${error.message}`, error);
     return [];
+  }
+});
+
+ipcMain.handle('frappe:get-users-assigned-to-project', async (_e, projectId) => {
+  try {
+    const users = await getUsersAssignedToProject(projectId);
+    return { success: true, users };
+  } catch (error) {
+    logError('IPC', `Frappe getUsersAssignedToProject error: ${error.message}`, error);
+    return { success: false, error: error.message, users: [] };
   }
 });
 

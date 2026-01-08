@@ -298,6 +298,198 @@ function updateProjectsDisplay() {
 
 // checkUserExists function removed - no longer needed with Frappe authentication
 
+/**
+ * Sync projects to database after login
+ * Fetches projects assigned to the logged-in user from Frappe,
+ * then for each project, finds all users assigned to it,
+ * and stores each user-project combination in the projects table
+ */
+async function syncProjectsToDatabase(userEmail) {
+  if (!userEmail || !window.frappe || !window.supabase) {
+    console.warn('Cannot sync projects: missing userEmail, frappe, or supabase');
+    return;
+  }
+
+  try {
+    console.log('Starting project sync for user:', userEmail);
+
+    // Step 1: Get projects assigned to the logged-in user from Frappe
+    const projects = await window.frappe.getUserProjects();
+    
+    if (!projects || projects.length === 0) {
+      console.log('No projects found for user:', userEmail);
+      return;
+    }
+
+    console.log(`Found ${projects.length} project(s) for user ${userEmail}`);
+
+    // Step 2: For each project, get all users assigned to it and store in database
+    const projectEntries = [];
+
+    for (const project of projects) {
+      const projectId = project.id;
+      const projectName = project.name;
+
+      if (!projectId) {
+        console.warn('Skipping project with no ID:', project);
+        continue;
+      }
+
+      try {
+        // Get all users assigned to this project
+        const result = await window.frappe.getUsersAssignedToProject(projectId);
+        
+        if (!result || !result.success) {
+          console.warn(`Failed to get users for project ${projectId}:`, result?.error);
+          // Still create entry for the logged-in user
+          projectEntries.push({
+            user_email: userEmail.toLowerCase().trim(),
+            frappe_project_id: projectId,
+            project_name: projectName || projectId
+          });
+          continue;
+        }
+
+        const assignedUsers = result.users || [];
+        const normalizedLoggedInEmail = userEmail.toLowerCase().trim();
+
+        // Always ensure the logged-in user is included in the assigned users list
+        // This is critical because the logged-in user should always have an entry for their projects
+        const allUsersSet = new Set();
+        
+        // Add logged-in user first (guaranteed entry)
+        allUsersSet.add(normalizedLoggedInEmail);
+        
+        // Add all other assigned users
+        assignedUsers.forEach(userEmailFromProject => {
+          if (userEmailFromProject && typeof userEmailFromProject === 'string') {
+            allUsersSet.add(userEmailFromProject.toLowerCase().trim());
+          }
+        });
+
+        const allUsers = Array.from(allUsersSet);
+        
+        if (allUsers.length === 0) {
+          // Fallback: if somehow no users, still create entry for logged-in user
+          console.log(`No users found for project ${projectId}, creating entry for logged-in user only`);
+          projectEntries.push({
+            user_email: normalizedLoggedInEmail,
+            frappe_project_id: projectId,
+            project_name: projectName || projectId
+          });
+        } else {
+          // Create entries for all users (including logged-in user)
+          console.log(`Creating entries for ${allUsers.length} user(s) for project ${projectId}:`, allUsers);
+          
+          allUsers.forEach(userEmailFromProject => {
+            projectEntries.push({
+              user_email: userEmailFromProject,
+              frappe_project_id: projectId,
+              project_name: projectName || projectId
+            });
+          });
+        }
+      } catch (projectError) {
+        console.error(`Error processing project ${projectId}:`, projectError);
+        // Still create entry for the logged-in user as fallback
+        projectEntries.push({
+          user_email: userEmail.toLowerCase().trim(),
+          frappe_project_id: projectId,
+          project_name: projectName || projectId
+        });
+      }
+    }
+
+    if (projectEntries.length === 0) {
+      console.log('No project entries to sync');
+      return;
+    }
+
+    // Step 3: Deduplicate entries before processing
+    // Use a Map to track unique (user_email, frappe_project_id) combinations
+    const uniqueEntriesMap = new Map();
+    let duplicateCount = 0;
+
+    for (const entry of projectEntries) {
+      const key = `${entry.user_email}|${entry.frappe_project_id}`;
+      
+      if (uniqueEntriesMap.has(key)) {
+        duplicateCount++;
+        console.log(`Skipping duplicate entry: ${entry.user_email} - ${entry.frappe_project_id}`);
+        // Keep the entry with the most recent project_name (if different)
+        const existing = uniqueEntriesMap.get(key);
+        if (entry.project_name && entry.project_name !== existing.project_name) {
+          uniqueEntriesMap.set(key, entry);
+        }
+      } else {
+        uniqueEntriesMap.set(key, entry);
+      }
+    }
+
+    const uniqueEntries = Array.from(uniqueEntriesMap.values());
+    
+    if (duplicateCount > 0) {
+      console.log(`Deduplicated ${duplicateCount} duplicate entry/entries. Processing ${uniqueEntries.length} unique entries.`);
+    } else {
+      console.log(`Syncing ${uniqueEntries.length} unique project entry/entries to database`);
+    }
+
+    // Step 4: Use atomic upsert operations to insert/update projects
+    // Process entries individually to ensure proper error handling and avoid batch conflicts
+    let processedCount = 0;
+    let errorCount = 0;
+    let skippedCount = 0;
+
+    for (const entry of uniqueEntries) {
+      try {
+        // Use upsert - Supabase will automatically handle conflicts based on unique constraint
+        // The unique index on (user_email, frappe_project_id) will be used
+        const { error } = await SupabaseService.handleRequest(() =>
+          window.supabase
+            .from('projects')
+            .upsert(entry, {
+              onConflict: 'user_email,frappe_project_id',
+              ignoreDuplicates: false
+            })
+        );
+
+        if (error) {
+          // Handle unique constraint violation gracefully
+          if (error.code === '23505' || error.message?.includes('duplicate key') || 
+              error.message?.includes('unique constraint') || 
+              error.message?.includes('idx_projects_user_email_frappe_project_id')) {
+            // Entry already exists - this is okay, treat as success
+            skippedCount++;
+            console.log(`Entry already exists (skipped): ${entry.user_email} - ${entry.frappe_project_id}`);
+          } else {
+            console.error(`Error upserting project entry:`, error);
+            console.error(`Entry details:`, entry);
+            errorCount++;
+          }
+        } else {
+          processedCount++;
+        }
+      } catch (entryError) {
+        // Handle any other errors (network, etc.)
+        if (entryError?.code === '23505' || entryError?.message?.includes('duplicate key') ||
+            entryError?.message?.includes('unique constraint')) {
+          skippedCount++;
+          console.log(`Entry already exists (skipped): ${entry.user_email} - ${entry.frappe_project_id}`);
+        } else {
+          console.error(`Error processing project entry:`, entryError);
+          console.error(`Entry details:`, entry);
+          errorCount++;
+        }
+      }
+    }
+
+    console.log(`Project sync completed: ${processedCount} processed, ${skippedCount} skipped (already exist), ${errorCount} errors`);
+  } catch (error) {
+    console.error('Error in syncProjectsToDatabase:', error);
+    throw error;
+  }
+}
+
 async function handleLogin() {
   const emailInput = document.getElementById('email');
   const passwordInput = document.getElementById('password');
@@ -529,6 +721,14 @@ async function handleLogin() {
         if (userRow && userRow.display_name && userRow.display_name.trim() !== '') {
           displayName = userRow.display_name.trim();
           StorageService.setItem('displayName', displayName);
+        }
+
+        // Sync projects to database after successful login
+        try {
+          await syncProjectsToDatabase(email);
+        } catch (syncError) {
+          console.error('Error syncing projects to database:', syncError);
+          // Non-fatal - don't block login if project sync fails
         }
       }
     } catch (profileError) {

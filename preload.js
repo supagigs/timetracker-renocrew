@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('frappe', {
   getUserProjects: () =>
     ipcRenderer.invoke('frappe:get-user-projects'),
 
+  getUsersAssignedToProject: (projectId) =>
+    ipcRenderer.invoke('frappe:get-users-assigned-to-project', projectId),
+
   getTasksForProject: (projectId) =>
     ipcRenderer.invoke('frappe:get-tasks-for-project', projectId),
 
