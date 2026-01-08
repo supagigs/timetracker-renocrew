@@ -21,18 +21,6 @@ contextBridge.exposeInMainWorld('auth', {
 
   getUserRoleProfile: (userEmail) =>
     ipcRenderer.invoke('auth:get-user-role-profile', userEmail),
-
-  saveCredentials: (email, password) =>
-    ipcRenderer.invoke('auth:save-credentials', { email, password }),
-
-  loadCredentials: () =>
-    ipcRenderer.invoke('auth:load-credentials'),
-
-  decryptCredentials: (encryptedEmail, encryptedPassword) =>
-    ipcRenderer.invoke('auth:decrypt-credentials', { encryptedEmail, encryptedPassword }),
-
-  deleteCredentials: () =>
-    ipcRenderer.invoke('auth:delete-credentials'),
 });
 
 contextBridge.exposeInMainWorld('frappe', {
