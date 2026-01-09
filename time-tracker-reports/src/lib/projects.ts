@@ -26,12 +26,24 @@ export async function fetchManagerProjects({
   // that are actually assigned to specific users (which happens when employees
   // fetch their projects via fetchEmployeeProjects).
   try {
-    const frappeProjects = await getAllFrappeProjects(company);
+    console.log('[manager-projects] Fetching all projects from Frappe for manager');
+    // Pass null/undefined to fetch ALL projects, not filtered by company
+    const frappeProjects = await getAllFrappeProjects(null);
+    
+    console.log(`[manager-projects] Successfully fetched ${frappeProjects.length} project(s) from Frappe`);
+    
+    // Sort projects by name for consistent ordering (avoid hydration mismatches)
+    const sortedProjects = [...frappeProjects].sort((a, b) => {
+      const nameA = a.name.toLowerCase();
+      const nameB = b.name.toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
     
     // Return projects without storing them in database
     // Managers can view all projects, but we shouldn't create "fake" assignments
-    return frappeProjects.map((project, index) => ({
-      id: index + 1, // Use index as ID since Frappe projects don't have numeric IDs
+    // Use frappeProjectId as a stable ID to avoid hydration mismatches
+    return sortedProjects.map((project) => ({
+      id: project.id, // Use Frappe project ID as stable identifier
       name: project.name,
       frappeProjectId: project.id, // Store the Frappe project ID for later use
       description: null,

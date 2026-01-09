@@ -454,15 +454,18 @@ export async function getAllFrappeUsers(company?: string | null): Promise<Array<
  */
 export async function getAllFrappeProjects(company?: string | null): Promise<Array<{ id: string; name: string }>> {
   try {
-    const frappe = createFrappeClient();
+    // Use API key authentication for better permissions when fetching all projects
+    const frappe = createFrappeClient(true);
     
     // If company is provided, we need to get projects where tasks are assigned to users of that company
     if (company) {
+      console.log(`[frappeClient] Fetching projects filtered by company: ${company}`);
       // First, get all users of the company
       const companyUsers = await getAllFrappeUsers(company);
       const userEmails = companyUsers.map(u => u.email);
       
       if (userEmails.length === 0) {
+        console.log(`[frappeClient] No users found for company ${company}, returning empty projects list`);
         return [];
       }
       
@@ -482,6 +485,7 @@ export async function getAllFrappeProjects(company?: string | null): Promise<Arr
       const projectIds = [...new Set(tasks.map((t: any) => t.project).filter(Boolean))];
       
       if (projectIds.length === 0) {
+        console.log(`[frappeClient] No projects found for company ${company} via tasks`);
         return [];
       }
       
@@ -495,26 +499,72 @@ export async function getAllFrappeProjects(company?: string | null): Promise<Arr
       });
       
       const projects = projectRes?.data?.data || [];
-      return projects.map((project: any) => ({
-        id: project.name,
-        name: project.project_name || project.name,
-      }));
+      console.log(`[frappeClient] Found ${projects.length} project(s) for company ${company}`);
+      
+      // Map projects, ensuring we have valid data
+      const mappedProjects = projects
+        .filter((project: any) => project && project.name) // Filter out invalid projects
+        .map((project: any) => ({
+          id: project.name,
+          name: (project.project_name || project.title || project.name || 'Unnamed Project').trim(),
+        }));
+      
+      console.log(`[frappeClient] Returning ${mappedProjects.length} valid project(s) for company ${company}`);
+      return mappedProjects;
     }
     
     // No company filter - get all projects
+    console.log('[frappeClient] Fetching ALL projects from Frappe (no company filter)');
     const res = await frappe.get('/api/resource/Project', {
       params: {
         fields: JSON.stringify(['name', 'project_name']),
         limit_page_length: 1000,
       },
     });
+    
     const projects = res?.data?.data || [];
-    return projects.map((project: any) => ({
-      id: project.name,
-      name: project.project_name || project.name,
-    }));
-  } catch (err) {
-    console.error('[frappeClient] Error getting all projects:', err);
+    console.log(`[frappeClient] Successfully fetched ${projects.length} project(s) from Frappe`);
+    
+    if (projects.length === 0) {
+      console.warn('[frappeClient] No projects returned from Frappe API. This might indicate a permissions issue or no projects exist.');
+      // Log response structure for debugging
+      if (res?.data) {
+        console.log('[frappeClient] Response structure:', Object.keys(res.data));
+      }
+    }
+    
+    // Map projects, ensuring we have valid data
+    const mappedProjects = projects
+      .filter((project: any) => project && project.name) // Filter out invalid projects
+      .map((project: any) => ({
+        id: project.name,
+        name: (project.project_name || project.title || project.name || 'Unnamed Project').trim(),
+      }));
+    
+    console.log(`[frappeClient] Returning ${mappedProjects.length} valid project(s)`);
+    return mappedProjects;
+  } catch (err: any) {
+    // Enhanced error logging
+    const errorDetails: Record<string, any> = {};
+    
+    if (err?.response) {
+      errorDetails.status = err.response.status;
+      errorDetails.statusText = err.response.statusText;
+      errorDetails.data = err.response.data;
+      if (err.response.headers) {
+        errorDetails.contentType = err.response.headers['content-type'];
+      }
+    }
+    
+    if (err?.message) {
+      errorDetails.message = err.message;
+    }
+    
+    if (err?.code) {
+      errorDetails.code = err.code;
+    }
+    
+    console.error('[frappeClient] Error getting all projects:', errorDetails);
     return [];
   }
 }
@@ -704,32 +754,84 @@ export async function batchGetFrappeCompaniesForUsers(userEmails: string[]): Pro
       });
       
       const employees = res?.data?.data || [];
-      const userEmailSet = new Set(userEmails.map(e => e.toLowerCase().trim()));
+      
+      // Create a mapping from normalized user identifiers (email, username) to requested emails
+      const emailVariants = new Map<string, string[]>();
+      userEmails.forEach((email) => {
+        const normalizedEmail = email.toLowerCase().trim();
+        const username = normalizedEmail.includes('@') ? normalizedEmail.split('@')[0] : normalizedEmail;
+        
+        // Map both email and username to the original email
+        if (!emailVariants.has(normalizedEmail)) {
+          emailVariants.set(normalizedEmail, []);
+        }
+        emailVariants.get(normalizedEmail)!.push(email);
+        
+        if (username !== normalizedEmail) {
+          if (!emailVariants.has(username)) {
+            emailVariants.set(username, []);
+          }
+          if (!emailVariants.get(username)!.includes(email)) {
+            emailVariants.get(username)!.push(email);
+          }
+        }
+      });
       
       // Map user_id to company for matching users
       employees.forEach((employee: any) => {
         const userId = employee.user_id;
         if (userId) {
           const normalizedUserId = userId.toLowerCase().trim();
-          const username = normalizedUserId.includes('@') ? normalizedUserId.split('@')[0] : null;
+          const userIdUsername = normalizedUserId.includes('@') ? normalizedUserId.split('@')[0] : normalizedUserId;
           
-          // Check if this employee matches any of our requested users
-          if (userEmailSet.has(normalizedUserId) || (username && userEmailSet.has(username))) {
+          // Find matching emails by checking both full email and username
+          const matchingEmails: string[] = [];
+          
+          // Check exact match
+          if (emailVariants.has(normalizedUserId)) {
+            matchingEmails.push(...emailVariants.get(normalizedUserId)!);
+          }
+          
+          // Check username match
+          if (userIdUsername !== normalizedUserId && emailVariants.has(userIdUsername)) {
+            const usernameMatches = emailVariants.get(userIdUsername)!;
+            usernameMatches.forEach((email) => {
+              if (!matchingEmails.includes(email)) {
+                matchingEmails.push(email);
+              }
+            });
+          }
+          
+          // Also check reverse: if our email's username matches the userId
+          userEmails.forEach((email) => {
+            const normalizedEmail = email.toLowerCase().trim();
+            const emailUsername = normalizedEmail.includes('@') ? normalizedEmail.split('@')[0] : normalizedEmail;
+            if ((normalizedEmail === normalizedUserId || emailUsername === normalizedUserId || 
+                 normalizedEmail === userIdUsername || emailUsername === userIdUsername) && 
+                !matchingEmails.includes(email)) {
+              matchingEmails.push(email);
+            }
+          });
+          
+          if (matchingEmails.length > 0) {
             const company = extractCompanyString(employee.company);
             if (company) {
-              // Map to all matching email formats
-              for (const email of userEmails) {
-                const normalizedEmail = email.toLowerCase().trim();
-                if (normalizedEmail === normalizedUserId || normalizedEmail === username) {
+              // Map company to all matching email formats
+              matchingEmails.forEach((email) => {
+                if (!companyMap.has(email)) {
                   companyMap.set(email, company);
                 }
-              }
+              });
             }
           }
         }
       });
       
       console.log(`[frappeClient] batchGetFrappeCompaniesForUsers: Found company for ${companyMap.size} users out of ${userEmails.length} requested`);
+      if (companyMap.size < userEmails.length) {
+        const missing = userEmails.filter(e => !companyMap.has(e));
+        console.log(`[frappeClient] Missing company for users: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '...' : ''}`);
+      }
     } catch (err) {
       console.warn('[frappeClient] batchGetFrappeCompaniesForUsers failed:', err);
     }

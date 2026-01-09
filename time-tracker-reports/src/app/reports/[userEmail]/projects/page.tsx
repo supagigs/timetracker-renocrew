@@ -53,11 +53,33 @@ export default async function ManagerProjectsPage({
             
             // Use the Frappe project ID from the project record
             const frappeProjectId = project.frappeProjectId || project.name; // Use stored ID or fallback to name
+            console.log(`[projects] Fetching assigned users for project: ${project.name} (ID: ${frappeProjectId})`);
             
             // Get users assigned to this project via multiple methods
-            const assignedUsers: string[] = [];
+            const assignedUsersSet = new Set<string>();
             
-            // Method 1: Get users from tasks assigned to this project
+            // Method 1: Get users from Project User doctype (common way to assign users to projects)
+            try {
+              const projectUserRes = await frappe.get('/api/resource/Project User', {
+                params: {
+                  fields: JSON.stringify(['user']),
+                  filters: JSON.stringify([['parent', '=', frappeProjectId]]),
+                  limit_page_length: 1000,
+                },
+              });
+              
+              const projectUsers = projectUserRes?.data?.data || [];
+              projectUsers.forEach((pu: any) => {
+                if (pu.user) {
+                  assignedUsersSet.add(pu.user.trim().toLowerCase());
+                }
+              });
+              console.log(`[projects] Found ${projectUsers.length} user(s) via Project User doctype for ${project.name}`);
+            } catch (err) {
+              console.warn(`[projects] Failed to get users from Project User doctype for ${project.name}:`, err);
+            }
+            
+            // Method 2: Get users from tasks assigned to this project
             try {
               const taskRes = await frappe.get('/api/resource/Task', {
                 params: {
@@ -71,6 +93,7 @@ export default async function ManagerProjectsPage({
               });
               
               const tasks = taskRes?.data?.data || [];
+              let taskUserCount = 0;
               tasks.forEach((task: any) => {
                 if (task._assign) {
                   // _assign is a JSON string array
@@ -78,24 +101,30 @@ export default async function ManagerProjectsPage({
                     const assignees = typeof task._assign === 'string' ? JSON.parse(task._assign) : task._assign;
                     if (Array.isArray(assignees)) {
                       assignees.forEach((email: string) => {
-                        if (email && !assignedUsers.includes(email)) {
-                          assignedUsers.push(email);
+                        if (email && typeof email === 'string') {
+                          assignedUsersSet.add(email.trim().toLowerCase());
+                          taskUserCount++;
                         }
                       });
+                    } else if (typeof assignees === 'string') {
+                      assignedUsersSet.add(assignees.trim().toLowerCase());
+                      taskUserCount++;
                     }
                   } catch {
                     // If parsing fails, treat as string
-                    if (typeof task._assign === 'string' && !assignedUsers.includes(task._assign)) {
-                      assignedUsers.push(task._assign);
+                    if (typeof task._assign === 'string' && task._assign.trim()) {
+                      assignedUsersSet.add(task._assign.trim().toLowerCase());
+                      taskUserCount++;
                     }
                   }
                 }
               });
+              console.log(`[projects] Found ${taskUserCount} user assignment(s) via tasks for ${project.name}`);
             } catch (err) {
               console.warn(`[projects] Failed to get users from tasks for project ${project.name}:`, err);
             }
             
-            // Method 2: Get users directly assigned via _assign field on Project
+            // Method 3: Get users directly assigned via _assign field on Project
             try {
               const projectRes = await frappe.get(`/api/resource/Project/${frappeProjectId}`, {
                 params: {
@@ -109,20 +138,27 @@ export default async function ManagerProjectsPage({
                   const assignees = typeof projectDoc._assign === 'string' ? JSON.parse(projectDoc._assign) : projectDoc._assign;
                   if (Array.isArray(assignees)) {
                     assignees.forEach((email: string) => {
-                      if (email && !assignedUsers.includes(email)) {
-                        assignedUsers.push(email);
+                      if (email && typeof email === 'string') {
+                        assignedUsersSet.add(email.trim().toLowerCase());
                       }
                     });
+                  } else if (typeof assignees === 'string' && assignees.trim()) {
+                    assignedUsersSet.add(assignees.trim().toLowerCase());
                   }
+                  console.log(`[projects] Found user assignment(s) via Project._assign for ${project.name}`);
                 } catch {
-                  if (typeof projectDoc._assign === 'string' && !assignedUsers.includes(projectDoc._assign)) {
-                    assignedUsers.push(projectDoc._assign);
+                  if (typeof projectDoc._assign === 'string' && projectDoc._assign.trim()) {
+                    assignedUsersSet.add(projectDoc._assign.trim().toLowerCase());
                   }
                 }
               }
             } catch (err) {
+              // Project might not exist or might not be accessible - this is okay
               console.warn(`[projects] Failed to get users from project _assign for ${project.name}:`, err);
             }
+            
+            const assignedUsers = Array.from(assignedUsersSet);
+            console.log(`[projects] Total unique assigned users for ${project.name}: ${assignedUsers.length}`);
             
             // Get display names from Supabase and Frappe
             const userDisplayNames = new Map<string, string>();
@@ -134,19 +170,19 @@ export default async function ManagerProjectsPage({
                 .in('email', assignedUsers);
               
               (userRows || []).forEach((row) => {
-                userDisplayNames.set(row.email, row.display_name || row.email);
+                userDisplayNames.set(row.email.toLowerCase(), row.display_name || row.email);
               });
               
               // For users not found in Supabase, try to get full_name from Frappe
               const { getAllFrappeUsers } = await import('@/lib/frappeClient');
               const frappeUsers = await getAllFrappeUsers();
               assignedUsers.forEach((email) => {
-                if (!userDisplayNames.has(email)) {
+                if (!userDisplayNames.has(email.toLowerCase())) {
                   const frappeUser = frappeUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
                   if (frappeUser?.full_name) {
-                    userDisplayNames.set(email, frappeUser.full_name);
+                    userDisplayNames.set(email.toLowerCase(), frappeUser.full_name);
                   } else {
-                    userDisplayNames.set(email, email); // Fallback to email
+                    userDisplayNames.set(email.toLowerCase(), email); // Fallback to email
                   }
                 }
               });
@@ -156,11 +192,11 @@ export default async function ManagerProjectsPage({
               ...project,
               assignedUsers: assignedUsers.map((email) => ({
                 email,
-                displayName: userDisplayNames.get(email) || email,
+                displayName: userDisplayNames.get(email.toLowerCase()) || email,
               })),
             };
           } catch (error) {
-            console.warn(`[projects] Failed to get assigned users for project ${project.name}:`, error);
+            console.error(`[projects] Failed to get assigned users for project ${project.name}:`, error);
             return {
               ...project,
               assignedUsers: [],
@@ -210,22 +246,22 @@ export default async function ManagerProjectsPage({
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {projectsWithUsers.map((project) => (
               <article
-                key={project.id}
+                key={project.frappeProjectId || project.id || project.name}
                 className="flex flex-col rounded-2xl border border-border bg-card p-5 shadow-sm transition hover:shadow-md"
               >
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-semibold text-foreground">{project.name}</h2>
                 </div>
-                {isManager && 'assignedUsers' in project && project.assignedUsers.length > 0 && (
+                {isManager && 'assignedUsers' in project && Array.isArray(project.assignedUsers) && project.assignedUsers.length > 0 && (
                   <div className="mt-2">
                     <p className="text-xs font-medium text-muted-foreground mb-1">Assigned to:</p>
                     <div className="flex flex-wrap gap-1">
-                      {project.assignedUsers.slice(0, 3).map((user) => (
+                      {project.assignedUsers.slice(0, 3).map((user, index) => (
                         <span
-                          key={user.email}
+                          key={user.email || `${project.frappeProjectId || project.id}-user-${index}`}
                           className="inline-flex items-center rounded-full bg-secondary px-2 py-1 text-xs text-secondary-foreground"
                         >
-                          {user.displayName}
+                          {user.displayName || user.email}
                         </span>
                       ))}
                       {project.assignedUsers.length > 3 && (

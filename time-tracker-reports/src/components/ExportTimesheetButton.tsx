@@ -47,7 +47,30 @@ function formatSecondsToHoursMinutes(totalSeconds: number): string {
 function formatDateTime(dateString: string | null): string {
   if (!dateString) return '—';
   try {
-    return format(new Date(dateString), 'MM/dd/yyyy hh:mm a');
+    // Parse the time string and ensure UTC timestamps are converted to local timezone
+    // This matches the logic in LocalTime component to ensure consistent timezone handling
+    let timeStr = dateString.trim();
+    
+    // Check if the string has timezone info (Z, +, or - after time)
+    const hasTimezone = /[Z+-]\d{2}:?\d{2}$/.test(timeStr) || timeStr.endsWith('Z');
+    
+    // If it's an ISO timestamp without timezone, assume it's UTC and append 'Z'
+    if (!hasTimezone && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(timeStr)) {
+      timeStr = timeStr + 'Z';
+    }
+    
+    // Create a Date object from the ISO string
+    // JavaScript Date automatically handles timezone conversion when created from ISO string
+    // format() will display it in the browser's local timezone
+    const date = new Date(timeStr);
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      return '—';
+    }
+    
+    // Format to match the website display format: MM/dd/yyyy hh:mm a
+    return format(date, 'MM/dd/yyyy hh:mm a');
   } catch {
     return dateString;
   }

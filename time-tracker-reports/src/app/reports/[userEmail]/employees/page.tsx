@@ -22,11 +22,36 @@ type UserSummary = {
  */
 function normalizeCompany(company: any): string | null {
   if (!company) return null;
+  
+  // Handle string values (including JSON strings like "{}")
   if (typeof company === 'string') {
-    return company.trim() || null;
+    const trimmed = company.trim();
+    // Check if it's a JSON string representation of an empty object
+    if (trimmed === '{}' || trimmed === 'null' || trimmed === '') {
+      return null;
+    }
+    // Try to parse as JSON if it looks like JSON
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (typeof parsed === 'object' && parsed !== null) {
+          return normalizeCompany(parsed); // Recursively handle parsed object
+        }
+      } catch {
+        // Not valid JSON, return as string if it's not empty
+        return trimmed || null;
+      }
+    }
+    return trimmed || null;
   }
-  if (typeof company === 'object') {
-    // Handle object with name property
+  
+  // Handle objects
+  if (typeof company === 'object' && company !== null) {
+    // Check if it's an empty object
+    if (Object.keys(company).length === 0) {
+      return null;
+    }
+    // Handle object with name property (common Frappe format)
     if (company.name && typeof company.name === 'string') {
       return company.name.trim() || null;
     }
@@ -34,6 +59,7 @@ function normalizeCompany(company: any): string | null {
     const stringValue = Object.values(company).find((v: any) => typeof v === 'string' && v.trim());
     return stringValue ? (stringValue as string).trim() : null;
   }
+  
   return null;
 }
 
@@ -97,25 +123,43 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
   });
 
   // Batch fetch company information from Employee doctype for users missing company info
-  const usersMissingCompany = allUserEmails.filter(email => !companyMap.get(email));
+  let usersMissingCompany = allUserEmails.filter(email => !companyMap.get(email));
   if (usersMissingCompany.length > 0) {
     console.log(`[users-page] Batch fetching company for ${usersMissingCompany.length} users missing company info`);
     const batchCompanyMap = await batchGetFrappeCompaniesForUsers(usersMissingCompany);
-    // Merge batch results into companyMap
-    batchCompanyMap.forEach((company, emailOrUsername) => {
-      // Check if this matches any of our user emails
-      for (const email of usersMissingCompany) {
-        const normalizedEmail = email.toLowerCase().trim();
-        if (emailOrUsername === normalizedEmail || emailOrUsername === normalizedEmail.split('@')[0]) {
-          if (!companyMap.has(email)) {
-            companyMap.set(email, normalizeCompany(company));
-          }
+    // Merge batch results into companyMap - the batch function already uses the correct email keys
+    batchCompanyMap.forEach((company, email) => {
+      if (company) {
+        const normalized = normalizeCompany(company);
+        if (normalized && !companyMap.has(email)) {
+          companyMap.set(email, normalized);
         }
       }
     });
+    console.log(`[users-page] After batch fetch, ${Array.from(companyMap.values()).filter(c => c).length} users have company information`);
+    
+    // For users still missing company, try individual fetches (fallback)
+    usersMissingCompany = allUserEmails.filter(email => !companyMap.get(email));
+    if (usersMissingCompany.length > 0) {
+      console.log(`[users-page] Attempting individual company fetches for ${usersMissingCompany.length} remaining users`);
+      for (const email of usersMissingCompany.slice(0, 10)) { // Limit to 10 to avoid rate limiting
+        try {
+          const company = await getFrappeCompanyForUser(email);
+          if (company) {
+            const normalized = normalizeCompany(company);
+            if (normalized) {
+              companyMap.set(email, normalized);
+            }
+          }
+        } catch (error) {
+          console.warn(`[users-page] Failed to fetch company individually for ${email}:`, error);
+        }
+      }
+      console.log(`[users-page] After individual fetches, ${Array.from(companyMap.values()).filter(c => c).length} users have company information`);
+    }
   }
   
-  // Fetch role from Frappe for all users
+  // Fetch role from Frappe for all users and update Supabase with company info
   for (const email of allUserEmails) {
     try {
       const roleProfile = await getFrappeRoleProfileForEmail(email);
@@ -131,6 +175,18 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
         role: roleProfile ?? existing?.role ?? null,
         company: company,
       });
+      
+      // Update Supabase with company information if we have it from Frappe and it's different
+      if (company && company !== existing?.company) {
+        try {
+          await supabase
+            .from('users')
+            .update({ company: company })
+            .eq('email', email);
+        } catch (updateError) {
+          console.warn(`[users-page] Failed to update company in Supabase for ${email}:`, updateError);
+        }
+      }
     } catch (error) {
       console.warn(`[users-page] Failed to fetch role for ${email}:`, error);
     }
