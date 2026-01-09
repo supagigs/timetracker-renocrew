@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useRouter , useSearchParams } from "next/navigation";
 
 import { WEB_USER_STORAGE_KEY } from "@/lib/constants";
@@ -10,7 +10,7 @@ type StoredUser = {
   displayName?: string | null;
 };
 
-export default function LogoutPage() {
+function LogoutContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [status, setStatus] = useState<"pending" | "complete">("pending");
@@ -92,4 +92,18 @@ export default function LogoutPage() {
   );
 }
 
+export default function LogoutPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-10 text-foreground">
+        <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 text-center shadow-lg">
+          <h1 className="text-2xl font-semibold">Signing out...</h1>
+          <p className="mt-3 text-sm text-muted-foreground">Please wait while we sign you out.</p>
+        </div>
+      </div>
+    }>
+      <LogoutContent />
+    </Suspense>
+  );
+}
 

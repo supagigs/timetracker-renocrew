@@ -109,10 +109,7 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
     );
 
     const lastSession = memberSessions[0];
-    const lastSessionTimestamp = lastSession
-      ? lastSession.end_time ?? lastSession.start_time ?? null
-      : null;
-
+    
     // No-op: user_sessions table is no longer used
     // Determine status based on time_sessions only
     const activeSession = memberSessions.find(
@@ -128,7 +125,13 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
       status = 'offline';
     }
 
-    const lastActiveAt = lastSessionTimestamp;
+    // For active sessions, use the active session's start_time
+    // For inactive sessions, use the last session's end_time or start_time
+    const lastActiveAt = activeSession
+      ? activeSession.start_time ?? null
+      : lastSession
+        ? lastSession.end_time ?? lastSession.start_time ?? null
+        : null;
 
     return {
       email,
@@ -234,9 +237,12 @@ export default async function ManagerEmployeesPage({
                 </thead>
                 <tbody>
                   {employees.map((employee) => {
-                    const lastActiveLabel = employee.lastActiveAt
-                      ? formatDistanceToNow(new Date(employee.lastActiveAt), { addSuffix: true })
-                      : 'No activity yet';
+                    // If employee is active, show "Active now" instead of time ago
+                    const lastActiveLabel = employee.status === 'active'
+                      ? 'Active now'
+                      : employee.lastActiveAt
+                        ? formatDistanceToNow(new Date(employee.lastActiveAt), { addSuffix: true })
+                        : 'No activity yet';
 
                     const statusConfig: Record<EmployeeSummary['status'], { label: string; classes: string }> = {
                       active: { label: 'Working now', classes: 'bg-emerald-100 text-emerald-700' },

@@ -441,7 +441,7 @@
         return;
       }
       
-      const TIMER_DURATION = 5000; // 5 seconds
+      const TIMER_DURATION = 10000; // 10 seconds
       const startTime = Date.now();
       
       function disableDeleteButton() {
@@ -475,7 +475,7 @@
           if (timerDisplay) {
             timerDisplay.textContent = '0s';
           }
-          console.log('[TOAST] Timer expired after 5 seconds');
+          console.log('[TOAST] Timer expired after 10 seconds');
           
           // Disable delete button
           disableDeleteButton();
@@ -495,7 +495,7 @@
       
       // Start the timer animation
       animateLoader();
-      console.log('[TOAST] Timer started - 5 seconds until auto-close');
+      console.log('[TOAST] Timer started - 10 seconds until auto-close');
     }
     
     // Set up delete button handler

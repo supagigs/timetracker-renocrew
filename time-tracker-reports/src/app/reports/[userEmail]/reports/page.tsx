@@ -1,5 +1,6 @@
 import SummaryCard from '@/components/SummaryCard';
 import WeeklyActivityChart from '@/components/WeeklyActivityChart';
+import ProjectPieChart from '@/components/ProjectPieChart';
 import EmployeeSelector from '@/components/FreelancerSelector';
 import { DashboardShell } from '@/components/dashboard';
 import { ReportsRealtimeWatcher } from '@/components/ReportsRealtimeWatcher';
@@ -64,21 +65,23 @@ function formatSecondsToHoursMinutes(totalSeconds: number): string {
 }
 
 function buildMonthlySummary(sessions: TimeSession[], dateRange: DateRange) {
-  const daily = new Map<string, { active: number; idle: number }>();
+  const daily = new Map<string, { active: number; idle: number; break: number }>();
 
   sessions.forEach((session) => {
     const date = session.session_date;
     if (!daily.has(date)) {
-      daily.set(date, { active: 0, idle: 0 });
+      daily.set(date, { active: 0, idle: 0, break: 0 });
     }
     const entry = daily.get(date)!;
     entry.active += session.active_duration ?? 0;
     entry.idle += session.idle_duration ?? 0;
+    entry.break += session.break_duration ?? 0;
   });
 
   const labels: string[] = [];
   const activeHours: number[] = [];
   const idleHours: number[] = [];
+  const breakHours: number[] = [];
 
   const startDate = new Date(dateRange.start);
   const endDate = new Date(dateRange.end);
@@ -95,12 +98,14 @@ function buildMonthlySummary(sessions: TimeSession[], dateRange: DateRange) {
     const entry = daily.get(key);
     activeHours.push((entry?.active ?? 0) / 3600);
     idleHours.push((entry?.idle ?? 0) / 3600);
+    breakHours.push((entry?.break ?? 0) / 3600);
     daysCount += 1;
   }
 
   const totalActiveSeconds = sessions.reduce((sum, session) => sum + (session.active_duration ?? 0), 0);
   const totalIdleSeconds = sessions.reduce((sum, session) => sum + (session.idle_duration ?? 0), 0);
-  const totalTimeSeconds = totalActiveSeconds + totalIdleSeconds;
+  const totalBreakSeconds = sessions.reduce((sum, session) => sum + (session.break_duration ?? 0), 0);
+  const totalTimeSeconds = totalActiveSeconds + totalIdleSeconds + totalBreakSeconds;
   const avgIdlePercent = totalTimeSeconds > 0 ? (totalIdleSeconds / totalTimeSeconds) * 100 : 0;
 
   const daysWithWork = activeHours.filter((h) => h > 0).length;
@@ -111,6 +116,7 @@ function buildMonthlySummary(sessions: TimeSession[], dateRange: DateRange) {
     labels,
     activeHours,
     idleHours,
+    breakHours,
     totalHours: totalActiveSeconds / 3600,
     totalIdleSeconds,
     avgIdlePercent,
@@ -125,18 +131,22 @@ function buildProjectSummary(sessions: TimeSession[], projectNamesMap: Map<strin
     const projectId = session.frappe_project_id;
     if (projectId) {
       const projectName = projectNamesMap.get(projectId) || projectId || 'Untitled project';
+      // Calculate total time: active + idle + break
       const activeDuration = session.active_duration ?? 0;
+      const idleDuration = session.idle_duration ?? 0;
+      const breakDuration = session.break_duration ?? 0;
+      const totalDuration = activeDuration + idleDuration + breakDuration;
 
       if (projectMap.has(projectId)) {
         const existing = projectMap.get(projectId)!;
         projectMap.set(projectId, {
           name: projectName,
-          totalSeconds: existing.totalSeconds + activeDuration,
+          totalSeconds: existing.totalSeconds + totalDuration,
         });
       } else {
         projectMap.set(projectId, {
           name: projectName,
-          totalSeconds: activeDuration,
+          totalSeconds: totalDuration,
         });
       }
     }
@@ -396,8 +406,8 @@ export default async function ReportsAnalyticsPage({
             </section>
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <SummaryCard title="Total Work" value={formatHoursMinutes(summary.totalHours)} />
-          <SummaryCard title="Avg. Daily Work" value={formatHoursMinutes(summary.avgDailyHours)} />
+          <SummaryCard title="Total Active Work" value={formatHoursMinutes(summary.totalHours)} />
+          <SummaryCard title="Avg. Daily Active Work" value={formatHoursMinutes(summary.avgDailyHours)} />
           <SummaryCard title="Avg. Idle %" value={`${summary.avgIdlePercent.toFixed(1)}%`} />
           <SummaryCard title="Active Today" value={formatSecondsToHoursMinutes(todayActiveSeconds)} />
         </section>
@@ -434,17 +444,21 @@ export default async function ReportsAnalyticsPage({
             labels={summary.labels}
             activeHours={summary.activeHours}
             idleHours={summary.idleHours}
+            breakHours={summary.breakHours}
           />
         </section>
 
         {projectSummary.length > 0 && (
           <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
             <h2 className="mb-4 text-xl font-semibold text-foreground">Time Distribution by Project</h2>
-            <WeeklyActivityChart
-              labels={projectSummary.map((project) => project.name)}
-              activeHours={projectSummary.map((project) => project.totalHours)}
-              idleHours={[]}
-            />
+            <div className="flex justify-center">
+              <div className="w-full max-w-2xl">
+                <ProjectPieChart
+                  labels={projectSummary.map((project) => project.name)}
+                  totalHours={projectSummary.map((project) => project.totalHours)}
+                />
+              </div>
+            </div>
           </section>
         )}
           </>

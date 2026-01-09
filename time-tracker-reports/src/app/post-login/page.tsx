@@ -1,7 +1,7 @@
 'use client';
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard";
@@ -14,7 +14,7 @@ type StoredUser = {
   projects?: string[];
 };
 
-export default function PostLoginPage() {
+function PostLoginContent() {
   const searchParams = useSearchParams();
   const [storedUser, setStoredUser] = useState<StoredUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -70,5 +70,20 @@ export default function PostLoginPage() {
 
       </section>
     </DashboardShell>
+  );
+}
+
+export default function PostLoginPage() {
+  return (
+    <Suspense fallback={
+      <DashboardShell userName={null} userEmail={null} userRole={null} showBreadcrumb={false}>
+        <section className="mx-auto max-w-3xl space-y-6 rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
+          <h1 className="text-3xl font-bold text-foreground">Welcome back</h1>
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        </section>
+      </DashboardShell>
+    }>
+      <PostLoginContent />
+    </Suspense>
   );
 }

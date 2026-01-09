@@ -57,9 +57,8 @@ export default function Home() {
     }
 
     const normalized = normalizeUser(saved);
-    // Convert role_profile_name to Manager/Employee for logic
-    const convertedRole = determineRoleFromRoleProfile(normalized.role);
-    const isManagerUser = convertedRole === "Manager";
+    // normalized.role is already converted to "Manager" or "Employee" by normalizeRole
+    // normalizeRole now uses determineRoleFromRoleProfile internally to convert role_profile_name
 
     const restoreSession = () => {
       setUser({ ...normalized, projects: normalized.projects ?? [] });
@@ -247,15 +246,18 @@ const normalizeRole = (role: Role | string | null | undefined): Role => {
     return null;
   }
 
-  const normalized = role.toString().trim().toLowerCase();
+  const roleString = role.toString().trim();
 
+  // If it's already "Manager" or "Employee", return it as is
+  const normalized = roleString.toLowerCase();
   if (normalized === "manager") {
     return "Manager";
   }
-
   if (normalized === "employee") {
     return "Employee";
   }
 
-  return null;
+  // Otherwise, treat it as a role_profile_name from Frappe (e.g., "SuperAdmin", "MainAdmin", etc.)
+  // and convert it to Manager/Employee using determineRoleFromRoleProfile
+  return determineRoleFromRoleProfile(roleString);
 };

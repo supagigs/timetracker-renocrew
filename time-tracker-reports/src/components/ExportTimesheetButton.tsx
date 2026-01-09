@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { Download } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -60,7 +60,7 @@ export function ExportTimesheetButton({
   dateRange,
   disabled = false,
 }: ExportTimesheetButtonProps) {
-  const downloadExcel = () => {
+  const downloadExcel = async () => {
     if (!Array.isArray(timesheetData) || timesheetData.length === 0) {
       console.error('Timesheet data must be a non-empty array.');
       return;
@@ -80,27 +80,36 @@ export function ExportTimesheetButton({
       'Clock Out': formatDateTime(row.endTime),
     }));
 
-    // Create a worksheet from the data
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    // Create a new workbook and worksheet
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Timesheet');
 
-    // Set column widths for better readability
-    const columnWidths = [
-      { wch: 12 }, // Date
-      { wch: 25 }, // Employee
-      { wch: 30 }, // Employee Email
-      { wch: 20 }, // Project
-      { wch: 12 }, // Active Time
-      { wch: 12 }, // Break Time
-      { wch: 12 }, // Idle Time
-      { wch: 12 }, // Total Time
-      { wch: 20 }, // Clock In
-      { wch: 20 }, // Clock Out
+    // Define columns with headers
+    worksheet.columns = [
+      { header: 'Date', key: 'Date', width: 12 },
+      { header: 'Employee', key: 'Employee', width: 25 },
+      { header: 'Employee Email', key: 'Employee Email', width: 30 },
+      { header: 'Project', key: 'Project', width: 20 },
+      { header: 'Active Time', key: 'Active Time', width: 12 },
+      { header: 'Break Time', key: 'Break Time', width: 12 },
+      { header: 'Idle Time', key: 'Idle Time', width: 12 },
+      { header: 'Total Time', key: 'Total Time', width: 12 },
+      { header: 'Clock In', key: 'Clock In', width: 20 },
+      { header: 'Clock Out', key: 'Clock Out', width: 20 },
     ];
-    worksheet['!cols'] = columnWidths;
 
-    // Create a new workbook and append the worksheet
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Timesheet');
+    // Style the header row
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' },
+    };
+
+    // Add data rows
+    exportData.forEach((row) => {
+      worksheet.addRow(row);
+    });
 
     // Generate filename
     const employeeNameForFile = employeeName || employeeEmail || 'Employee';
@@ -109,7 +118,16 @@ export function ExportTimesheetButton({
     const fileName = `Timesheet_${employeeNameForFile.replace(/[^a-zA-Z0-9]/g, '_')}_${startDate}_to_${endDate}.xlsx`;
 
     // Write the file
-    XLSX.writeFile(workbook, fileName);
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    window.URL.revokeObjectURL(url);
   };
 
   return (

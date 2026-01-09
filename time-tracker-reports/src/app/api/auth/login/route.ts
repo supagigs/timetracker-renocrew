@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 import { frappeLogin, getFrappeCurrentUserRoleProfile, getFrappeUserCompany, getFrappeRoleProfileForEmail } from '@/lib/frappeClient';
-import { syncUserContextFromFrappe } from '@/lib/frappeUserContext';
 
 type UserRecord = {
   id: number;
@@ -143,20 +142,18 @@ export async function POST(request: Request) {
     // Fetch projects (will return empty array if projects table doesn't exist or user has none)
     const projects = user ? await fetchUserProjects(supabase, user) : [];
 
-    // Sync user context from Frappe and cache it
-    try {
-      await syncUserContextFromFrappe();
-    } catch (contextError) {
-      console.warn('[auth/login] Failed to sync user context from Frappe:', contextError);
-      // Non-fatal - continue with login
-    }
+    // Determine the final role to return:
+    // 1. Use fresh role from Frappe if available
+    // 2. Fall back to updated user role from Supabase (if update succeeded)
+    // 3. Fall back to existing user role from Supabase (if update didn't happen)
+    const finalRole = roleProfile !== null ? roleProfile : (user?.role ?? null);
 
     // Create response with user data
     const response = NextResponse.json({
       user: {
         email: user?.email || email,
         displayName: user?.display_name || null,
-        role: user?.role || null,
+        role: finalRole, // Always return the fresh role from Frappe, or fallback to Supabase role
         createdAt: user?.created_at || null,
         projects,
       },

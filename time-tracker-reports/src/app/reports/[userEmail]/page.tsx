@@ -1,6 +1,7 @@
 import { format, formatDistanceToNow } from 'date-fns';
 import SummaryCard from '@/components/SummaryCard';
 import WeeklyActivityChart from '@/components/WeeklyActivityChart';
+import ProjectPieChart from '@/components/ProjectPieChart';
 import EmployeeSelector from '@/components/FreelancerSelector';
 import ManagerOverview from '@/components/ClientOverview';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
@@ -183,10 +184,7 @@ async function fetchManagerTeamMembers(managerEmail: string, managerCompany: str
     );
 
     const lastSession = memberSessions[0];
-    const lastSessionTimestamp = lastSession
-      ? lastSession.end_time ?? lastSession.start_time ?? null
-      : null;
-
+    
     // No-op: user_sessions table is no longer used
     // Determine active session based on time_sessions only
     const activeSession = memberSessions.find(
@@ -194,7 +192,14 @@ async function fetchManagerTeamMembers(managerEmail: string, managerCompany: str
     );
 
     const hasActiveSession = Boolean(activeSession);
-    const lastActiveAt = lastSessionTimestamp;
+    
+    // For active sessions, use the active session's start_time
+    // For inactive sessions, use the last session's end_time or start_time
+    const lastActiveAt = activeSession
+      ? activeSession.start_time ?? null
+      : lastSession
+        ? lastSession.end_time ?? lastSession.start_time ?? null
+        : null;
 
     return {
       email,
@@ -222,7 +227,44 @@ async function fetchUserName(userEmail: string): Promise<string | null> {
     return null;
   }
 
-  return data?.display_name || null;
+  let displayName = data?.display_name || null;
+  
+  // If display_name is null, try to fetch it from Frappe
+  if (!displayName) {
+    try {
+      const { createFrappeClient } = await import('@/lib/frappeClient');
+      const frappe = createFrappeClient(true); // Use API key auth
+      
+      // Try to get user's full name from Frappe User doctype
+      const userRes = await frappe.get('/api/resource/User', {
+        params: {
+          fields: JSON.stringify(['name', 'full_name']),
+          filters: JSON.stringify([['name', '=', userEmail]]),
+          limit_page_length: 1,
+        },
+      });
+      
+      const users = userRes?.data?.data || [];
+      if (users.length > 0 && users[0]?.full_name) {
+        displayName = users[0].full_name;
+        
+        // Update Supabase with the fetched display name for future use
+        await supabase
+          .from('users')
+          .update({ display_name: displayName })
+          .eq('email', userEmail)
+          .catch(err => {
+            // Non-fatal - just log the error
+            console.warn('[reports] Failed to update display_name in Supabase:', err);
+          });
+      }
+    } catch (err) {
+      // Non-fatal - just log the error and continue with null displayName
+      console.warn('[reports] Failed to fetch display name from Frappe:', err);
+    }
+  }
+
+  return displayName;
 }
 
 async function fetchUserRole(userEmail: string): Promise<string | null> {
@@ -255,37 +297,40 @@ async function fetchUserRole(userEmail: string): Promise<string | null> {
   if (frappeRole.status === 'fulfilled' && frappeRole.value && 
       dbResult.status === 'fulfilled' && frappeRole.value !== dbResult.value) {
     const supabase = createServerSupabaseClient();
-    supabase
-      .from('users')
-      .update({ role: frappeRole.value })
-      .eq('email', userEmail)
-      .then(() => {
+    (async () => {
+      try {
+        await supabase
+          .from('users')
+          .update({ role: frappeRole.value })
+          .eq('email', userEmail);
         // Silently update - no need to wait or handle errors
-      })
-      .catch((err) => {
+      } catch (err) {
         console.warn('[fetchUserRole] Failed to update role in database:', err);
-      });
+      }
+    })();
   }
 
   return roleProfile;
 }
 
 function buildMonthlySummary(sessions: TimeSession[]) {
-  const daily = new Map<string, { active: number; idle: number }>();
+  const daily = new Map<string, { active: number; idle: number; break: number }>();
 
   sessions.forEach((session) => {
     const date = session.session_date;
     if (!daily.has(date)) {
-      daily.set(date, { active: 0, idle: 0 });
+      daily.set(date, { active: 0, idle: 0, break: 0 });
     }
     const entry = daily.get(date)!;
     entry.active += session.active_duration ?? 0;
     entry.idle += session.idle_duration ?? 0;
+    entry.break += session.break_duration ?? 0;
   });
 
   const labels: string[] = [];
   const activeHours: number[] = [];
   const idleHours: number[] = [];
+  const breakHours: number[] = [];
 
   const now = new Date();
   for (let i = 29; i >= 0; i -= 1) {
@@ -298,11 +343,13 @@ function buildMonthlySummary(sessions: TimeSession[]) {
     const entry = daily.get(key);
     activeHours.push(((entry?.active ?? 0) / 3600));
     idleHours.push(((entry?.idle ?? 0) / 3600));
+    breakHours.push(((entry?.break ?? 0) / 3600));
   }
 
   const totalActiveSeconds = sessions.reduce((sum, session) => sum + (session.active_duration ?? 0), 0);
   const totalIdleSeconds = sessions.reduce((sum, session) => sum + (session.idle_duration ?? 0), 0);
-  const totalTimeSeconds = totalActiveSeconds + totalIdleSeconds;
+  const totalBreakSeconds = sessions.reduce((sum, session) => sum + (session.break_duration ?? 0), 0);
+  const totalTimeSeconds = totalActiveSeconds + totalIdleSeconds + totalBreakSeconds;
   const avgIdlePercent = totalTimeSeconds > 0 ? (totalIdleSeconds / totalTimeSeconds) * 100 : 0;
 
   // Count days with actual work
@@ -313,6 +360,7 @@ function buildMonthlySummary(sessions: TimeSession[]) {
     labels,
     activeHours,
     idleHours,
+    breakHours,
     totalHours: totalActiveSeconds / 3600,
     totalIdleSeconds,
     avgIdlePercent,
@@ -416,18 +464,22 @@ function buildProjectSummary(sessions: TimeSession[], projectNamesMap: Map<strin
     const projectId = session.frappe_project_id;
     if (projectId) {
       const projectName = projectNamesMap.get(projectId) || projectId || 'Untitled project';
+      // Calculate total time: active + idle + break
       const activeDuration = session.active_duration ?? 0;
+      const idleDuration = session.idle_duration ?? 0;
+      const breakDuration = session.break_duration ?? 0;
+      const totalDuration = activeDuration + idleDuration + breakDuration;
 
       if (projectMap.has(projectId)) {
         const existing = projectMap.get(projectId)!;
         projectMap.set(projectId, {
           name: projectName,
-          totalSeconds: existing.totalSeconds + activeDuration,
+          totalSeconds: existing.totalSeconds + totalDuration,
         });
       } else {
         projectMap.set(projectId, {
           name: projectName,
-          totalSeconds: activeDuration,
+          totalSeconds: totalDuration,
         });
       }
     }
@@ -598,9 +650,12 @@ export default async function ReportsPage({
         ? 'no-data'
         : 'offline';
 
-      const lastActiveLabel = member.lastActiveAt
-        ? formatDistanceToNow(new Date(member.lastActiveAt), { addSuffix: true })
-        : 'No activity yet';
+      // If user is active, show "Active now" instead of time ago
+      const lastActiveLabel = member.hasActiveSession
+        ? 'Active now'
+        : member.lastActiveAt
+          ? formatDistanceToNow(new Date(member.lastActiveAt), { addSuffix: true })
+          : 'No activity yet';
 
       return {
         email: member.email,
@@ -685,8 +740,8 @@ export default async function ReportsPage({
         ) : isManager ? (
           <>
             <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <SummaryCard title="Total Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
-              <SummaryCard title="Avg. Daily Work" value={formatHoursMinutes(summary.avgDailyHours)} />
+              <SummaryCard title="Total Active Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
+              <SummaryCard title="Avg. Daily Active Work" value={formatHoursMinutes(summary.avgDailyHours)} />
               <SummaryCard title="Avg. Idle %" value={`${summary.avgIdlePercent.toFixed(1)}%`} />
               <SummaryCard title="Total Idle" value={formatSecondsToHoursMinutes(summary.totalIdleSeconds)} />
             </section>
@@ -723,17 +778,21 @@ export default async function ReportsPage({
                 labels={summary.labels}
                 activeHours={summary.activeHours}
                 idleHours={summary.idleHours}
+                breakHours={summary.breakHours}
               />
             </section>
 
             {projectSummary.length > 0 && (
               <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
                 <h2 className="mb-4 text-xl font-semibold text-foreground">Time Distribution by Project</h2>
-                <WeeklyActivityChart
-                  labels={projectSummary.map((p) => p.name)}
-                  activeHours={projectSummary.map((p) => p.totalHours)}
-                  idleHours={[]}
-                />
+                <div className="flex justify-center">
+                  <div className="w-full max-w-2xl">
+                    <ProjectPieChart
+                      labels={projectSummary.map((p) => p.name)}
+                      totalHours={projectSummary.map((p) => p.totalHours)}
+                    />
+                  </div>
+                </div>
               </section>
             )}
           </>
@@ -741,9 +800,9 @@ export default async function ReportsPage({
           <>
             <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <SummaryCard title="Assigned Projects" value={employeeProjectOverview.length.toString()} />
-              <SummaryCard title="Total Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
+              <SummaryCard title="Total Active Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
               <SummaryCard title="Active Today" value={formatSecondsToHoursMinutes(todayActiveSeconds)} />
-              <SummaryCard title="Avg. Daily Work" value={formatHoursMinutes(summary.avgDailyHours)} />
+              <SummaryCard title="Avg. Daily Active Work" value={formatHoursMinutes(summary.avgDailyHours)} />
             </section>
 
             <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
@@ -793,6 +852,7 @@ export default async function ReportsPage({
                   labels={summary.labels.slice(-7)}
                   activeHours={summary.activeHours.slice(-7)}
                   idleHours={summary.idleHours.slice(-7)}
+                  breakHours={summary.breakHours.slice(-7)}
                 />
               </section>
             )}

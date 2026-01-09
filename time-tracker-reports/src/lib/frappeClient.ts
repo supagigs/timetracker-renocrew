@@ -1,4 +1,10 @@
 import axios, { AxiosInstance } from 'axios';
+import { CookieJar } from 'tough-cookie';
+import { wrapper } from 'axios-cookiejar-support';
+
+// Shared cookie jar for session-based authentication
+// This allows cookies from frappeLogin to be used by subsequent requests
+const cookieJar = new CookieJar();
 
 function getFrappeBaseURL(): string | null {
   const frappeUrl = process.env.FRAPPE_URL;
@@ -49,12 +55,16 @@ export function createFrappeClient(useApiKey: boolean = true): AxiosInstance {
     }
   }
   
-  // Session-based auth (withCredentials: true for cookies)
-  return axios.create({
-    baseURL: baseURL,
-    withCredentials: true,
-    headers: headers,
-  });
+  // Session-based auth with cookie jar for server-side cookie management
+  // In Node.js, withCredentials doesn't work, so we use a cookie jar
+  return wrapper(
+    axios.create({
+      baseURL: baseURL,
+      jar: cookieJar, // Shared cookie jar for session-based auth
+      withCredentials: true,
+      headers: headers,
+    })
+  );
 }
 
 export async function frappeLogin(email: string, password: string): Promise<{ success: boolean; error?: string }> {
@@ -104,7 +114,7 @@ export async function getFrappeCurrentUser(): Promise<string | null> {
 
 /**
  * Get role profile from Frappe for the currently logged in user (session-based)
- * Uses session-based authentication - requires credentials: 'include'
+ * Uses session-based authentication with axios
  * Returns the role_profile_name from User doctype
  * 
  * Note: This requires a whitelisted Frappe method: get_current_user_profile
@@ -121,6 +131,9 @@ export async function getFrappeCurrentUser(): Promise<string | null> {
  *         "full_name": user_doc.full_name,
  *         "role_profile": user_doc.role_profile_name
  *     }
+ * 
+ * Note: In server-side Next.js, this uses the same axios instance as frappeLogin,
+ * which should maintain the session cookies. For client-side calls, use API key auth instead.
  */
 export async function getFrappeCurrentUserRoleProfile(): Promise<{
   email: string;
@@ -128,27 +141,12 @@ export async function getFrappeCurrentUserRoleProfile(): Promise<{
   role_profile: string | null;
 } | null> {
   try {
-    const baseURL = getFrappeBaseURL();
-    if (!baseURL) {
-      throw new Error('FRAPPE_URL is not configured');
-    }
-
-    // Use session-based auth with credentials: 'include'
-    const res = await fetch(`${baseURL}/api/method/get_current_user_profile`, {
-      method: 'GET',
-      credentials: 'include', // VERY IMPORTANT - required for session-based auth
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!res.ok) {
-      throw new Error(`Failed to fetch user role profile: ${res.statusText}`);
-    }
-
-    const json = await res.json();
-    return json.message || null;
-  } catch (err) {
+    // Use session-based auth (useApiKey: false) to use the session from frappeLogin
+    const frappe = createFrappeClient(false);
+    
+    const res = await frappe.get('/api/method/get_current_user_profile');
+    return res.data?.message || null;
+  } catch (err: any) {
     console.error('[frappeClient] Error getting current user role profile:', err);
     return null;
   }

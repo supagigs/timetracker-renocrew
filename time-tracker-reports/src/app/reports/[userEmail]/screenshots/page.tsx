@@ -161,7 +161,23 @@ export default async function ScreenshotsPage({
   const selectedSessionId = requestedSessionId 
     ? (typeof requestedSessionId === 'string' ? parseInt(requestedSessionId, 10) : requestedSessionId)
     : sessions[0]?.id;
-  const screenshots = targetEmail ? await fetchScreenshots(targetEmail, selectedSessionId) : [];
+  const rawScreenshots = targetEmail ? await fetchScreenshots(targetEmail, selectedSessionId) : [];
+  // Transform screenshots to match ScreenshotSelector's expected type (time_session_id -> session_id)
+  const screenshots = rawScreenshots.map((s) => ({
+    id: s.id,
+    session_id: s.time_session_id ?? 0,
+    screenshot_data: s.screenshot_data,
+    captured_at: s.captured_at,
+    app_name: s.app_name ?? null,
+    captured_idle: s.captured_idle ?? null,
+  })) as Array<{
+    id: number;
+    session_id: number;
+    screenshot_data: string;
+    captured_at: string;
+    app_name?: string | null;
+    captured_idle?: boolean | null;
+  }>;
 
   const showPicker = isManager;
   const hasSelection = Boolean(targetEmail);

@@ -3,6 +3,7 @@ import { ScreenshotIntervalForm } from '@/components/ScreenshotIntervalForm';
 import EmployeeSelector from '@/components/FreelancerSelector';
 import { getManagerSettings } from '@/lib/clientSettings';
 import { fetchUserProfile } from '@/lib/userProfile';
+import { determineRoleFromRoleProfile } from '@/lib/frappeClient';
 import { redirect } from 'next/navigation';
 
 const DEFAULT_INTERVAL_SECONDS = 1800; // 30 minutes
@@ -46,7 +47,11 @@ export default async function ScreenshotIntervalPage({
     );
   }
 
-  if (profile.role !== 'Manager') {
+  // Convert role_profile_name to Manager/Employee for logic
+  const convertedRole = determineRoleFromRoleProfile(profile.role);
+  const isManager = convertedRole === 'Manager';
+  
+  if (!isManager) {
     redirect(`/reports/${encodeURIComponent(decodedEmail)}`);
   }
 

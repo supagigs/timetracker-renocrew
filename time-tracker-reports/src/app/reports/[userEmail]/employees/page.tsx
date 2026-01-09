@@ -181,10 +181,7 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
     );
 
     const lastSession = memberSessions[0];
-    const lastSessionTimestamp = lastSession
-      ? lastSession.end_time ?? lastSession.start_time ?? null
-      : null;
-
+    
     // Determine status based on time_sessions
     const activeSession = memberSessions.find(
       (session) => session.end_time === null && session.session_date === todayStr,
@@ -199,7 +196,13 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
       status = 'offline';
     }
 
-    const lastActiveAt = lastSessionTimestamp;
+    // For active sessions, use the active session's start_time
+    // For inactive sessions, use the last session's end_time or start_time
+    const lastActiveAt = activeSession
+      ? activeSession.start_time ?? null
+      : lastSession
+        ? lastSession.end_time ?? lastSession.start_time ?? null
+        : null;
 
     return {
       email,
@@ -312,9 +315,12 @@ export default async function ManagerEmployeesPage({
                 </thead>
                 <tbody>
                   {users.map((user) => {
-                    const lastActiveLabel = user.lastActiveAt
-                      ? formatDistanceToNow(new Date(user.lastActiveAt), { addSuffix: true })
-                      : 'No activity yet';
+                    // If user is active, show "Active now" instead of time ago
+                    const lastActiveLabel = user.status === 'active'
+                      ? 'Active now'
+                      : user.lastActiveAt
+                        ? formatDistanceToNow(new Date(user.lastActiveAt), { addSuffix: true })
+                        : 'No activity yet';
 
                     const statusConfig: Record<UserSummary['status'], { label: string; classes: string }> = {
                       active: { label: 'Working now', classes: 'bg-emerald-100 text-emerald-700' },
