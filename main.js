@@ -3388,6 +3388,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
     const numericSessionId = parseInt(sessionId, 10);
     let sessionData = null;
     let sessionError = null;
+    let sessionUserEmail = normalizedFreelancer; // Default to provided userEmail
 
     if (!isNaN(numericSessionId) && isFinite(numericSessionId)) {
       // sessionId is a numeric Supabase session ID
@@ -3398,47 +3399,77 @@ async function getScreenshotInterval(userEmail, sessionId) {
         .maybeSingle();
       sessionData = result.data;
       sessionError = result.error;
+      if (sessionData && sessionData.user_email) {
+        sessionUserEmail = sessionData.user_email.trim().toLowerCase();
+      }
     } else if (typeof sessionId === 'string' && sessionId.startsWith('TS-')) {
       // sessionId is a Frappe timesheet ID (e.g., "TS-2025-00043")
+      // Try to find the most recent session with this timesheet ID
       const result = await supabase
         .from('time_sessions')
         .select('frappe_project_id, user_email')
         .eq('frappe_timesheet_id', sessionId)
+        .order('start_time', { ascending: false })
+        .limit(1)
         .maybeSingle();
       sessionData = result.data;
       sessionError = result.error;
+      if (sessionData && sessionData.user_email) {
+        sessionUserEmail = sessionData.user_email.trim().toLowerCase();
+      }
     }
 
+    // Log session lookup result, but don't fail - we can still get interval using userEmail
     if (sessionError) {
       logWarn(
         'ScreenshotInterval',
-        `Error fetching session ${sessionId}: ${sessionError.message}, using default`,
+        `Error fetching session ${sessionId}: ${sessionError.message}, will use userEmail ${normalizedFreelancer} directly`,
       );
-      return DEFAULT_INTERVAL_SECONDS * 1000;
+    } else if (sessionData) {
+      logInfo('ScreenshotInterval', `Found session data for ${sessionId}, user_email: ${sessionUserEmail}`);
+    } else {
+      logInfo('ScreenshotInterval', `No session data found for ${sessionId}, using userEmail ${normalizedFreelancer} directly`);
     }
 
-    // Since we're now using Frappe projects, we can't use Supabase project_assignments
-    // Instead, we'll use the user's company or fall back to the logged-in user as client
-    // 2) Try to get client email from user's company (if available)
-    if (sessionData && sessionData.user_email) {
+    // 2) Try to get manager/client email from user's company
+    // The client_email in client_settings is the manager's email, not the employee's
+    // Use sessionUserEmail (from session or fallback to userEmail parameter)
+    if (sessionUserEmail) {
       try {
-        const { data: userCompanyData, error: companyError } = await supabase
-          .from('employees')
+        // Get the employee's company from users table
+        const { data: userData, error: userError } = await supabase
+          .from('users')
           .select('company')
-          .eq('email', sessionData.user_email)
+          .eq('email', sessionUserEmail)
           .maybeSingle();
 
-        if (!companyError && userCompanyData && userCompanyData.company) {
-          // Try to get client email from company
-          const { data: companyData, error: companyLookupError } = await supabase
-            .from('companies')
-            .select('owner_email')
-            .eq('name', userCompanyData.company)
-            .maybeSingle();
+        if (!userError && userData && userData.company) {
+          // Find a manager with the same company (this is the client_email)
+          const { data: managerData, error: managerError } = await supabase
+            .from('users')
+            .select('email, role')
+            .eq('company', userData.company)
+            .not('role', 'is', null)
+            .limit(10); // Get multiple to find a manager
 
-          if (!companyLookupError && companyData && companyData.owner_email) {
-            clientEmail = companyData.owner_email.trim().toLowerCase();
-            logInfo('ScreenshotInterval', `Using company owner email: ${clientEmail}`);
+          if (!managerError && managerData && managerData.length > 0) {
+            // Look for a manager role - anything that's NOT "Employee" is considered a Manager
+            // (SuperAdmin, MainAdmin, etc. are all managers)
+            const manager = managerData.find(u => {
+              const role = (u.role || '').trim();
+              // Anything that's not "Employee" is a manager
+              return role && role.toLowerCase() !== 'employee';
+            });
+            
+            if (manager) {
+              clientEmail = manager.email.trim().toLowerCase();
+              logInfo('ScreenshotInterval', `Found manager email from company: ${clientEmail} (role: ${manager.role})`);
+            } else if (managerData.length > 0) {
+              // If no explicit manager found, use the first user with the same company
+              // (might be the company owner)
+              clientEmail = managerData[0].email.trim().toLowerCase();
+              logInfo('ScreenshotInterval', `Using first user from company as client: ${clientEmail} (role: ${managerData[0].role})`);
+            }
           }
         }
       } catch (companyErr) {
@@ -3446,21 +3477,122 @@ async function getScreenshotInterval(userEmail, sessionId) {
       }
     }
 
-    // 3) Final fallback: assume logged-in user is the client
+    // 3) Final fallback: try to find any manager in the system
+    // This is a last resort - ideally we should always find the manager from company
     if (!clientEmail) {
-      logInfo(
+      try {
+        const { data: managers, error: managerError } = await supabase
+          .from('users')
+          .select('email, role')
+          .not('role', 'is', null)
+          .limit(10);
+
+        if (!managerError && managers && managers.length > 0) {
+          // Look for a manager role - anything that's NOT "Employee" is considered a Manager
+          const manager = managers.find(u => {
+            const role = (u.role || '').trim();
+            return role && role.toLowerCase() !== 'employee';
+          });
+          
+          if (manager) {
+            clientEmail = manager.email.trim().toLowerCase();
+            logInfo('ScreenshotInterval', `Using fallback manager: ${clientEmail} (role: ${manager.role})`);
+          }
+        }
+      } catch (fallbackErr) {
+        logWarn('ScreenshotInterval', `Error in fallback manager lookup: ${fallbackErr.message}`);
+      }
+    }
+
+    // 4) Last resort: use employee's email (but this won't work if settings are stored under manager's email)
+    if (!clientEmail) {
+      logWarn(
         'ScreenshotInterval',
-        `Could not resolve client from company, assuming user is client`,
+        `Could not resolve manager/client email, using employee email as fallback (may not find settings)`,
       );
       clientEmail = normalizedFreelancer;
     }
 
-    // 5) Load client settings (per-freelancer map) for the resolved client
-    const { data: clientSettings, error: settingsError } = await supabase
+    // 5) First, try to find client_settings that contains this employee's email
+    // This is more reliable than trying to guess the manager's email
+    let clientSettings = null;
+    let settingsError = null;
+    
+    // Try to find any client_settings entry that has this employee in their employee_intervals
+    logInfo('ScreenshotInterval', `Searching for client_settings containing employee: ${normalizedFreelancer}`);
+    const { data: allSettings, error: allSettingsError } = await supabase
       .from('client_settings')
-      .select('freelancer_intervals')
-      .eq('client_email', clientEmail)
-      .maybeSingle();
+      .select('client_email, employee_intervals')
+      .limit(100); // Get all settings (should be manageable)
+    
+    if (allSettingsError) {
+      logWarn('ScreenshotInterval', `Error fetching all client_settings: ${allSettingsError.message}`);
+    } else if (!allSettings || allSettings.length === 0) {
+      logWarn('ScreenshotInterval', `No client_settings records found in database`);
+    } else {
+      logInfo('ScreenshotInterval', `Found ${allSettings.length} client_settings record(s) in database`);
+      
+      // Look for a settings entry that has this employee in the map
+      // Try both exact match and case-insensitive match
+      const matchingSettings = allSettings.find(settings => {
+        if (!settings.employee_intervals) return false;
+        
+        // Handle both object and JSON string formats
+        let intervals = settings.employee_intervals;
+        if (typeof intervals === 'string') {
+          try {
+            intervals = JSON.parse(intervals);
+          } catch (e) {
+            logWarn('ScreenshotInterval', `Failed to parse employee_intervals as JSON: ${e.message}`);
+            return false;
+          }
+        }
+        
+        // Check exact match first
+        if (intervals.hasOwnProperty(normalizedFreelancer)) {
+          return true;
+        }
+        // Try case-insensitive match
+        const mapKeys = Object.keys(intervals);
+        return mapKeys.some(key => key.toLowerCase() === normalizedFreelancer);
+      });
+      
+      if (matchingSettings) {
+        clientSettings = matchingSettings;
+        clientEmail = matchingSettings.client_email.trim().toLowerCase();
+        logInfo('ScreenshotInterval', `✓ Found client_settings for employee ${normalizedFreelancer} under client: ${clientEmail}`);
+      } else {
+        logWarn('ScreenshotInterval', `✗ No client_settings found containing employee ${normalizedFreelancer} in employee_intervals`);
+        // Log all available employee emails for debugging
+        allSettings.forEach(settings => {
+          let intervals = settings.employee_intervals;
+          if (typeof intervals === 'string') {
+            try {
+              intervals = JSON.parse(intervals);
+            } catch {
+              intervals = {};
+            }
+          }
+          const employeeEmails = Object.keys(intervals || {});
+          if (employeeEmails.length > 0) {
+            logInfo('ScreenshotInterval', `  Client ${settings.client_email} has employees: ${employeeEmails.join(', ')}`);
+          } else {
+            logInfo('ScreenshotInterval', `  Client ${settings.client_email} has no employees in intervals`);
+          }
+        });
+      }
+    }
+    
+    // If not found by employee lookup, try the resolved client_email
+    if (!clientSettings && clientEmail) {
+      const result = await supabase
+        .from('client_settings')
+        .select('client_email, employee_intervals')
+        .eq('client_email', clientEmail)
+        .maybeSingle();
+      clientSettings = result.data;
+      settingsError = result.error;
+    }
 
     if (settingsError) {
       logWarn(
@@ -3478,14 +3610,49 @@ async function getScreenshotInterval(userEmail, sessionId) {
       return DEFAULT_INTERVAL_SECONDS * 1000;
     }
 
-    // 6) Get the interval from freelancer_intervals map using freelancer email as key
-    const map = clientSettings.freelancer_intervals || {};
-    const perFreelancerSeconds = Number(map[normalizedFreelancer]);
+    // 6) Get the interval from employee_intervals map using employee email as key
+    let map = clientSettings.employee_intervals || {};
+    
+    // Handle JSON string format if needed
+    if (typeof map === 'string') {
+      try {
+        map = JSON.parse(map);
+      } catch (e) {
+        logWarn('ScreenshotInterval', `Failed to parse employee_intervals as JSON: ${e.message}`);
+        map = {};
+      }
+    }
+    
+    // Log the map contents for debugging
+    logInfo('ScreenshotInterval', `Looking up interval for employee: ${normalizedFreelancer}`);
+    const mapKeys = Object.keys(map);
+    logInfo('ScreenshotInterval', `Available employee emails in map: ${mapKeys.join(', ')}`);
+    logInfo('ScreenshotInterval', `Full employee_intervals map: ${JSON.stringify(map)}`);
+    
+    // Try to find the interval - check both exact match and case-insensitive match
+    let perEmployeeSeconds = Number(map[normalizedFreelancer]);
+    
+    // If not found, try case-insensitive lookup
+    if (!Number.isFinite(perEmployeeSeconds) || perEmployeeSeconds <= 0) {
+      const matchingKey = mapKeys.find(key => key.toLowerCase() === normalizedFreelancer);
+      if (matchingKey) {
+        perEmployeeSeconds = Number(map[matchingKey]);
+        logInfo('ScreenshotInterval', `✓ Found interval using case-insensitive match: ${matchingKey} -> ${perEmployeeSeconds} seconds`);
+      } else {
+        logWarn('ScreenshotInterval', `✗ Employee ${normalizedFreelancer} not found in map. Available keys: ${mapKeys.join(', ')}`);
+      }
+    } else {
+      logInfo('ScreenshotInterval', `✓ Found interval using exact match: ${normalizedFreelancer} -> ${perEmployeeSeconds} seconds`);
+    }
 
     const intervalSeconds =
-      Number.isFinite(perFreelancerSeconds) && perFreelancerSeconds > 0
-        ? perFreelancerSeconds
+      Number.isFinite(perEmployeeSeconds) && perEmployeeSeconds > 0
+        ? perEmployeeSeconds
         : DEFAULT_INTERVAL_SECONDS;
+    
+    if (intervalSeconds === DEFAULT_INTERVAL_SECONDS) {
+      logWarn('ScreenshotInterval', `No interval found for ${normalizedFreelancer} in map, using default ${DEFAULT_INTERVAL_SECONDS} seconds`);
+    }
 
     if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
       logWarn(
@@ -3498,7 +3665,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
     const intervalMs = intervalSeconds * 1000;
     logInfo(
       'ScreenshotInterval',
-      `Using interval for client ${clientEmail}, freelancer ${normalizedFreelancer}: ${intervalSeconds} seconds (${intervalMs}ms)`,
+      `Using interval for client ${clientEmail}, employee ${normalizedFreelancer}: ${intervalSeconds} seconds (${intervalMs}ms)`,
     );
     return intervalMs;
   } catch (e) {

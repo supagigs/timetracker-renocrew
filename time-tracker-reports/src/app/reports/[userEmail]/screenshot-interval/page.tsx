@@ -56,24 +56,43 @@ export default async function ScreenshotIntervalPage({
   }
 
   // Validate that selected employee is from the same company
+  // Note: The EmployeeSelector component already filters employees by company via the API,
+  // so we only need to do a basic validation here. If the employee is in the dropdown,
+  // they should be valid. We only redirect if there's a clear company mismatch.
   if (selectedEmployeeEmail && profile.company) {
     const { getFrappeCompanyForUser } = await import('@/lib/frappeClient');
     const { createServerSupabaseClient } = await import('@/lib/supabaseServer');
-    const employeeCompany = await getFrappeCompanyForUser(selectedEmployeeEmail);
     
-    // Also check Supabase as fallback
-    const supabase = createServerSupabaseClient();
-    const { data: userData } = await supabase
-      .from('users')
-      .select('company')
-      .eq('email', selectedEmployeeEmail)
-      .maybeSingle();
+    // Normalize company names for comparison (trim and lowercase)
+    const normalizeCompany = (company: string | null | undefined): string | null => {
+      if (!company || typeof company !== 'string') return null;
+      return company.trim().toLowerCase();
+    };
     
-    const employeeCompanyFromDb = userData?.company || employeeCompany;
+    const managerCompany = normalizeCompany(profile.company);
     
-    // Only allow if company matches, otherwise redirect
-    if (employeeCompanyFromDb !== profile.company) {
-      redirect(`/reports/${encodeURIComponent(decodedEmail)}/screenshot-interval`);
+    // Only validate if manager has a company set
+    if (managerCompany) {
+      // Try to get employee company from multiple sources
+      let employeeCompany = await getFrappeCompanyForUser(selectedEmployeeEmail);
+      
+      // Also check Supabase as fallback
+      const supabase = createServerSupabaseClient();
+      const { data: userData } = await supabase
+        .from('users')
+        .select('company')
+        .eq('email', selectedEmployeeEmail)
+        .maybeSingle();
+      
+      const employeeCompanyFromDb = userData?.company || employeeCompany;
+      const normalizedEmployeeCompany = normalizeCompany(employeeCompanyFromDb);
+      
+      // Only redirect if employee has a company set AND it doesn't match manager's company
+      // If employee has no company, allow access (they might be a freelancer, unassigned, or the API already validated them)
+      if (normalizedEmployeeCompany && normalizedEmployeeCompany !== managerCompany) {
+        console.warn(`[screenshot-interval] Company mismatch for ${selectedEmployeeEmail}: manager=${managerCompany}, employee=${normalizedEmployeeCompany}`);
+        redirect(`/reports/${encodeURIComponent(decodedEmail)}/screenshot-interval`);
+      }
     }
   }
 

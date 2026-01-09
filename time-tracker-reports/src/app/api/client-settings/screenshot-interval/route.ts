@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { upsertManagerEmployeeInterval } from '@/lib/clientSettings';
 import { fetchUserProfile } from '@/lib/userProfile';
-import { getFrappeCompanyForUser } from '@/lib/frappeClient';
+import { getFrappeCompanyForUser, determineRoleFromRoleProfile } from '@/lib/frappeClient';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
 
 export async function POST(request: Request) {
@@ -28,7 +28,16 @@ export async function POST(request: Request) {
 
     // Validate that employee is from the same company as manager
     const managerProfile = await fetchUserProfile(managerEmail);
-    if (!managerProfile || managerProfile.role !== 'Manager') {
+    if (!managerProfile) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Manager profile not found' },
+        { status: 403 },
+      );
+    }
+    
+    // Convert role_profile_name to Manager/Employee for logic
+    const convertedRole = determineRoleFromRoleProfile(managerProfile.role);
+    if (convertedRole !== 'Manager') {
       return NextResponse.json(
         { error: 'Unauthorized: Manager access required' },
         { status: 403 },

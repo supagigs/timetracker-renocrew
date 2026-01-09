@@ -14,7 +14,7 @@ const OPTIONS: Array<{ label: string; seconds: number }> = [
 ];
 
 const DELETE_OPTIONS: Array<{ label: string; days: number }> = [
-  { label: '1 days', days: 1 },
+  { label: '1 day', days: 1 },
   { label: '2 days', days: 2 },
   { label: '3 days', days: 3 },
 ];
@@ -35,7 +35,7 @@ export function ScreenshotIntervalForm({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [deleteDays, setDeleteDays] = useState<number>(5);
+  const [deleteDays, setDeleteDays] = useState<number>(1); // Default to first option
   const [deleting, setDeleting] = useState(false);
   const [deleteMsg, setDeleteMsg] = useState<string | null>(null);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
@@ -52,7 +52,7 @@ export function ScreenshotIntervalForm({
     setError(null);
 
     try {
-      const response = await fetch('/api/manager-settings/screenshot-interval', {
+      const response = await fetch('/api/client-settings/screenshot-interval', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -61,6 +61,15 @@ export function ScreenshotIntervalForm({
           intervalSeconds: selected,
         }),
       });
+
+      // Check if response is JSON before parsing
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('[ScreenshotIntervalForm] Non-JSON response:', text.substring(0, 200));
+        setError('Server returned an invalid response. Please try again.');
+        return;
+      }
 
       const payload = await response.json();
       if (!response.ok || !payload?.ok) {
@@ -110,13 +119,16 @@ export function ScreenshotIntervalForm({
     setDeleteErr(null);
 
     try {
+      // Capture the current deleteDays value to ensure we use the correct value in the message
+      const daysToDelete = deleteDays;
+      
       const requestBody = {
-        days: deleteDays,
+        days: daysToDelete,
         managerEmail,
         employeeEmail,
       };
 
-      console.log('[handleDelete] Request body:', requestBody);
+      console.log('[handleDelete] Starting deletion with request body:', requestBody);
 
       const response = await fetch('/api/screenshots/delete-old', {
         method: 'POST',
@@ -125,6 +137,15 @@ export function ScreenshotIntervalForm({
       });
 
       console.log('[handleDelete] Response status:', response.status);
+
+      // Check if response is JSON before parsing
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('[handleDelete] Non-JSON response:', text.substring(0, 200));
+        setDeleteErr('Server returned an invalid response. Please try again.');
+        return;
+      }
 
       const result = await response.json();
       console.log('[handleDelete] Response data:', result);
@@ -139,8 +160,9 @@ export function ScreenshotIntervalForm({
       const deletedCount = result.deleted ?? 0;
       const filesDeleted = result.filesDeleted ?? 0;
 
+      // Use the captured daysToDelete value to ensure accuracy
       setDeleteMsg(
-        `Successfully deleted ${deletedCount} screenshot(s) and ${filesDeleted} file(s) older than ${deleteDays} days for ${employeeEmail}.`,
+        `Successfully deleted ${deletedCount} screenshot(s) and ${filesDeleted} file(s) older than ${daysToDelete} day${daysToDelete !== 1 ? 's' : ''} for ${employeeEmail}.`,
       );
     } catch (err: any) {
       console.error('[handleDelete] Error:', err);
@@ -204,7 +226,13 @@ export function ScreenshotIntervalForm({
             name="ss-delete-days"
             className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
             value={deleteDays}
-            onChange={(event) => setDeleteDays(Number(event.target.value))}
+            onChange={(event) => {
+              const newDays = Number(event.target.value);
+              setDeleteDays(newDays);
+              // Clear any previous messages when changing the days value
+              setDeleteMsg(null);
+              setDeleteErr(null);
+            }}
             disabled={deleting}
           >
             {DELETE_OPTIONS.map((option) => (

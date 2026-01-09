@@ -21,7 +21,12 @@ export async function getManagerSettings(
     .maybeSingle();
 
   if (error) {
-    console.error('[managerSettings] Failed to fetch settings:', error);
+    console.error('[managerSettings] Failed to fetch settings:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+    });
     return null;
   }
 
