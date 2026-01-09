@@ -99,10 +99,8 @@ async function fetchManagerTeamMembers(managerEmail: string, managerCompany: str
     // Get users from Frappe filtered by company
     const { getAllFrappeUsers } = await import('@/lib/frappeClient');
     const frappeUsers = await getAllFrappeUsers(managerCompany || undefined);
-    // Exclude the manager themselves from the list
-    employeeEmails = frappeUsers
-      .filter(u => u.email.toLowerCase() !== managerEmail.toLowerCase())
-      .map(u => u.email);
+    // Include all users from the company, including the manager themselves
+    employeeEmails = frappeUsers.map(u => u.email);
   } catch (error) {
     console.error('[reports-page] Failed to fetch Frappe users, falling back to Supabase:', error);
     // Fall back to Supabase users with same company
@@ -110,8 +108,8 @@ async function fetchManagerTeamMembers(managerEmail: string, managerCompany: str
       const { data: supabaseUsers, error: usersError } = await supabase
         .from('users')
         .select('email')
-        .eq('company', managerCompany)
-        .neq('email', managerEmail); // Exclude the manager themselves
+        .eq('company', managerCompany);
+        // Include all users from the company, including the manager themselves
       
       if (!usersError && supabaseUsers) {
         employeeEmails = supabaseUsers.map(u => u.email);
@@ -611,6 +609,7 @@ export default async function ReportsPage({
       const projectNamesMap = await fetchProjectNamesMap(supabase, projectIds);
       projectSummary = buildProjectSummary(sessions, projectNamesMap);
       
+      // Fetch assigned projects for employees (to show count only)
       if (!isManager) {
         assignedProjects = await fetchEmployeeProjects(reportEmail);
       }
@@ -680,15 +679,6 @@ export default async function ReportsPage({
     ),
   };
 
-  const projectHoursMap = new Map<number, { totalHours: number }>();
-  projectSummary.forEach((project) => {
-    projectHoursMap.set(project.id, { totalHours: project.totalHours });
-  });
-
-  const employeeProjectOverview = assignedProjects.map((project) => ({
-    ...project,
-    totalHours: projectHoursMap.get(project.id)?.totalHours ?? 0,
-  }));
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
   const todayActiveSeconds = sessions
@@ -799,50 +789,10 @@ export default async function ReportsPage({
         ) : (
           <>
             <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <SummaryCard title="Assigned Projects" value={employeeProjectOverview.length.toString()} />
+              <SummaryCard title="Assigned Projects" value={assignedProjects.length.toString()} />
               <SummaryCard title="Total Active Work (30 days)" value={formatHoursMinutes(summary.totalHours)} />
               <SummaryCard title="Active Today" value={formatSecondsToHoursMinutes(todayActiveSeconds)} />
               <SummaryCard title="Avg. Daily Active Work" value={formatHoursMinutes(summary.avgDailyHours)} />
-            </section>
-
-            <section className="rounded-xl border border-border bg-card p-6 shadow-sm">
-              <h2 className="mb-4 text-xl font-semibold text-foreground">Assigned Projects</h2>
-              {employeeProjectOverview.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Your manager hasn&apos;t assigned any projects to you yet.
-                </p>
-              ) : (
-                <div className="space-y-4">
-                  {employeeProjectOverview.map((project) => (
-                    <div
-                      key={project.id}
-                      className="rounded-xl border border-border/80 bg-card/60 p-4 shadow-sm transition hover:shadow-md"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h3 className="text-lg font-semibold text-foreground">{project.name}</h3>
-                          {project.managerEmail && (
-                            <p className="text-xs text-muted-foreground">
-                              Assigned by {project.managerName ?? project.managerEmail}
-                            </p>
-                          )}
-                          {project.description && (
-                            <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
-                              {project.description}
-                            </p>
-                          )}
-                        </div>
-                        <div className="text-right">
-                          <p className="text-xs uppercase text-muted-foreground">Tracked (30 days)</p>
-                          <p className="text-lg font-semibold text-emerald-600">
-                            {formatHoursMinutes(project.totalHours)}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </section>
 
             {projectSummary.length > 0 && (

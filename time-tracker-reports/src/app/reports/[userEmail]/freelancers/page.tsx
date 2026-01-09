@@ -22,10 +22,8 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
   let employeeEmails: string[] = [];
   try {
     const frappeUsers = await getAllFrappeUsers(managerCompany || undefined);
-    // Exclude the manager themselves from the list
-    employeeEmails = frappeUsers
-      .filter((user) => user.email.toLowerCase() !== managerEmail.toLowerCase())
-      .map((user) => user.email);
+    // Include all users from the company, including the manager themselves
+    employeeEmails = frappeUsers.map((user) => user.email);
   } catch (error) {
     console.error('[manager-employees] Failed to fetch Frappe users, falling back to Supabase:', error);
     // Fall back to Supabase users with same company if Frappe fails
@@ -33,8 +31,8 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
       const { data: supabaseUsers, error: usersError } = await supabase
         .from('users')
         .select('email')
-        .eq('company', managerCompany)
-        .neq('email', managerEmail); // Exclude the manager themselves
+        .eq('company', managerCompany);
+        // Include all users from the company, including the manager themselves
       
       if (!usersError && supabaseUsers) {
         employeeEmails = supabaseUsers.map(u => u.email);

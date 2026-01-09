@@ -27,13 +27,11 @@ export async function GET(request: NextRequest) {
         // Get company from manager's profile
         const managerCompany = profile?.company;
         const frappeUsers = await getAllFrappeUsers(managerCompany || undefined);
-        // Exclude the manager themselves from the list
-        const filteredUsers = frappeUsers
-          .filter((user) => user.email.toLowerCase() !== managerEmail.toLowerCase())
-          .map((user) => ({
-            email: user.email,
-            display_name: user.full_name,
-          }));
+        // Include all users from the company, including the manager themselves
+        const filteredUsers = frappeUsers.map((user) => ({
+          email: user.email,
+          display_name: user.full_name,
+        }));
         return NextResponse.json(filteredUsers);
       } catch (error) {
         console.error('Error fetching Frappe users:', error);
@@ -43,8 +41,8 @@ export async function GET(request: NextRequest) {
           const { data: supabaseUsers, error: usersError } = await supabase
             .from('users')
             .select('email, display_name')
-            .eq('company', profile.company)
-            .neq('email', managerEmail); // Exclude the manager themselves
+            .eq('company', profile.company);
+            // Include all users from the company, including the manager themselves
           
           if (!usersError && supabaseUsers) {
             return NextResponse.json(supabaseUsers);
