@@ -212,54 +212,70 @@ async function fetchManagerTeamMembers(managerEmail: string, managerCompany: str
 }
 
 async function fetchUserName(userEmail: string): Promise<string | null> {
-  const supabase = createServerSupabaseClient();
-  
-  const { data, error } = await supabase
-    .from('users')
-    .select('display_name')
-    .eq('email', userEmail)
-    .maybeSingle();
+  try {
+    const supabase = createServerSupabaseClient();
+    
+    const { data, error } = await supabase
+      .from('users')
+      .select('display_name')
+      .eq('email', userEmail)
+      .maybeSingle();
 
-  if (error) {
-    console.error('Error fetching user name:', error.message || JSON.stringify(error));
-    return null;
-  }
-
-  let displayName = data?.display_name || null;
-  
-  // If display_name is null, try to fetch it from Frappe
-  if (!displayName) {
-    try {
-      const { createFrappeClient } = await import('@/lib/frappeClient');
-      const frappe = createFrappeClient(true); // Use API key auth
-      
-      // Try to get user's full name from Frappe User doctype
-      const userRes = await frappe.get('/api/resource/User', {
-        params: {
-          fields: JSON.stringify(['name', 'full_name']),
-          filters: JSON.stringify([['name', '=', userEmail]]),
-          limit_page_length: 1,
-        },
+    if (error) {
+      // Log error but don't fail - this is non-critical
+      console.warn('[reports] Error fetching user name from Supabase:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
       });
-      
-      const users = userRes?.data?.data || [];
-      if (users.length > 0 && users[0]?.full_name) {
-        displayName = users[0].full_name;
-        
-        // Update Supabase with the fetched display name for future use
-        await supabase
-          .from('users')
-          .update({ display_name: displayName })
-          .eq('email', userEmail)
-          .catch(err => {
-            // Non-fatal - just log the error
-            console.warn('[reports] Failed to update display_name in Supabase:', err);
-          });
-      }
-    } catch (err) {
-      // Non-fatal - just log the error and continue with null displayName
-      console.warn('[reports] Failed to fetch display name from Frappe:', err);
+      // Continue to try Frappe fallback
     }
+
+    let displayName = data?.display_name || null;
+    
+    // If display_name is null, try to fetch it from Frappe
+    if (!displayName) {
+      try {
+        const { createFrappeClient } = await import('@/lib/frappeClient');
+        const frappe = createFrappeClient(true); // Use API key auth
+        
+        // Try to get user's full name from Frappe User doctype
+        const userRes = await frappe.get('/api/resource/User', {
+          params: {
+            fields: JSON.stringify(['name', 'full_name']),
+            filters: JSON.stringify([['name', '=', userEmail]]),
+            limit_page_length: 1,
+          },
+        });
+        
+        const users = userRes?.data?.data || [];
+        if (users.length > 0 && users[0]?.full_name) {
+          displayName = users[0].full_name;
+          
+          // Update Supabase with the fetched display name for future use
+          await supabase
+            .from('users')
+            .update({ display_name: displayName })
+            .eq('email', userEmail)
+            .catch(err => {
+              // Non-fatal - just log the error
+              console.warn('[reports] Failed to update display_name in Supabase:', err);
+            });
+        }
+      } catch (err) {
+        // Non-fatal - just log the error and continue with null displayName
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        console.warn('[reports] Failed to fetch display name from Frappe:', errorMessage);
+      }
+    }
+    
+    return displayName;
+  } catch (err) {
+    // Catch any unexpected errors and return null gracefully
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.warn('[reports] Unexpected error in fetchUserName:', errorMessage);
+    return null;
   }
 
   return displayName;
