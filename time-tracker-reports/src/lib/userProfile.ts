@@ -73,14 +73,20 @@ export async function fetchUserProfile(email: string): Promise<UserProfile | nul
       
       // Update Supabase with the fetched display name for future use
       if (displayName) {
-        await supabase
-          .from('users')
-          .update({ display_name: displayName })
-          .eq('email', normalizedEmail)
-          .catch(err => {
+        try {
+          const { error: updateError } = await supabase
+            .from('users')
+            .update({ display_name: displayName })
+            .eq('email', normalizedEmail);
+          
+          if (updateError) {
             // Non-fatal - just log the error
-            console.warn('[userProfile] Failed to update display_name in Supabase:', err);
-          });
+            console.warn('[userProfile] Failed to update display_name in Supabase:', updateError);
+          }
+        } catch (err) {
+          // Non-fatal - just log the error
+          console.warn('[userProfile] Failed to update display_name in Supabase:', err);
+        }
       }
     } catch (err) {
       // Non-fatal - just log the error and continue with null displayName

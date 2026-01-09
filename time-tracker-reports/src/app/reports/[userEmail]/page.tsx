@@ -254,14 +254,20 @@ async function fetchUserName(userEmail: string): Promise<string | null> {
           displayName = users[0].full_name;
           
           // Update Supabase with the fetched display name for future use
-          await supabase
-            .from('users')
-            .update({ display_name: displayName })
-            .eq('email', userEmail)
-            .catch(err => {
+          try {
+            const { error: updateError } = await supabase
+              .from('users')
+              .update({ display_name: displayName })
+              .eq('email', userEmail);
+            
+            if (updateError) {
               // Non-fatal - just log the error
-              console.warn('[reports] Failed to update display_name in Supabase:', err);
-            });
+              console.warn('[reports] Failed to update display_name in Supabase:', updateError);
+            }
+          } catch (err) {
+            // Non-fatal - just log the error
+            console.warn('[reports] Failed to update display_name in Supabase:', err);
+          }
         }
       } catch (err) {
         // Non-fatal - just log the error and continue with null displayName
@@ -277,8 +283,6 @@ async function fetchUserName(userEmail: string): Promise<string | null> {
     console.warn('[reports] Unexpected error in fetchUserName:', errorMessage);
     return null;
   }
-
-  return displayName;
 }
 
 async function fetchUserRole(userEmail: string): Promise<string | null> {
@@ -533,6 +537,7 @@ export default async function ReportsPage({
     labels: [] as string[],
     activeHours: [] as number[],
     idleHours: [] as number[],
+    breakHours: [] as number[],
     totalHours: 0,
     totalIdleSeconds: 0,
     avgIdlePercent: 0,
@@ -544,6 +549,7 @@ export default async function ReportsPage({
     labels: string[];
     activeHours: number[];
     idleHours: number[];
+    breakHours: number[];
     totalHours: number;
     totalIdleSeconds: number;
     avgIdlePercent: number;

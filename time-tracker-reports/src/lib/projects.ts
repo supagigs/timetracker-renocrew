@@ -42,8 +42,9 @@ export async function fetchManagerProjects({
     // Return projects without storing them in database
     // Managers can view all projects, but we shouldn't create "fake" assignments
     // Use frappeProjectId as a stable ID to avoid hydration mismatches
-    return sortedProjects.map((project) => ({
-      id: project.id, // Use Frappe project ID as stable identifier
+    // Use index-based numeric ID (starting at 2000000 to avoid conflicts with employee projects)
+    return sortedProjects.map((project, index) => ({
+      id: index + 2000000, // Use generated ID since we don't have database IDs (2000000+ to avoid conflicts)
       name: project.name,
       frappeProjectId: project.id, // Store the Frappe project ID for later use
       description: null,
