@@ -282,7 +282,13 @@ export default function ScreenshotSelector({
           No screenshots available for this session.
         </div>
       ) : (
-        <ScreenshotGrid screenshots={screenshots} />
+        <ScreenshotGrid
+          screenshots={screenshots}
+          onScreenshotDeleted={(deletedId) => {
+            // Remove the deleted screenshot from the list
+            setScreenshots((prev) => prev.filter((s) => s.id !== deletedId));
+          }}
+        />
       )}
     </section>
   );

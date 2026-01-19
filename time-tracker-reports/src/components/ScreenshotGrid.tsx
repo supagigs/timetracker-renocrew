@@ -14,6 +14,7 @@ type Screenshot = {
 
 type ScreenshotGridProps = {
   screenshots: Screenshot[];
+  onScreenshotDeleted?: (screenshotId: number) => void;
 };
 
 function formatDateTime(dateString: string): string {
@@ -175,11 +176,124 @@ function FloatingViewer({
 }
 
 /* --------------------------------------------------
+   CONFIRMATION DIALOG
+-------------------------------------------------- */
+function DeleteConfirmationDialog({
+  isOpen,
+  onConfirm,
+  onCancel,
+}: {
+  isOpen: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    if (isOpen) {
+      const handleEscape = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          onCancel();
+        }
+      };
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [isOpen, onCancel]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[99998]"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div
+        className="bg-card border border-border rounded-xl shadow-lg p-6 max-w-md w-full mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-semibold text-foreground mb-2">
+          Delete Screenshot?
+        </h3>
+        <p className="text-sm text-muted-foreground mb-6">
+          Are you sure you want to delete this screenshot? This action cannot be undone. The screenshot will be permanently removed from the database and storage.
+        </p>
+        <div className="flex gap-3 justify-end">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm font-medium text-foreground bg-muted hover:bg-muted/80 rounded-lg transition-colors"
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+            type="button"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------------------------------
    SCREENSHOT GRID (THUMBNAILS)
 -------------------------------------------------- */
-export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
+export default function ScreenshotGrid({ screenshots, onScreenshotDeleted }: ScreenshotGridProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [imageErrors, setImageErrors] = useState<Set<number>>(new Set());
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  const handleDeleteClick = useCallback((e: React.MouseEvent, screenshotId: number) => {
+    e.stopPropagation();
+    setDeleteConfirmId(screenshotId);
+  }, []);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteConfirmId) return;
+
+    setDeletingId(deleteConfirmId);
+    try {
+      const response = await fetch(`/api/screenshots/${deleteConfirmId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Failed to delete screenshot' }));
+        throw new Error(error.error || 'Failed to delete screenshot');
+      }
+
+      // Close the viewer if the deleted screenshot was being viewed
+      const deletedIndex = screenshots.findIndex((s) => s.id === deleteConfirmId);
+      if (deletedIndex !== -1 && activeIndex !== null) {
+        // If we're viewing the deleted screenshot or it affects the index, close the viewer
+        if (activeIndex === deletedIndex || activeIndex >= deletedIndex) {
+          setActiveIndex(null);
+        }
+      }
+
+      // Notify parent component to refresh the list
+      if (onScreenshotDeleted) {
+        onScreenshotDeleted(deleteConfirmId);
+      }
+
+      // Close the confirmation dialog
+      setDeleteConfirmId(null);
+    } catch (error) {
+      console.error('Error deleting screenshot:', error);
+      alert(error instanceof Error ? error.message : 'Failed to delete screenshot');
+    } finally {
+      setDeletingId(null);
+    }
+  }, [deleteConfirmId, onScreenshotDeleted, screenshots, activeIndex]);
+
+  const handleDeleteCancel = useCallback(() => {
+    setDeleteConfirmId(null);
+  }, []);
 
   if (screenshots.length === 0) {
     return (
@@ -243,6 +357,46 @@ export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
                     }}
                   />
                 )}
+                {/* DELETE BUTTON - TRASH ICON */}
+                <button
+                  onClick={(e) => handleDeleteClick(e, shot.id)}
+                  disabled={deletingId === shot.id}
+                  className="absolute top-2 right-2 p-2 bg-black/60 hover:bg-black/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed z-10"
+                  aria-label="Delete screenshot"
+                  type="button"
+                  title="Delete screenshot"
+                >
+                  {deletingId === shot.id ? (
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-4 h-4 animate-spin"
+                    >
+                      <circle cx="12" cy="12" r="10" opacity="0.25" />
+                      <path d="M12 2a10 10 0 0 1 10 10" opacity="0.75" />
+                    </svg>
+                  ) : (
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="w-4 h-4"
+                    >
+                      <path d="M3 6h18" />
+                      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                    </svg>
+                  )}
+                </button>
               </div>
 
               {/* TIMESTAMP */}
@@ -275,6 +429,13 @@ export default function ScreenshotGrid({ screenshots }: ScreenshotGridProps) {
           onClose={() => setActiveIndex(null)}
         />
       )}
+
+      {/* DELETE CONFIRMATION DIALOG */}
+      <DeleteConfirmationDialog
+        isOpen={deleteConfirmId !== null}
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+      />
     </>
   );
 }
