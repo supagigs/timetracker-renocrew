@@ -253,6 +253,17 @@ document.addEventListener('DOMContentLoaded', () => {
         StorageService.setItem('isIdle', 'false');
         StorageService.removeItem('idleStartTime');
 
+        // 🔁 Auto clock-out if the user was idle continuously for 2 hours or more
+        // 7200 seconds = 2 hours
+        if (idleDuration >= 7200 && isActive && !isOnBreak) {
+          console.log('Auto clocking out due to 2 hours of continuous idle time');
+          // Fire-and-forget; clockOut will handle saving to DB and Frappe
+          clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
+            console.error('Failed to auto clock out after long idle:', err);
+          });
+          return;
+        }
+
         if (isActive && !isOnBreak) {
           workStartTime = new Date();
           StorageService.setItem('workStartTime', workStartTime.toISOString());
@@ -517,7 +528,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  async function clockOut() {
+  /**
+   * End the current tracking session.
+   * 
+   * @param {Object} [options]
+   * @param {boolean} [options.auto=false] - If true, skip confirmation dialog (used for auto clock-out).
+   * @param {string|null} [options.reason=null] - Optional machine-readable reason (e.g. 'idle_2h').
+   */
+  async function clockOut({ auto = false, reason = null } = {}) {
     const wasActive = isActive;
     const wasIdle = isIdle;
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
@@ -556,8 +574,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Notify main process that timer is not active
     updateTimerStateInMainProcess(false);
+    
+    const shouldProceed = auto
+      ? true
+      : confirm('Are you sure you want to clock out? This will end your current session.');
 
-    if (confirm('Are you sure you want to clock out? This will end your current session.')) {
+    if (shouldProceed) {
       try {
         const sessionStart = sessionStartTime instanceof Date ? sessionStartTime : new Date(sessionStartTime);
         const sessionDuration = sessionStart ? Math.floor((clockOutTime - sessionStart) / 1000) : 0;
@@ -620,7 +642,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         totalIdleTime = 0;
 
-        alert('Session ended successfully!');
+        if (auto && reason === 'idle_2h') {
+          alert('You have been automatically clocked out after 2 hours of inactivity. Your session has been saved.');
+        } else {
+          alert('Session ended successfully!');
+        }
         window.location.href = 'home.html';
       } catch (error) {
         console.error('Error during clock out:', error);
