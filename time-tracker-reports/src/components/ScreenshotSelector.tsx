@@ -12,6 +12,7 @@ declare global {
 import { useState, useEffect, startTransition } from 'react';
 import ScreenshotGrid from './ScreenshotGrid';
 import { format } from 'date-fns';
+import { getDeletionStats, getSessionDeletionStats } from '@/lib/screenshotDeletionTracker';
 
 type TimeSession = {
   id: number;
@@ -68,11 +69,28 @@ export default function ScreenshotSelector({
   const [screenshots, setScreenshots] = useState<Screenshot[]>(initialScreenshots);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deletionStats, setDeletionStats] = useState({ perDay: 0, perSession: 0, perMonth: 0, perCurrentSession: 0 });
 
   // ✅ Set mounted flag first
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Update deletion stats when screenshots change or component mounts
+  useEffect(() => {
+    if (!mounted || !userEmail) return;
+    
+    const updateStats = () => {
+      const stats = getDeletionStats(userEmail);
+      const sessionStats = selectedSessionId ? getSessionDeletionStats(selectedSessionId, userEmail) : 0;
+      setDeletionStats({
+        ...stats,
+        perCurrentSession: sessionStats,
+      });
+    };
+    
+    updateStats();
+  }, [mounted, selectedSessionId, screenshots, userEmail]);
 
   // ============ LISTEN FOR SCREENSHOT DELETION EVENT ============
   useEffect(() => {
@@ -243,6 +261,35 @@ export default function ScreenshotSelector({
               {screenshots.length} image{screenshots.length !== 1 ? 's' : ''}
             </p>
           )}
+          {/* Deleted Counts Display */}
+          {(deletionStats.perCurrentSession > 0 || deletionStats.perDay > 0 || deletionStats.perMonth > 0) && (
+            <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
+              {deletionStats.perCurrentSession > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="font-medium text-foreground">Deleted in this session:</span>
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                    {deletionStats.perCurrentSession}
+                  </span>
+                </span>
+              )}
+              {deletionStats.perDay > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="font-medium text-foreground">Deleted today:</span>
+                  <span className="rounded-full bg-orange-100 px-2 py-0.5 font-semibold text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
+                    {deletionStats.perDay}
+                  </span>
+                </span>
+              )}
+              {deletionStats.perMonth > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="font-medium text-foreground">Deleted this month:</span>
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                    {deletionStats.perMonth}
+                  </span>
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <label htmlFor="session-select" className="text-sm text-muted-foreground">
@@ -284,9 +331,20 @@ export default function ScreenshotSelector({
       ) : (
         <ScreenshotGrid
           screenshots={screenshots}
+          userEmail={userEmail}
+          currentSessionId={selectedSessionId}
           onScreenshotDeleted={(deletedId) => {
             // Remove the deleted screenshot from the list
             setScreenshots((prev) => prev.filter((s) => s.id !== deletedId));
+            // Update deletion stats after deletion (with a small delay to ensure localStorage is updated)
+            setTimeout(() => {
+              const stats = getDeletionStats(userEmail);
+              const sessionStats = selectedSessionId ? getSessionDeletionStats(selectedSessionId, userEmail) : 0;
+              setDeletionStats({
+                ...stats,
+                perCurrentSession: sessionStats,
+              });
+            }, 100);
           }}
         />
       )}

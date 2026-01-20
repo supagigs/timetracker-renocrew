@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { format } from 'date-fns';
+import { recordDeletion, incrementSessionDeletionCount } from '@/lib/screenshotDeletionTracker';
 
 type Screenshot = {
   id: number;
@@ -14,6 +15,8 @@ type Screenshot = {
 
 type ScreenshotGridProps = {
   screenshots: Screenshot[];
+  userEmail: string;
+  currentSessionId?: number;
   onScreenshotDeleted?: (screenshotId: number) => void;
 };
 
@@ -242,7 +245,7 @@ function DeleteConfirmationDialog({
 /* --------------------------------------------------
    SCREENSHOT GRID (THUMBNAILS)
 -------------------------------------------------- */
-export default function ScreenshotGrid({ screenshots, onScreenshotDeleted }: ScreenshotGridProps) {
+export default function ScreenshotGrid({ screenshots, userEmail, currentSessionId, onScreenshotDeleted }: ScreenshotGridProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [imageErrors, setImageErrors] = useState<Set<number>>(new Set());
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
@@ -274,6 +277,23 @@ export default function ScreenshotGrid({ screenshots, onScreenshotDeleted }: Scr
         if (activeIndex === deletedIndex || activeIndex >= deletedIndex) {
           setActiveIndex(null);
         }
+      }
+
+      // Record the deletion for tracking (do this before notifying parent)
+      const deletedScreenshot = screenshots.find((s) => s.id === deleteConfirmId);
+      if (deletedScreenshot && userEmail) {
+        // Use currentSessionId if available, otherwise fall back to screenshot's session_id
+        // This ensures we use the correct session ID even if the screenshot's session_id is 0 or null
+        const sessionIdToRecord = currentSessionId ?? deletedScreenshot.session_id ?? 0;
+        recordDeletion(deleteConfirmId, sessionIdToRecord, userEmail);
+        incrementSessionDeletionCount(userEmail);
+        console.log('[ScreenshotGrid] Recorded deletion:', {
+          screenshotId: deleteConfirmId,
+          sessionId: sessionIdToRecord,
+          screenshotSessionId: deletedScreenshot.session_id,
+          currentSessionId,
+          userEmail,
+        });
       }
 
       // Notify parent component to refresh the list
