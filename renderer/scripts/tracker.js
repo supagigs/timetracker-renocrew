@@ -288,19 +288,120 @@ document.addEventListener('DOMContentLoaded', () => {
   async function startTimer() {
     if (!isActive) {
       try {
-        // Get Frappe session data
-        const frappeSessionStr = StorageService.getItem('frappeSession');
-        if (!frappeSessionStr) {
-          throw new Error('Frappe session not found. Please create a timesheet first.');
-        }
+        // Get or create Frappe session data
+        let frappeSessionStr = StorageService.getItem('frappeSession');
+        let session;
 
-        const session = JSON.parse(frappeSessionStr);
-        console.log('[TRACKER] Parsed Frappe session:', JSON.stringify(session, null, 2));
-        
-        if (!session.frappeTimesheetId || !session.frappeTimesheetRowId) {
-          const errorMsg = `Invalid Frappe session data. Please create a timesheet first. - frappeTimesheetId: ${session.frappeTimesheetId || 'MISSING'}, frappeTimesheetRowId: ${session.frappeTimesheetRowId || 'MISSING'}`;
-          console.error('[TRACKER] Validation failed:', errorMsg);
-          throw new Error(errorMsg);
+        if (!frappeSessionStr) {
+          // Timesheet doesn't exist yet - create it now
+          console.log('[TRACKER] No Frappe session found, creating timesheet...');
+          
+          const userEmail = StorageService.getItem('userEmail');
+          const projectId = StorageService.getItem('selectedProjectId');
+          let taskId = StorageService.getItem('selectedTaskId'); // Optional
+
+          if (!userEmail || !projectId) {
+            const errorMsg = `Missing user or project information - userEmail: ${userEmail || 'MISSING'}, projectId: ${projectId || 'MISSING'}`;
+            console.error('[TRACKER] Validation failed:', errorMsg);
+            throw new Error(errorMsg);
+          }
+
+          // Ensure taskId is not empty string (treat empty as no task selected)
+          if (taskId === '' || taskId === null || taskId === undefined) {
+            taskId = null;
+            StorageService.removeItem('selectedTaskId'); // Clean up if it's empty
+            console.log('[TRACKER] TaskId was empty/null, set to null and removed from storage');
+          }
+
+          // Task is optional - only include it if provided
+          const timesheetData = {
+            project: projectId,
+          };
+          if (taskId) {
+            timesheetData.task = taskId;
+          }
+
+          console.log('[TRACKER] Prepared timesheet data:', JSON.stringify(timesheetData, null, 2));
+          console.log('[TRACKER] Calling window.frappe.getOrCreateTimesheet...');
+
+          // Get or create timesheet for this project (one timesheet per project)
+          const getOrCreateStartTime = Date.now();
+          let timesheetResult;
+          try {
+            timesheetResult = await window.frappe.getOrCreateTimesheet(timesheetData);
+            const getOrCreateDuration = Date.now() - getOrCreateStartTime;
+            console.log('[TRACKER] getOrCreateTimesheet completed in', getOrCreateDuration, 'ms');
+            console.log('[TRACKER] Raw response:', JSON.stringify(timesheetResult, null, 2));
+          } catch (getOrCreateErr) {
+            const getOrCreateDuration = Date.now() - getOrCreateStartTime;
+            console.error('[TRACKER] getOrCreateTimesheet FAILED after', getOrCreateDuration, 'ms');
+            console.error('[TRACKER] Error type:', getOrCreateErr?.constructor?.name);
+            console.error('[TRACKER] Error message:', getOrCreateErr?.message);
+            console.error('[TRACKER] Error stack:', getOrCreateErr?.stack);
+            if (getOrCreateErr?.response) {
+              console.error('[TRACKER] Error response status:', getOrCreateErr.response.status);
+              console.error('[TRACKER] Error response data:', JSON.stringify(getOrCreateErr.response.data, null, 2));
+            }
+            throw getOrCreateErr;
+          }
+
+          const { timesheet, row } = timesheetResult;
+          console.log('[TRACKER] Extracted values:', {
+            timesheet: timesheet,
+            timesheetType: typeof timesheet,
+            row: row,
+            rowType: typeof row
+          });
+
+          if (!timesheet) {
+            const errorMsg = 'Invalid timesheet response from server - timesheet is missing or falsy';
+            console.error('[TRACKER]', errorMsg);
+            console.error('[TRACKER] Full response object:', JSON.stringify(timesheetResult, null, 2));
+            throw new Error(errorMsg);
+          }
+
+          if (!row) {
+            const errorMsg = 'Invalid timesheet row response from server - row is missing or falsy';
+            console.error('[TRACKER]', errorMsg);
+            console.error('[TRACKER] Full response object:', JSON.stringify(timesheetResult, null, 2));
+            throw new Error(errorMsg);
+          }
+
+          // Store in clearly named variables
+          const frappeTimesheetId = timesheet;
+          const frappeTimesheetRowId = row;
+
+          console.log('[TRACKER] Timesheet creation successful:', { 
+            frappeTimesheetId, 
+            frappeTimesheetRowId
+          });
+
+          // Store for later (start / stop / update)
+          const currentSession = {
+            frappeTimesheetId,
+            frappeTimesheetRowId
+          };
+          const sessionJson = JSON.stringify(currentSession);
+          console.log('[TRACKER] Storing session data:', sessionJson);
+          
+          StorageService.setItem('frappeSession', sessionJson);
+
+          // Also store IDs individually for backward compatibility
+          StorageService.setItem('frappeTimesheetId', frappeTimesheetId);
+          StorageService.setItem('frappeTimesheetRowId', frappeTimesheetRowId);
+          console.log('[TRACKER] Stored individual IDs to storage');
+
+          session = currentSession;
+        } else {
+          // Session exists - parse it
+          session = JSON.parse(frappeSessionStr);
+          console.log('[TRACKER] Parsed existing Frappe session:', JSON.stringify(session, null, 2));
+          
+          if (!session.frappeTimesheetId || !session.frappeTimesheetRowId) {
+            const errorMsg = `Invalid Frappe session data. - frappeTimesheetId: ${session.frappeTimesheetId || 'MISSING'}, frappeTimesheetRowId: ${session.frappeTimesheetRowId || 'MISSING'}`;
+            console.error('[TRACKER] Validation failed:', errorMsg);
+            throw new Error(errorMsg);
+          }
         }
 
         console.log('[TRACKER] Validation passed, starting timesheet session');
@@ -1026,6 +1127,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // Calculate total session time (active + break + idle)
     const currentIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
     const totalSessionTime = currentActiveTime + currentBreakTime + currentIdleTime;
+
+    // 🔁 Continuous check for auto clock-out if user has been idle for 2 hours or more
+    // This check runs every second while the timer is active, so it triggers immediately
+    // when the threshold is reached, without waiting for user activity
+    if (isActive && !isOnBreak && isIdle && idleTracker) {
+      const currentIdleDuration = idleTracker.getCurrentIdleTime(); // Get current continuous idle time
+      const IDLE_AUTO_CLOCKOUT_THRESHOLD = 7200; // 2 hours in seconds
+      
+      if (currentIdleDuration >= IDLE_AUTO_CLOCKOUT_THRESHOLD) {
+        console.log(`Auto clocking out due to ${currentIdleDuration} seconds (${(currentIdleDuration / 3600).toFixed(2)} hours) of continuous idle time`);
+        // Fire-and-forget; clockOut will handle saving to DB and Frappe
+        clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
+          console.error('Failed to auto clock out after long idle:', err);
+        });
+        return; // Stop updating timer since we're clocking out
+      }
+    }
 
     // Debug logging
     //console.log('updateTimer - isActive:', isActive, 'isOnBreak:', isOnBreak);

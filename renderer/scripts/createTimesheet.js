@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   
     // -----------------------------
-    // Create Timesheet
+    // Navigate to Tracker
     // -----------------------------
     createBtn.addEventListener('click', async () => {
       const startTime = Date.now();
@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         createBtn.disabled = true;
         console.log('[CREATE_TIMESHEET] Button disabled');
-  
+
         const userEmail = StorageService.getItem('userEmail');
         const projectId = StorageService.getItem('selectedProjectId');
         let taskId = StorageService.getItem('selectedTaskId'); // Optional
@@ -96,93 +96,11 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('[CREATE_TIMESHEET] Validation passed, clearing local timer state');
         clearLocalTimerState();
 
-        // Task is optional - only include it if provided
-        const timesheetData = {
-          project: projectId,
-        };
-        if (taskId) {
-          timesheetData.task = taskId;
-        }
-
-        console.log('[CREATE_TIMESHEET] Prepared timesheet data:', JSON.stringify(timesheetData, null, 2));
-        console.log('[CREATE_TIMESHEET] Calling window.frappe.getOrCreateTimesheet...');
-
-        // Get or create timesheet for this project (one timesheet per project)
-        const getOrCreateStartTime = Date.now();
-        let timesheetResult;
-        try {
-          timesheetResult = await window.frappe.getOrCreateTimesheet(timesheetData);
-          const getOrCreateDuration = Date.now() - getOrCreateStartTime;
-          console.log('[CREATE_TIMESHEET] getOrCreateTimesheet completed in', getOrCreateDuration, 'ms');
-          console.log('[CREATE_TIMESHEET] Raw response:', JSON.stringify(timesheetResult, null, 2));
-        } catch (getOrCreateErr) {
-          const getOrCreateDuration = Date.now() - getOrCreateStartTime;
-          console.error('[CREATE_TIMESHEET] getOrCreateTimesheet FAILED after', getOrCreateDuration, 'ms');
-          console.error('[CREATE_TIMESHEET] Error type:', getOrCreateErr?.constructor?.name);
-          console.error('[CREATE_TIMESHEET] Error message:', getOrCreateErr?.message);
-          console.error('[CREATE_TIMESHEET] Error stack:', getOrCreateErr?.stack);
-          if (getOrCreateErr?.response) {
-            console.error('[CREATE_TIMESHEET] Error response status:', getOrCreateErr.response.status);
-            console.error('[CREATE_TIMESHEET] Error response data:', JSON.stringify(getOrCreateErr.response.data, null, 2));
-          }
-          throw getOrCreateErr;
-        }
-
-        const { timesheet, row } = timesheetResult;
-        console.log('[CREATE_TIMESHEET] Extracted values:', {
-          timesheet: timesheet,
-          timesheetType: typeof timesheet,
-          row: row,
-          rowType: typeof row
-        });
-
-        if (!timesheet) {
-          const errorMsg = 'Invalid timesheet response from server - timesheet is missing or falsy';
-          console.error('[CREATE_TIMESHEET]', errorMsg);
-          console.error('[CREATE_TIMESHEET] Full response object:', JSON.stringify(timesheetResult, null, 2));
-          throw new Error(errorMsg);
-        }
-
-        if (!row) {
-          const errorMsg = 'Invalid timesheet row response from server - row is missing or falsy';
-          console.error('[CREATE_TIMESHEET]', errorMsg);
-          console.error('[CREATE_TIMESHEET] Full response object:', JSON.stringify(timesheetResult, null, 2));
-          throw new Error(errorMsg);
-        }
-
-        // Store in clearly named variables
-        const frappeTimesheetId = timesheet;
-        const frappeTimesheetRowId = row;
-
-        console.log('[CREATE_TIMESHEET] Timesheet creation successful:', { 
-          frappeTimesheetId, 
-          frappeTimesheetRowId
-        });
-
-        // Store for later (start / stop / update)
-        const currentSession = {
-          frappeTimesheetId,
-          frappeTimesheetRowId
-        };
-        const sessionJson = JSON.stringify(currentSession);
-        console.log('[CREATE_TIMESHEET] Storing session data:', sessionJson);
-        
-        StorageService.setItem('frappeSession', sessionJson);
-
-        // Also store IDs individually for backward compatibility
-        StorageService.setItem('frappeTimesheetId', frappeTimesheetId);
-        StorageService.setItem('frappeTimesheetRowId', frappeTimesheetRowId);
-        console.log('[CREATE_TIMESHEET] Stored individual IDs to storage');
+        // Note: Timesheet will be created in Frappe when user clicks "Start" button in tracker screen
+        // This ensures we only create the timesheet when tracking actually begins
 
         StorageService.setItem('isActive', 'false');
         console.log('[CREATE_TIMESHEET] Set isActive to false');
-
-        // Verify storage
-        const storedSession = StorageService.getItem('frappeSession');
-        console.log('[CREATE_TIMESHEET] Verification - stored session:', storedSession);
-
-        // Note: Supabase session record will be created when user clicks "Start" on tracker page
-        // This ensures we only create the record when tracking actually begins
 
         const totalDuration = Date.now() - startTime;
         console.log('[CREATE_TIMESHEET] Total operation completed in', totalDuration, 'ms');
@@ -199,26 +117,8 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error('[CREATE_TIMESHEET] Error message:', err?.message);
         console.error('[CREATE_TIMESHEET] Error stack:', err?.stack);
         
-        if (err?.response) {
-          console.error('[CREATE_TIMESHEET] Error response status:', err.response.status);
-          console.error('[CREATE_TIMESHEET] Error response headers:', JSON.stringify(err.response.headers, null, 2));
-          console.error('[CREATE_TIMESHEET] Error response data:', JSON.stringify(err.response.data, null, 2));
-        }
-        
-        if (err?.config) {
-          console.error('[CREATE_TIMESHEET] Request config:', {
-            url: err.config?.url,
-            method: err.config?.method,
-            data: err.config?.data,
-            headers: err.config?.headers
-          });
-        }
-        
-        console.error('[CREATE_TIMESHEET] Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
-        console.error('[CREATE_TIMESHEET] ============================');
-        
         NotificationService.showError(
-          err.message || 'Failed to create timesheet'
+          err.message || 'Failed to proceed to tracker'
         );
         createBtn.disabled = false;
         console.log('[CREATE_TIMESHEET] Button re-enabled after error');
