@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clock In - Time Tracker</title>
+  <link rel="stylesheet" href="../styles/common.css">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
+                 script-src 'self' https://cdn.jsdelivr.net;
+                 style-src 'self' 'unsafe-inline';
+                 img-src 'self' data: blob:;
+                 media-src 'self' data: blob:;">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../scripts/supabaseClient.js"></script>
+  <script src="../scripts/utils.js"></script>
+  <script src="../scripts/sessionSync.js"></script>
+  <script src="../scripts/clockIn.js" defer></script>
+</head>
+<body>
+  <div class="container">
+    <h1>Clock In</h1>
+    <p id="welcomeText">Ready to start your work session?</p>
+    
+    <div class="clock-in-info">
+      <div class="info-card">
+        <h3>Session Information</h3>
+        <p><strong>Date:</strong> <span id="currentDate"></span></p>
+        <p><strong>Time:</strong> <span id="currentTime"></span></p>
+        <p><strong>User:</strong> <span id="userName"></span></p>
+      </div>
+    </div>
+
+    <!-- Project Selection (for Freelancers only) -->
+    <div id="projectSelectionGroup" class="form-group project-selection-group">
+      <label for="projectSelect" class="project-selection-label">
+        Select Project:
+      </label>
+      <select id="projectSelect" class="session-select project-select-full">
+        <option value="">Loading projects...</option>
+      </select>
+      <p id="noProjectsMessage" class="no-projects-message">
+        No projects assigned to you. Please contact your client.
+      </p>
+    </div>
+    
+    <div class="button-group">
+      <button id="startSessionBtn" class="btn-primary">Start Work Session</button>
+      <button id="backBtn" class="btn-secondary btn-github">Back to Home</button>
+    </div>
+    
+    <div class="info-text">
+      <p>Click "Start Work Session" to begin tracking your time</p>
+    </div>
+  </div>
+</body>
+</html>
+
+
+
+
+
+
+
+

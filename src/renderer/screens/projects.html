@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Projects - Time Tracker</title>
+  <link rel="stylesheet" href="../styles/common.css">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
+                 script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+                 style-src 'self' 'unsafe-inline';
+                 img-src 'self' data: blob:;
+                 media-src 'self' data: blob:;">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../scripts/supabaseClient.js"></script>
+  <script src="../scripts/utils.js"></script>
+  <script src="../scripts/sessionSync.js"></script>
+  <script src="../scripts/projects.js" defer></script>
+</head>
+<body>
+  <div class="projects-shell">
+    <div class="projects-header">
+      <div class="projects-title">
+        <h1>My Projects</h1>
+        <p>Manage your client workspaces and assignments</p>
+      </div>
+      <div class="projects-actions">
+        <button id="backBtn" class="btn-secondary projects-nav-btn btn-github">← Back to Home</button>
+        <button id="addProjectBtn" class="btn-primary projects-add-btn">+ Add Project</button>
+      </div>
+    </div>
+
+    <div id="projectsContainer" class="projects-container">
+      <div id="loadingMessage" class="projects-placeholder">Loading projects...</div>
+      <div id="projectsList" class="projects-list" style="display: none;"></div>
+      <div id="noProjectsMessage" class="projects-placeholder" style="display: none;">
+        <p>No projects found. Click "Add Project" to create your first project.</p>
+      </div>
+    </div>
+
+    <!-- Add Project Modal -->
+    <div id="addProjectModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); z-index: 1000; align-items: center; justify-content: center; flex-direction: column;">
+      <div style="background: #1e293b; border-radius: 12px; padding: 30px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
+        <h2 style="margin-top: 0; color: #e2e8f0;">Add New Project</h2>
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label for="projectNameInput" style="display: block; margin-bottom: 8px; color: #cbd5e1; font-weight: 600;">
+            Project Name:
+          </label>
+          <input type="text" id="projectNameInput" placeholder="Enter project name" style="width: 100%; padding: 12px; margin-bottom: 10px; border: 2px solid #475569; border-radius: 10px; font-size: 1rem; background: #334155; color: #ffffff; box-sizing: border-box;">
+          <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 5px;">Enter a unique name for your project.</p>
+        </div>
+        <div class="button-group" style="margin-top: 20px;">
+          <button id="saveProjectBtn" class="btn-primary">Save Project</button>
+          <button id="cancelAddProjectBtn" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Assignment Modal -->
+    <div id="assignmentModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); z-index: 1000; align-items: center; justify-content: center; flex-direction: column;">
+      <div style="background: #1e293b; border-radius: 12px; padding: 30px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
+        <h2 style="margin-top: 0; color: #e2e8f0;">Assign Project to Freelancer</h2>
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label for="freelancerEmailInput" style="display: block; margin-bottom: 8px; color: #cbd5e1; font-weight: 600;">
+            Freelancer Email:
+          </label>
+          <input type="email" id="freelancerEmailInput" placeholder="freelancer@example.com" style="width: 100%; padding: 12px; margin-bottom: 10px; border: 2px solid #475569; border-radius: 10px; font-size: 1rem; background: #334155; color: #ffffff; box-sizing: border-box;">
+          <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 5px;">Enter the email of the freelancer to assign this project to.</p>
+        </div>
+        <div class="button-group" style="margin-top: 20px;">
+          <button id="assignBtn" class="btn-primary">Assign</button>
+          <button id="cancelAssignBtn" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Time Tracker</title>
+  <link rel="stylesheet" href="../styles/common.css">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
+                 script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+                 style-src 'self' 'unsafe-inline';
+                 img-src 'self' data: blob:;
+                 media-src 'self' data: blob:;">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../scripts/supabaseClient.js"></script>
+  <script src="../scripts/utils.js"></script>
+  <script src="../scripts/sessionSync.js"></script>
+  <script src="../scripts/login.js" defer></script>
+</head>
+<body class="auth-body">
+  <div class="auth-background">
+    <div class="auth-glow auth-glow-primary"></div>
+    <div class="auth-glow auth-glow-accent"></div>
+  </div>
+
+  <div class="auth-wrapper">
+    <div class="auth-logo">
+      <div class="auth-logo-icon">
+        <span>⏱</span>
+      </div>
+      <div class="auth-logo-text">
+        <p class="auth-logo-title">Time Tracker</p>
+        <p class="auth-logo-subtitle">Track your productivity and work time</p>
+      </div>
+    </div>
+
+    <div class="auth-card">
+      <div class="auth-card__header">
+        <h1>Track Your Time</h1>
+        <p>
+          Boost your productivity with accurate time tracking and detailed insights
+          into your work patterns.
+        </p>
+      </div>
+
+      <div class="auth-form">
+        <label for="email" class="sr-only">Email address</label>
+        <div class="auth-input-group">
+          <input
+            type="email"
+            id="email"
+            placeholder="your@email.com"
+            required
+            class="auth-input"
+            autocomplete="username"
+          >
+        </div>
+
+        <label for="password" class="sr-only">Password</label>
+        <div class="auth-input-group">
+          <input
+            type="password"
+            id="password"
+            placeholder="Password"
+            required
+            class="auth-input"
+            autocomplete="current-password"
+          >
+        </div>
+
+        <div id="errorMessage" class="auth-error-message" style="display: none;"></div>
+
+        <button id="loginBtn" class="btn-primary auth-submit">Login</button>
+      </div>
+    </div>
+
+    <p class="auth-helper-text">
+      Enter your Frappe credentials to log in.
+    </p>
+
+    <p class="auth-footer-text">
+      By continuing, you agree to our Terms of Service and Privacy Policy.
+    </p>
+  </div>
+</body>
+</html>

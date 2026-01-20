@@ -78,11 +78,25 @@ npm start
 
 ```
 Supatimetracker/
+<<<<<<< Updated upstream
 ├── main.js          # Electron main process
 ├── renderer.js      # Renderer process (UI logic)
 ├── index.html       # Main UI
 ├── package.json     # Dependencies and scripts
 └── README.md        # This file
+=======
+├── src/main.js, src/preload.js        # Electron main process + secure bridge
+├── renderer/                          # HTML/CSS/JS for desktop screens
+│   ├── screens/                       # login, home, tracker, projects, etc.
+│   ├── scripts/                       # front-end logic (idle tracking, Supabase)
+│   └── styles/                        # global CSS
+├── time-tracker-reports/              # Next.js reports portal (App Router)
+│   └── src/app/reports/[userEmail]/   # Role-aware dashboards
+├── database-migration-*.sql           # Supabase migrations
+├── scripts/                           # Helper scripts (symlink fix, clean dist)
+├── docs (this README + supporting guides)
+└── package.json                       # Electron build config
+>>>>>>> Stashed changes
 ```
 
 ## Database Schema
