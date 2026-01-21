@@ -3,13 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Projects - Time Tracker</title>
+  <title>All Projects - Time Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../styles/common.css">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
-                 connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
+                 connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com;
                  script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-                 style-src 'self' 'unsafe-inline';
+                 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+                 font-src 'self' https://fonts.gstatic.com;
                  img-src 'self' data: blob:;
                  media-src 'self' data: blob:;">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -18,63 +22,51 @@
   <script src="../scripts/sessionSync.js"></script>
   <script src="../scripts/projects.js" defer></script>
 </head>
-<body>
-  <div class="projects-shell">
-    <div class="projects-header">
-      <div class="projects-title">
-        <h1>My Projects</h1>
-        <p>Manage your client workspaces and assignments</p>
+<body class="projects-page-body">
+  <div class="projects-main-container">
+    <header class="projects-header-bar">
+      <div class="projects-header-content">
+        <div class="projects-avatar-container">
+          <div class="projects-avatar" id="userAvatar"></div>
+        </div>
+        <div class="projects-search-base">
+          <div class="projects-search-icon-wrap">
+            <svg class="projects-search-icon" xmlns="http://www.w3.org/2000/svg" width="17" height="18" viewBox="0 0 17 18" fill="none">
+              <circle cx="7.41667" cy="7.41667" r="6.66667" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M12 12.3816L16.1667 16.5483" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <input type="text" id="searchInput" class="projects-search-input" placeholder="">
+        </div>
+        <div class="projects-filter-icon-container">
+          <div class="projects-filter-icon-inner">
+            <svg class="projects-filter-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="16" viewBox="0 0 20 16" fill="none">
+              <path d="M15.7474 1.58331L7.41406 1.58331" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="2" cy="2" r="2" transform="matrix(-1 0 0 1 5.25 0.75)" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5"/>
+              <path d="M0.752604 9.91669L9.08594 9.91669" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="17.25" cy="12.75" r="2" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5"/>
+            </svg>
+          </div>
+        </div>
       </div>
-      <div class="projects-actions">
-        <button id="backBtn" class="btn-secondary projects-nav-btn btn-github">← Back to Home</button>
-        <button id="addProjectBtn" class="btn-primary projects-add-btn">+ Add Project</button>
-      </div>
-    </div>
+    </header>
 
-    <div id="projectsContainer" class="projects-container">
-      <div id="loadingMessage" class="projects-placeholder">Loading projects...</div>
-      <div id="projectsList" class="projects-list" style="display: none;"></div>
-      <div id="noProjectsMessage" class="projects-placeholder" style="display: none;">
-        <p>No projects found. Click "Add Project" to create your first project.</p>
-      </div>
-    </div>
-
-    <!-- Add Project Modal -->
-    <div id="addProjectModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); z-index: 1000; align-items: center; justify-content: center; flex-direction: column;">
-      <div style="background: #1e293b; border-radius: 12px; padding: 30px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
-        <h2 style="margin-top: 0; color: #e2e8f0;">Add New Project</h2>
-        <div class="form-group" style="margin-bottom: 20px;">
-          <label for="projectNameInput" style="display: block; margin-bottom: 8px; color: #cbd5e1; font-weight: 600;">
-            Project Name:
-          </label>
-          <input type="text" id="projectNameInput" placeholder="Enter project name" style="width: 100%; padding: 12px; margin-bottom: 10px; border: 2px solid #475569; border-radius: 10px; font-size: 1rem; background: #334155; color: #ffffff; box-sizing: border-box;">
-          <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 5px;">Enter a unique name for your project.</p>
-        </div>
-        <div class="button-group" style="margin-top: 20px;">
-          <button id="saveProjectBtn" class="btn-primary">Save Project</button>
-          <button id="cancelAddProjectBtn" class="btn-secondary">Cancel</button>
+    <div class="projects-content-container">
+      <h2 class="projects-title">All Projects</h2>
+      
+      <div id="projectsListContainer" class="projects-list-container">
+        <div id="loadingMessage" class="projects-loading">Loading projects...</div>
+        <div id="projectsList" class="projects-list" style="display: none;"></div>
+        <div id="noProjectsMessage" class="projects-empty" style="display: none;">
+          <p>No projects assigned to you.</p>
         </div>
       </div>
-    </div>
 
-    <!-- Assignment Modal -->
-    <div id="assignmentModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); z-index: 1000; align-items: center; justify-content: center; flex-direction: column;">
-      <div style="background: #1e293b; border-radius: 12px; padding: 30px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
-        <h2 style="margin-top: 0; color: #e2e8f0;">Assign Project to Freelancer</h2>
-        <div class="form-group" style="margin-bottom: 20px;">
-          <label for="freelancerEmailInput" style="display: block; margin-bottom: 8px; color: #cbd5e1; font-weight: 600;">
-            Freelancer Email:
-          </label>
-          <input type="email" id="freelancerEmailInput" placeholder="freelancer@example.com" style="width: 100%; padding: 12px; margin-bottom: 10px; border: 2px solid #475569; border-radius: 10px; font-size: 1rem; background: #334155; color: #ffffff; box-sizing: border-box;">
-          <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 5px;">Enter the email of the freelancer to assign this project to.</p>
-        </div>
-        <div class="button-group" style="margin-top: 20px;">
-          <button id="assignBtn" class="btn-primary">Assign</button>
-          <button id="cancelAssignBtn" class="btn-secondary">Cancel</button>
-        </div>
+      <div class="projects-footer">
+        <button id="viewReportsBtn" class="projects-view-reports-btn">View Reports</button>
+        <div class="projects-help-text">Need Help?</div>
       </div>
     </div>
   </div>
 </body>
 </html>
-

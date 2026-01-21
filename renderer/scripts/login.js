@@ -736,16 +736,11 @@ async function handleLogin() {
       // Non-fatal – we still fallback to local storage check below
     }
 
-    // Final decision: if we have a display name now, go to home; otherwise ask for it once
-    if (displayName && displayName.trim() !== '') {
-      setTimeout(() => {
-        window.location.href = './home.html';
-      }, 1000);
-    } else {
-      setTimeout(() => {
-        window.location.href = './displayName.html';
-      }, 1000);
-    }
+    // After login, always redirect to projects screen
+    // Projects screen will display all assigned projects from Frappe
+    setTimeout(() => {
+      window.location.href = './projects.html';
+    }, 1000);
 
   } catch (err) {
     console.error('Login error:', err);

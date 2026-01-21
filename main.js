@@ -1025,9 +1025,18 @@ function createWindow() {
   logWarn('Window', 'Error Checking icon:', e);
 }
   
+  // Phone-sized window (typical 6-inch phone display)
+  const PHONE_WIDTH = 360;
+  const PHONE_HEIGHT = 640;
+
   const windowOptions = {
-    width: 900,
-    height: 700,
+    width: PHONE_WIDTH,
+    height: PHONE_HEIGHT,
+    minWidth: PHONE_WIDTH,
+    maxWidth: PHONE_WIDTH,
+    minHeight: PHONE_HEIGHT,
+    maxHeight: PHONE_HEIGHT,
+    resizable: false,          // lock window size so it always stays phone-sized
     show: false, // do not show up until ready
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
