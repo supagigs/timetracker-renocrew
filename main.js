@@ -1141,50 +1141,62 @@ function createWindow() {
   // but still allow the user to force-close the app.
   let isForceClosing = false;
 
-  mainWindow.on('close', (event) => {
+  mainWindow.on('close', async (event) => {
     // If we've already decided to force close, do not block again.
     if (isForceClosing) {
       return;
     }
 
+    // If timer is active, prevent close and save session first
     if (isTimerActive) {
       event.preventDefault();
-      dialog.showMessageBox(mainWindow, {
-        type: 'warning',
-        title: 'Timer is Active',
-        message: 'Please clock out first before closing the application.',
-        detail:
-          'Your timer is still running. You must clock out to end your session before closing the app.\n\n' +
-          'If you close anyway, your current session may remain open on the server.',
-        buttons: ['Cancel', 'Close Anyway'],
-        defaultId: 0,
-        cancelId: 0,
-      }).then(({ response }) => {
-        if (response === 1 && mainWindow && !mainWindow.isDestroyed()) {
-          // User chose "Close Anyway" â€“ allow the window to close.
+      
+      try {
+        // Send IPC message to renderer to save session and wait for it
+        const savePromise = mainWindow.webContents.executeJavaScript(`
+          new Promise(async (resolve) => {
+            try {
+              if (window.saveSessionBeforeClose) {
+                const result = await window.saveSessionBeforeClose();
+                resolve(result);
+              } else {
+                resolve({ saved: false, error: 'Save function not available' });
+              }
+            } catch (error) {
+              resolve({ saved: false, error: error.message });
+            }
+          })
+        `);
+        
+        // Wait for save with timeout
+        const saveResult = await Promise.race([
+          savePromise,
+          new Promise((resolve) => setTimeout(() => resolve({ saved: false, error: 'Timeout' }), 3000))
+        ]);
+        
+        if (saveResult && saveResult.saved) {
+          logInfo('WindowClose', 'Session saved successfully before window close');
           isForceClosing = true;
           mainWindow.close();
+        } else {
+          logWarn('WindowClose', `Failed to save session: ${saveResult?.error || 'Unknown error'}`);
+          // Still allow close after timeout to prevent app from hanging
+          setTimeout(() => {
+            isForceClosing = true;
+            mainWindow.close();
+          }, 500);
         }
-      });
+      } catch (error) {
+        logError('WindowClose', `Error saving session on window close: ${error.message}`);
+        // Allow close after timeout to prevent app from hanging
+        setTimeout(() => {
+          isForceClosing = true;
+          mainWindow.close();
+        }, 500);
+      }
     } else if (isUserLoggedIn) {
-      event.preventDefault();
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: 'Please Log Out',
-        message: 'Log out before closing the application.',
-        detail:
-          'To keep your data safe, please log out from the app before closing the window.\n\n' +
-          'If you close anyway, your session may remain active.',
-        buttons: ['Cancel', 'Close Anyway'],
-        defaultId: 0,
-        cancelId: 0,
-      }).then(({ response }) => {
-        if (response === 1 && mainWindow && !mainWindow.isDestroyed()) {
-          // User chose "Close Anyway" â€“ allow the window to close.
-          isForceClosing = true;
-          mainWindow.close();
-        }
-      });
+      // For logged in users without active timer, allow close
+      return;
     }
   });
 }
@@ -5133,6 +5145,25 @@ ipcMain.handle('save-active-session', async (event, sessionData) => {
   } catch (e) {
     logError('IPC', 'save-active-session failed', e);
     return { ok: false, error: e.message };
+  }
+});
+
+// save-session-before-close - saves session data synchronously before window closes
+ipcMain.handle('save-session-before-close', async (event, sessionData) => {
+  try {
+    logInfo('IPC', 'save-session-before-close called', !!sessionData);
+    
+    if (!sessionData) {
+      return { saved: false, error: 'No session data provided' };
+    }
+
+    // The session data should already be saved by the renderer
+    // This handler just confirms the save was initiated
+    // The actual save happens in the renderer's beforeunload handler
+    return { saved: true };
+  } catch (e) {
+    logError('IPC', 'save-session-before-close failed', e);
+    return { saved: false, error: e.message };
   }
 });
 

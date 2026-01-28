@@ -557,7 +557,6 @@ async function handleLogin() {
     }
 
     console.log('Frappe login successful for:', email);
-    NotificationService.showLoginSuccess(email);
     
     // Save email for auto-population on next login (password is never stored)
     StorageService.setItem('savedEmail', email);

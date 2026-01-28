@@ -161,7 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Show notification that timer was restored from background
-        NotificationService.showInfo('Timer restored from background. Your session is still active.');
+        // Timer restored silently
         
         if (isIdle) {
           console.log('Session restored while idle; active timer paused.');
@@ -676,9 +676,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Notify main process that timer is not active
     updateTimerStateInMainProcess(false);
     
-    const shouldProceed = auto
-      ? true
-      : confirm('Are you sure you want to clock out? This will end your current session.');
+    const shouldProceed = true; // Always proceed without confirmation
 
     if (shouldProceed) {
       try {
@@ -716,7 +714,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         // Save session to database and wait for completion
-        await saveSession(sessionDuration, totalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
+        // Use totalSessionDurationSeconds (sum of components) instead of sessionDuration (elapsed time)
+        await saveSession(totalSessionDurationSeconds, totalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
 
         // Clear session data
         StorageService.removeItem('sessionStartTime');
@@ -743,11 +742,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         totalIdleTime = 0;
 
-        if (auto && reason === 'idle_2h') {
-          alert('You have been automatically clocked out after 2 hours of inactivity. Your session has been saved.');
-        } else {
-          alert('Session ended successfully!');
-        }
+        // Session ended silently
         window.location.href = 'home.html';
       } catch (error) {
         console.error('Error during clock out:', error);

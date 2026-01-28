@@ -40,3 +40,6 @@ COMMENT ON TABLE user_context IS 'Cached user context from Frappe. Stores email,
 
 COMMIT;
 
+
+
+

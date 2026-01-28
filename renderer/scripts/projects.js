@@ -55,7 +55,7 @@ document.addEventListener('DOMContentLoaded', async () => {
               return { ...project, totalTime: 0, lastWorked: null };
             }
 
-            // Calculate total time - use total_duration if available, otherwise sum the components
+            // Calculate total time from all sessions (active + break + idle)
             const totalSeconds = (sessions || []).reduce((sum, s) => {
               // Ensure we're working with numbers and handle null/undefined
               let sessionTime = 0;
@@ -103,7 +103,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             };
           } catch (err) {
             console.error('Error processing project:', project.id, err);
-            return { ...project, totalTime: 0, lastWorked: null };
+              return { ...project, totalTime: 0, lastWorked: null };
           }
         })
       );
@@ -176,9 +176,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   function displayProjects(projects) {
     projectsList.innerHTML = '';
 
+    // Sort all projects by lastWorked date (most recent first)
+    const sortedProjects = [...projects].sort((a, b) => {
+      // Projects with lastWorked come first, sorted by date (most recent first)
+      if (a.lastWorked && b.lastWorked) {
+        return new Date(b.lastWorked) - new Date(a.lastWorked);
+      }
+      if (a.lastWorked && !b.lastWorked) return -1;
+      if (!a.lastWorked && b.lastWorked) return 1;
+      // If neither has lastWorked, maintain original order
+      return 0;
+    });
+
     // Group projects by last worked date
     const grouped = {};
-    projects.forEach(project => {
+    sortedProjects.forEach(project => {
       const label = getDateLabel(project.lastWorked) || 'Older';
       if (!grouped[label]) {
         grouped[label] = [];
@@ -186,16 +198,35 @@ document.addEventListener('DOMContentLoaded', async () => {
       grouped[label].push(project);
     });
 
-    // Sort groups: Today first, then by recency
-    const groupOrder = ['Today', '1 day ago', '2 days ago', '7 days ago', 'Older'];
+    // Sort groups by the most recent project in each group (ascending = most recent first)
     const sortedGroups = Object.keys(grouped).sort((a, b) => {
-      const aIndex = groupOrder.indexOf(a) !== -1 ? groupOrder.indexOf(a) : 999;
-      const bIndex = groupOrder.indexOf(b) !== -1 ? groupOrder.indexOf(b) : 999;
-      return aIndex - bIndex;
+      const groupA = grouped[a];
+      const groupB = grouped[b];
+      
+      // Get the most recent date in each group
+      const mostRecentA = groupA.length > 0 && groupA[0].lastWorked 
+        ? new Date(groupA[0].lastWorked) 
+        : new Date(0);
+      const mostRecentB = groupB.length > 0 && groupB[0].lastWorked 
+        ? new Date(groupB[0].lastWorked) 
+        : new Date(0);
+      
+      // Sort descending (most recent first)
+      return mostRecentB - mostRecentA;
     });
 
     sortedGroups.forEach(groupLabel => {
       const groupProjects = grouped[groupLabel];
+      
+      // Sort projects within group by lastWorked (most recent first)
+      groupProjects.sort((a, b) => {
+        if (a.lastWorked && b.lastWorked) {
+          return new Date(b.lastWorked) - new Date(a.lastWorked);
+        }
+        if (a.lastWorked && !b.lastWorked) return -1;
+        if (!a.lastWorked && b.lastWorked) return 1;
+        return 0;
+      });
       
       // Calculate total work time for the group
       const groupTotalTime = groupProjects.reduce((sum, p) => sum + p.totalTime, 0);
@@ -274,11 +305,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Handle project click (navigate to task selection)
+  // Handle project click (navigate to start project screen)
   function handleProjectClick(project) {
     StorageService.setItem('selectedProjectId', project.id);
     StorageService.setItem('selectedProjectName', project.name);
-    window.location.href = `selectTask.html?projectId=${project.id}`;
+    window.location.href = `startProject.html?projectId=${project.id}`;
   }
 
   // Search functionality
@@ -306,6 +337,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             .eq('frappe_project_id', project.id)
             .eq('user_email', userEmail);
 
+          // Calculate total time from all sessions (active + break + idle)
           const totalSeconds = (sessions || []).reduce((sum, s) => {
             // Ensure we're working with numbers and handle null/undefined
             let sessionTime = 0;
@@ -344,7 +376,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
           return { ...project, totalTime: totalSeconds, lastWorked };
         } catch (err) {
-          return { ...project, totalTime: 0, lastWorked: null };
+              return { ...project, totalTime: 0, lastWorked: null };
         }
       })
     ).then(projectsWithTime => {
@@ -354,7 +386,44 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // View Reports button
   viewReportsBtn.addEventListener('click', () => {
-    window.location.href = 'report.html';
+    const reportsBaseUrl = (window.env && window.env.REPORTS_URL) || '';
+    const email = StorageService.getItem('userEmail');
+
+    if (!reportsBaseUrl) {
+      NotificationService.showError('Reports site URL is not configured yet.');
+      return;
+    }
+
+    if (!email) {
+      NotificationService.showError('User email not available. Please log in again.');
+      return;
+    }
+
+    const encodedEmail = encodeURIComponent(email);
+    let targetUrl = reportsBaseUrl.trim();
+
+    if (targetUrl.includes('{email}')) {
+      targetUrl = targetUrl.replace('{email}', encodedEmail);
+    } else if (targetUrl.includes('%EMAIL%')) {
+      targetUrl = targetUrl.replace('%EMAIL%', encodedEmail);
+    } else {
+      if (!targetUrl.endsWith('/')) {
+        targetUrl += '/';
+      }
+      targetUrl += `reports/${encodedEmail}`;
+    }
+
+    console.log('Opening reports site:', targetUrl);
+    window.electronAPI.openExternalUrl(targetUrl)
+      .then((ok) => {
+        if (!ok) {
+          NotificationService.showError('Unable to open the reports site.');
+        }
+      })
+      .catch((error) => {
+        console.error('openExternalUrl failed:', error);
+        NotificationService.showError('Unable to open the reports site.');
+      });
   });
 
   // Initial load

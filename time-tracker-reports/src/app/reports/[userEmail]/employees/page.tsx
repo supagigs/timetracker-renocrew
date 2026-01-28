@@ -274,20 +274,35 @@ async function fetchAllUsers(): Promise<UserSummary[]> {
 }
 
 function formatSecondsToHoursMinutes(totalSeconds: number): string {
-  const totalMinutes = Math.round(totalSeconds / 60);
+  const seconds = Number(totalSeconds) || 0;
+  
+  // For values less than 60 seconds, show seconds
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  
+  const totalMinutes = Math.floor(seconds / 60);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
+  const remainingSeconds = seconds % 60;
 
-  if (hours === 0 && minutes === 0) {
-    return '0h 0m';
+  // If we have hours, show as "Xh Ym" (no seconds)
+  if (hours > 0) {
+    if (minutes === 0) {
+      return `${hours}h`;
+    }
+    return `${hours}h ${minutes}m`;
   }
-  if (hours === 0) {
-    return `${minutes}m`;
+  
+  // If only minutes, show seconds if there are any
+  if (hours === 0 && minutes > 0) {
+    if (remainingSeconds === 0) {
+      return `${minutes}m`;
+    }
+    return `${minutes}m ${remainingSeconds}s`;
   }
-  if (minutes === 0) {
-    return `${hours}h`;
-  }
-  return `${hours}h ${minutes}m`;
+  
+  return '0m';
 }
 
 export default async function ManagerEmployeesPage({

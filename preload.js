@@ -78,6 +78,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveActiveSession: () =>
     ipcRenderer.invoke('save-active-session'),
 
+  saveSessionBeforeClose: (sessionData) =>
+    ipcRenderer.invoke('save-session-before-close', sessionData),
+
   captureScreen: () =>
     ipcRenderer.invoke('capture-screen'),
 

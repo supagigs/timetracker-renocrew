@@ -407,19 +407,35 @@ function formatHoursMinutes(decimalHours: number): string {
 }
 
 function formatSecondsToHoursMinutes(totalSeconds: number): string {
-  const totalMinutes = Math.round(totalSeconds / 60);
+  const seconds = Number(totalSeconds) || 0;
+  
+  // For values less than 60 seconds, show seconds
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  
+  const totalMinutes = Math.floor(seconds / 60);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  
-  if (hours === 0 && minutes === 0) {
-    return '0h 0m';
-  } else if (hours === 0) {
-    return `${minutes}m`;
-  } else if (minutes === 0) {
-    return `${hours}h`;
-  } else {
+  const remainingSeconds = seconds % 60;
+
+  // If we have hours, show as "Xh Ym" (no seconds)
+  if (hours > 0) {
+    if (minutes === 0) {
+      return `${hours}h`;
+    }
     return `${hours}h ${minutes}m`;
   }
+  
+  // If only minutes, show seconds if there are any
+  if (hours === 0 && minutes > 0) {
+    if (remainingSeconds === 0) {
+      return `${minutes}m`;
+    }
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  
+  return '0m';
 }
 
 async function fetchProjectNamesMap(supabase: ReturnType<typeof createServerSupabaseClient>, projectIds: string[]): Promise<Map<string, string>> {

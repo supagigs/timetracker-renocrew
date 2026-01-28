@@ -60,3 +60,6 @@ If you encounter authentication errors:
 4. Restart your Next.js server after adding environment variables
 
 
+
+
+

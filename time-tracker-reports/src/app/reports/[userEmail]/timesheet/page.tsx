@@ -211,13 +211,14 @@ async function fetchManagerTimesheet({
       sessionDate: session.session_date,
       startTime: session.start_time,
       endTime: session.end_time,
-      activeSeconds: session.active_duration ?? 0,
-      breakSeconds: session.break_duration ?? 0,
-      idleSeconds: session.idle_duration ?? 0,
+      // Ensure values are numbers and handle NULL properly
+      activeSeconds: Number(session.active_duration) || 0,
+      breakSeconds: Number(session.break_duration) || 0,
+      idleSeconds: Number(session.idle_duration) || 0,
       totalSeconds:
-        (session.active_duration ?? 0) +
-        (session.break_duration ?? 0) +
-        (session.idle_duration ?? 0),
+        (Number(session.active_duration) || 0) +
+        (Number(session.break_duration) || 0) +
+        (Number(session.idle_duration) || 0),
     };
   });
 }
@@ -260,32 +261,49 @@ async function fetchEmployeeTimesheet({
       sessionDate: session.session_date,
       startTime: session.start_time,
       endTime: session.end_time,
-      activeSeconds: session.active_duration ?? 0,
-      breakSeconds: session.break_duration ?? 0,
-      idleSeconds: session.idle_duration ?? 0,
+      // Ensure values are numbers and handle NULL properly
+      activeSeconds: Number(session.active_duration) || 0,
+      breakSeconds: Number(session.break_duration) || 0,
+      idleSeconds: Number(session.idle_duration) || 0,
       totalSeconds:
-        (session.active_duration ?? 0) +
-        (session.break_duration ?? 0) +
-        (session.idle_duration ?? 0),
+        (Number(session.active_duration) || 0) +
+        (Number(session.break_duration) || 0) +
+        (Number(session.idle_duration) || 0),
     };
   });
 }
 
 function formatSecondsToHoursMinutes(totalSeconds: number): string {
-  const totalMinutes = Math.round(totalSeconds / 60);
+  // Ensure we have a valid number
+  const seconds = Number(totalSeconds) || 0;
+  
+  // For values less than 60 seconds, show seconds
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  
+  const totalMinutes = Math.floor(seconds / 60);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
+  const remainingSeconds = seconds % 60;
 
-  if (hours === 0 && minutes === 0) {
-    return '0h 0m';
+  // If we have hours, show as "Xh Ym" (no seconds)
+  if (hours > 0) {
+    if (minutes === 0) {
+      return `${hours}h`;
+    }
+    return `${hours}h ${minutes}m`;
   }
-  if (hours === 0) {
-    return `${minutes}m`;
+  
+  // If only minutes, show seconds if there are any
+  if (hours === 0 && minutes > 0) {
+    if (remainingSeconds === 0) {
+      return `${minutes}m`;
+    }
+    return `${minutes}m ${remainingSeconds}s`;
   }
-  if (minutes === 0) {
-    return `${hours}h`;
-  }
-  return `${hours}h ${minutes}m`;
+  
+  return '0m';
 }
 
 export default async function TimesheetPage({

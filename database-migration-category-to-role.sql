@@ -32,3 +32,6 @@ DROP COLUMN IF EXISTS category;
 
 COMMIT;
 
+
+
+
