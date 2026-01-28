@@ -529,6 +529,9 @@ async function handleLogin() {
   loginBtn.disabled = true;
   loginBtn.innerHTML = '<span class="loading"></span> Logging in...';
 
+  // Normalize email for all internal usage (database, storage, etc.)
+  const normalizedEmail = email.toLowerCase().trim();
+
   try {
     // Check if auth API is available
     if (!window.auth || !window.auth.login) {
@@ -537,6 +540,8 @@ async function handleLogin() {
 
     // Attempt Frappe login
     console.log('Attempting Frappe login for:', email);
+    // Frappe auth is typically case-insensitive, but we keep the original
+    // value here in case the backend preserves/display casing.
     const result = await window.auth.login(email, password);
 
     if (!result.success) {
@@ -559,10 +564,11 @@ async function handleLogin() {
     console.log('Frappe login successful for:', email);
     
     // Save email for auto-population on next login (password is never stored)
-    StorageService.setItem('savedEmail', email);
+    // Store normalized email so all future logic uses a consistent key
+    StorageService.setItem('savedEmail', normalizedEmail);
     
     // Store user email (always treat as Freelancer since we removed client concept)
-    StorageService.setItem('userEmail', email);
+    StorageService.setItem('userEmail', normalizedEmail);
     StorageService.setItem('userCategory', 'Freelancer');
     
     if (window.electronAPI?.setUserLoggedIn) {
@@ -570,7 +576,7 @@ async function handleLogin() {
     }
     
     if (window.SessionSync) {
-      window.SessionSync.setEmail(email);
+      window.SessionSync.setEmail(normalizedEmail);
       window.SessionSync.updateAppState(true);
     }
 
@@ -579,7 +585,7 @@ async function handleLogin() {
     if (window.frappe && window.frappe.recoverRunningTimers) {
       try {
         // Get employee ID first
-        const employeeResult = await window.frappe.getEmployeeId(email);
+        const employeeResult = await window.frappe.getEmployeeId(normalizedEmail);
         if (employeeResult && employeeResult.success && employeeResult.employeeId) {
           console.log('Running crash recovery for employee:', employeeResult.employeeId);
           const recoveryResult = await window.frappe.recoverRunningTimers(employeeResult.employeeId);
@@ -606,7 +612,7 @@ async function handleLogin() {
       
       if (window.auth && window.auth.getUserCompany) {
         try {
-          const companyResult = await window.auth.getUserCompany(email);
+          const companyResult = await window.auth.getUserCompany(normalizedEmail);
           if (companyResult && companyResult.success) {
             // Handle case where company might be an object (e.g., {name: "Company Name"})
             const companyValue = companyResult.company;
@@ -628,7 +634,7 @@ async function handleLogin() {
 
       if (window.auth && window.auth.getUserRoleProfile) {
         try {
-          const roleProfileResult = await window.auth.getUserRoleProfile(email);
+          const roleProfileResult = await window.auth.getUserRoleProfile(normalizedEmail);
           if (roleProfileResult && roleProfileResult.success) {
             roleProfile = roleProfileResult.roleProfile || null;
             console.log('Fetched role profile from Frappe:', roleProfile);
@@ -648,7 +654,7 @@ async function handleLogin() {
           window.supabase
             .from('users')
             .select('id, email, display_name, role, company')
-            .eq('email', email)
+            .eq('email', normalizedEmail)
             .maybeSingle()
         );
 
@@ -665,7 +671,7 @@ async function handleLogin() {
             window.supabase
               .from('users')
               .insert([{
-                email,
+                email: normalizedEmail,
                 display_name: null,
                 role: roleProfile, // Store role_profile_name directly from Frappe
                 company: company
