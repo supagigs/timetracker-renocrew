@@ -75,6 +75,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onForceStopTimer: (callback) =>
     ipcRenderer.on('force-stop-timer', callback),
 
+  onLockOrSuspendClockOut: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('lock-or-suspend-clock-out', handler);
+    return () => ipcRenderer.removeListener('lock-or-suspend-clock-out', handler);
+  },
+
   saveActiveSession: () =>
     ipcRenderer.invoke('save-active-session'),
 

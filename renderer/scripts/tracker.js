@@ -18,6 +18,21 @@ document.addEventListener('DOMContentLoaded', () => {
   let idleStartTime = null;
   let userEmail = null;
   let removeSystemIdleListener = null;
+  /** Guard: set when auto clock-out for 2h idle is triggered so we don't fire twice */
+  let idle2hClockOutTriggered = false;
+  /** Guard: set when lock-screen/suspend clock-out is triggered so we don't fire twice */
+  let lockSuspendClockOutTriggered = false;
+  /** Continuous idle time (seconds) after which we auto clock out — while user is still idle. */
+  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours
+  /** Last time we successfully fetched remote status / stats from backend */
+  let lastStatusSuccessAt = Date.now();
+  /**
+   * If we repeatedly fail to fetch status (e.g. network down / laptop closed)
+   * we start this timer; if it runs for > STATUS_UNAVAILABLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS
+   * while the timer is active, we auto clock out.
+   */
+  let statusFailureSince = null;
+  const STATUS_UNAVAILABLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 300; // 5 minutes
 
   // DOM elements
   const activeTimeDisplay = document.getElementById('activeTimeDisplay');
@@ -253,10 +268,9 @@ document.addEventListener('DOMContentLoaded', () => {
         StorageService.setItem('isIdle', 'false');
         StorageService.removeItem('idleStartTime');
 
-        // 🔁 Auto clock-out if the user was idle continuously for 2 hours or more
-        // 7200 seconds = 2 hours
-        if (idleDuration >= 7200 && isActive && !isOnBreak) {
-          console.log('Auto clocking out due to 2 hours of continuous idle time');
+        // 🔁 Auto clock-out if the user was idle continuously >= threshold (when they become active again)
+        if (idleDuration >= IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS && isActive && !isOnBreak) {
+          console.log(`Auto clocking out: ${idleDuration}s idle (>= ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold)`);
           // Fire-and-forget; clockOut will handle saving to DB and Frappe
           clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
             console.error('Failed to auto clock out after long idle:', err);
@@ -520,6 +534,9 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Notify main process that timer is active
         updateTimerStateInMainProcess(true);
+        // Reset backend failure window for this new active session
+        statusFailureSince = null;
+        lastStatusSuccessAt = Date.now();
         
         // Start idle tracking when work begins
         if (idleTracker) {
@@ -529,6 +546,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // Start background screenshot capture immediately (first screenshot at 0 seconds)
         startScreenshotCapture();
 
+        idle2hClockOutTriggered = false;
+        lockSuspendClockOutTriggered = false;
         // Start the timer interval to update the display every second
         if (!timerInterval) {
           timerInterval = setInterval(updateTimer, 1000);
@@ -1092,6 +1111,27 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  /**
+   * Runs the idle auto clock-out check. Triggers clock-out if user has been idle continuously
+   * for >= IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS while timer is active.
+   * @returns {boolean} true if clock-out was triggered (caller should stop), false otherwise.
+   */
+  function runIdleAutoClockOutCheck() {
+    if (!isActive || isOnBreak || !isIdle || !idleTracker || idle2hClockOutTriggered) return false;
+    const currentIdleDuration = idleTracker.getCurrentIdleTime();
+    if (currentIdleDuration < IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS) return false;
+    idle2hClockOutTriggered = true;
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+    console.log(`Auto clocking out: ${currentIdleDuration}s (${(currentIdleDuration / 60).toFixed(1)}m) continuous idle — ending session now`);
+    clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
+      console.error('Failed to auto clock out after long idle:', err);
+    });
+    return true;
+  }
+
   async function updateTimer() {
     if (!sessionStartTime) return;
 
@@ -1123,20 +1163,34 @@ document.addEventListener('DOMContentLoaded', () => {
     const currentIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
     const totalSessionTime = currentActiveTime + currentBreakTime + currentIdleTime;
 
-    // 🔁 Continuous check for auto clock-out if user has been idle for 2 hours or more
-    // This check runs every second while the timer is active, so it triggers immediately
-    // when the threshold is reached, without waiting for user activity
-    if (isActive && !isOnBreak && isIdle && idleTracker) {
-      const currentIdleDuration = idleTracker.getCurrentIdleTime(); // Get current continuous idle time
-      const IDLE_AUTO_CLOCKOUT_THRESHOLD = 7200; // 2 hours in seconds
-      
-      if (currentIdleDuration >= IDLE_AUTO_CLOCKOUT_THRESHOLD) {
-        console.log(`Auto clocking out due to ${currentIdleDuration} seconds (${(currentIdleDuration / 3600).toFixed(2)} hours) of continuous idle time`);
-        // Fire-and-forget; clockOut will handle saving to DB and Frappe
-        clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
-          console.error('Failed to auto clock out after long idle:', err);
+    // 🔁 Auto clock-out while user is still idle (do not wait for user to become active again).
+    if (runIdleAutoClockOutCheck()) return;
+
+    // Optional: log when idle and approaching threshold (every ~60s) to verify detection.
+    if (isActive && !isOnBreak && isIdle && idleTracker && !idle2hClockOutTriggered) {
+      const d = idleTracker.getCurrentIdleTime();
+      if (d >= Math.max(0, IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS - 120)) {
+        const last = (window.__idleClockOutLogAt || 0);
+        if (now.getTime() - last >= 60 * 1000) {
+          window.__idleClockOutLogAt = now.getTime();
+          console.log(`[Idle auto clock-out] ${d}s idle / ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold`);
+        }
+      }
+    }
+
+    // 🔁 Auto clock-out if we cannot fetch remote status for > 5 minutes while timer is running.
+    // This catches cases like long network outage or laptop closed while timer is still marked active.
+    if (isActive && !isOnBreak && statusFailureSince) {
+      const nowTs = Date.now();
+      const failureSeconds = Math.floor((nowTs - statusFailureSince) / 1000);
+      if (failureSeconds >= STATUS_UNAVAILABLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS) {
+        console.warn(`Auto clocking out due to backend status unavailable for ${failureSeconds}s (>${STATUS_UNAVAILABLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold).`);
+        clearInterval(timerInterval);
+        timerInterval = null;
+        clockOut({ auto: true, reason: 'status_unreachable_5m' }).catch(err => {
+          console.error('Failed to auto clock out after backend status outage:', err);
         });
-        return; // Stop updating timer since we're clocking out
+        return;
       }
     }
 
@@ -1203,8 +1257,12 @@ document.addEventListener('DOMContentLoaded', () => {
             await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
             continue;
           } else {
-            // After all retries failed, show fallback data
+            // After all retries failed, show fallback data and mark backend as unavailable
             console.warn('Failed to load today stats from database after all retries. Using local data only.');
+            if (!statusFailureSince) {
+              // Start failure window from last known good status (if any), otherwise now
+              statusFailureSince = lastStatusSuccessAt || Date.now();
+            }
             showFallbackStats();
             return;
           }
@@ -1213,6 +1271,10 @@ document.addEventListener('DOMContentLoaded', () => {
         let totalActiveTime = 0;
         let totalBreakTime = 0;
         let breaksCount = 0;
+
+        // We reached here, so backend is reachable again
+        lastStatusSuccessAt = Date.now();
+        statusFailureSince = null;
 
         // Process all completed sessions for the day
         data.forEach(session => {
@@ -2028,6 +2090,30 @@ document.addEventListener('DOMContentLoaded', () => {
     NotificationService.showWarning('You were signed out from the reports site. Please log in again from the desktop app.');
     logout({ skipConfirm: true, remote: true });
   });
+
+  // Clock out when laptop lid is closed (lock-screen) or system suspends — stop timer immediately.
+  if (window.electronAPI && window.electronAPI.onLockOrSuspendClockOut) {
+    window.electronAPI.onLockOrSuspendClockOut((data) => {
+      const reason = data?.reason || 'lock_screen';
+      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) return;
+      lockSuspendClockOutTriggered = true;
+      console.log(`Clock out on ${reason} (lid closed / system suspend)`);
+      clockOut({ auto: true, reason }).catch((err) => {
+        console.error('Lock/suspend clock out failed:', err);
+      });
+    });
+  }
+
+  // Re-run idle auto clock-out check when window becomes visible or focused (e.g. after laptop wake).
+  // Handles the case where the timer didn't tick during sleep — we check immediately on resume.
+  function onVisibilityOrFocus() {
+    if (!sessionStartTime || typeof runIdleAutoClockOutCheck !== 'function') return;
+    runIdleAutoClockOutCheck();
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') onVisibilityOrFocus();
+  });
+  window.addEventListener('focus', onVisibilityOrFocus);
 
   // Start timer interval
   timerInterval = setInterval(updateTimer, 1000);

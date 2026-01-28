@@ -313,7 +313,7 @@ function logError(context, message, ...args) { log('error', context, message, ..
 
 // Set up logging for Frappe modules (after log functions are defined)
 setFrappeAuthLoggers({ logInfo, logError, logWarn });
-setFrappeServiceLoggers({ logInfo, logError });
+setFrappeServiceLoggers({ logInfo, logError, logWarn });
 
 // ============ macOS PERMISSIONS HELPER ============
 // Check Accessibility permission on macOS using native API without triggering prompts
@@ -1117,6 +1117,34 @@ function createWindow() {
       });
     } catch (e) {
       logWarn('PowerMonitor', 'Unable to register idle listeners', e);
+    }
+  }
+
+  // Stop timer and clock out when lid is closed (lock-screen) or system suspends
+  const broadcastLockOrSuspendClockOut = (reason) => {
+    try {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
+          win.webContents.send('lock-or-suspend-clock-out', { reason });
+        }
+      });
+      logInfo('PowerMonitor', `Broadcast lock-or-suspend-clock-out: ${reason}`);
+    } catch (e) {
+      logWarn('PowerMonitor', `Failed to broadcast lock-or-suspend-clock-out: ${e?.message || e}`);
+    }
+  };
+  if (powerMonitor.listenerCount('lock-screen') === 0) {
+    try {
+      powerMonitor.on('lock-screen', () => broadcastLockOrSuspendClockOut('lock_screen'));
+    } catch (e) {
+      logWarn('PowerMonitor', 'Unable to register lock-screen listener', e);
+    }
+  }
+  if (powerMonitor.listenerCount('suspend') === 0) {
+    try {
+      powerMonitor.on('suspend', () => broadcastLockOrSuspendClockOut('suspend'));
+    } catch (e) {
+      logWarn('PowerMonitor', 'Unable to register suspend listener', e);
     }
   }
 

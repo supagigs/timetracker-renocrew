@@ -43,6 +43,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let totalIdleTime = 0;
   let isIdle = false;
   let idleStartTime = null;
+  let idle2hClockOutTriggered = false;
+  let lockSuspendClockOutTriggered = false;
+  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours — auto clock out while still idle
 
   // Initialize idle tracker
   function initializeIdleTracker() {
@@ -81,8 +84,8 @@ document.addEventListener('DOMContentLoaded', () => {
         StorageService.setItem('isIdle', 'false');
         StorageService.removeItem('idleStartTime');
 
-        if (idleDuration >= 7200 && isActive && !isOnBreak) {
-          console.log('Auto clocking out due to 2 hours of continuous idle time');
+        if (idleDuration >= IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS && isActive && !isOnBreak) {
+          console.log(`Auto clocking out: ${idleDuration}s idle (>= ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold)`);
           clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
             console.error('Failed to auto clock out after long idle:', err);
           });
@@ -110,6 +113,22 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
 
+  function runIdleAutoClockOutCheck() {
+    if (!isActive || isOnBreak || !isIdle || !idleTracker || idle2hClockOutTriggered) return false;
+    const currentIdleDuration = idleTracker.getCurrentIdleTime();
+    if (currentIdleDuration < IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS) return false;
+    idle2hClockOutTriggered = true;
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+    console.log(`Auto clocking out: ${currentIdleDuration}s (${(currentIdleDuration / 60).toFixed(1)}m) continuous idle — ending session now`);
+    clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
+      console.error('Failed to auto clock out:', err);
+    });
+    return true;
+  }
+
   // Update timer display
   function updateTimer() {
     if (!sessionStartTime) return;
@@ -133,14 +152,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const currentIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
     const totalSessionTime = currentActiveTime + currentBreakTime + currentIdleTime;
 
-    // Check for auto clock-out
-    if (isActive && !isOnBreak && isIdle && idleTracker) {
-      const currentIdleDuration = idleTracker.getCurrentIdleTime();
-      if (currentIdleDuration >= 7200) {
-        clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
-          console.error('Failed to auto clock out:', err);
-        });
-        return;
+    if (runIdleAutoClockOutCheck()) return;
+
+    if (isActive && !isOnBreak && isIdle && idleTracker && !idle2hClockOutTriggered) {
+      const d = idleTracker.getCurrentIdleTime();
+      if (d >= Math.max(0, IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS - 120)) {
+        const last = (window.__idleClockOutLogAt || 0);
+        if (now.getTime() - last >= 60 * 1000) {
+          window.__idleClockOutLogAt = now.getTime();
+          console.log(`[Idle auto clock-out] ${d}s idle / ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold`);
+        }
       }
     }
 
@@ -179,6 +200,8 @@ document.addEventListener('DOMContentLoaded', () => {
     resumeBtn.style.display = 'none';
 
     updateTimerStateInMainProcess(true);
+    idle2hClockOutTriggered = false;
+    lockSuspendClockOutTriggered = false;
 
     // Start idle tracking immediately
     if (idleTracker) {
@@ -741,11 +764,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Also save on visibility change (when app is minimized or tab switched)
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && isActive && sessionStartTime) {
-      // Don't save on visibility change, just ensure data is ready
-      // The beforeunload will handle the actual save
+      // Don't save on visibility change; beforeunload handles save
+    }
+    if (document.visibilityState === 'visible' && sessionStartTime && typeof runIdleAutoClockOutCheck === 'function') {
+      runIdleAutoClockOutCheck();
     }
   });
+  window.addEventListener('focus', () => {
+    if (!sessionStartTime || typeof runIdleAutoClockOutCheck !== 'function') return;
+    runIdleAutoClockOutCheck();
+  });
+
+  // Clock out when laptop lid is closed (lock-screen) or system suspends
+  if (window.electronAPI && window.electronAPI.onLockOrSuspendClockOut) {
+    window.electronAPI.onLockOrSuspendClockOut((data) => {
+      const reason = data?.reason || 'lock_screen';
+      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) return;
+      lockSuspendClockOutTriggered = true;
+      console.log(`Clock out on ${reason} (lid closed / system suspend)`);
+      clockOut({ auto: true, reason }).catch((err) => {
+        console.error('Lock/suspend clock out failed:', err);
+      });
+    });
+  }
 });

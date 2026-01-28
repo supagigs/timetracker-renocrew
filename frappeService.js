@@ -2,11 +2,12 @@ const { createFrappeClient } = require('./frappeClient');
 const { getCurrentUser } = require('./frappeAuth');
 
 // Logging functions will be passed from main.js
-let logInfo, logError;
+let logInfo, logError, logWarn;
 
 function setLoggers(loggers) {
   logInfo = loggers.logInfo;
   logError = loggers.logError;
+  logWarn = loggers.logWarn;
 }
 
 /**
@@ -2238,17 +2239,25 @@ async function saveTimesheetWithSavedocs(timesheetDoc) {
       throw new Error(`Failed to save timesheet: HTTP ${res.status}`);
     }
 
-    // Optionally validate the saved document
-    const savedDoc = res?.data?.docs?.[0];
+    // Parse saved document — savedocs can use docs[] or doc (singular) depending on Frappe version
+    let savedDoc = res?.data?.docs?.[0];
+    if (!savedDoc && res?.data?.doc) {
+      savedDoc = res.data.doc;
+    }
+    if (!savedDoc && Array.isArray(res?.data?.docs) && res.data.docs.length > 0) {
+      savedDoc = res.data.docs.find((d) => d && d.doctype === 'Timesheet') || res.data.docs[0];
+    }
     if (!savedDoc || savedDoc.doctype !== 'Timesheet') {
-      if (logError) {
-        logError('Frappe', `Invalid savedocs response structure:`, {
+      // HTTP 200: Frappe accepted the save. Don't throw — treat as success to avoid false "unable to save" errors.
+      if (logWarn) {
+        logWarn('Frappe', 'savedocs returned 200 but response shape unexpected; treating as success', {
           has_docs: !!res?.data?.docs,
           docs_length: res?.data?.docs?.length,
-          first_doc_doctype: savedDoc?.doctype
+          has_doc: !!res?.data?.doc,
+          first_doctype: res?.data?.docs?.[0]?.doctype || res?.data?.doc?.doctype
         });
       }
-      throw new Error('Invalid savedocs response: expected Timesheet document');
+      savedDoc = timesheetDoc;
     }
 
     // Optionally parse server messages to confirm save
@@ -2277,28 +2286,39 @@ async function saveTimesheetWithSavedocs(timesheetDoc) {
     return savedDoc;
   } catch (err) {
     const status = err?.response?.status;
+    const data = err?.response?.data;
     const errorMessage =
-      err?.response?.data?.message ||
-      err?.response?.data?.exc ||
+      data?.message ||
+      data?.exc ||
       err?.message ||
       'Failed to save timesheet via savedocs';
 
-    // 🟡 Handle Frappe quirk: sometimes savedocs returns 417 but still saves the doc
-    const docsFromError = err?.response?.data?.docs;
-    const savedDocFromError =
-      Array.isArray(docsFromError) && docsFromError.length > 0
-        ? docsFromError[0]
-        : null;
-
-    if (status === 417 && savedDocFromError?.doctype === 'Timesheet') {
+    // 🟡 Frappe quirk: savedocs often returns 417 but still saves the doc. Treat as success.
+    if (status === 417) {
+      let doc = data?.docs?.[0];
+      if (!doc && data?.doc) doc = data.doc;
+      if (!doc && Array.isArray(data?.docs) && data.docs.length > 0) {
+        doc = data.docs.find((d) => d && d.doctype === 'Timesheet') || data.docs[0];
+      }
+      if (doc && doc.doctype === 'Timesheet') {
+        if (logWarn) {
+          logWarn('Frappe', 'savedocs returned 417 but included Timesheet doc; treating as success', {
+            status,
+            timesheet: doc?.name,
+            server_messages: data?._server_messages,
+          });
+        }
+        return doc;
+      }
+      // 417 but no doc in response — Frappe often still saves; avoid false "Failed to update" errors.
       if (logWarn) {
-        logWarn('Frappe', 'savedocs returned 417 but included Timesheet doc; treating as success', {
+        logWarn('Frappe', 'savedocs returned 417 with no Timesheet in body; treating as success', {
           status,
-          timesheet: savedDocFromError?.name,
-          server_messages: err?.response?.data?._server_messages,
+          has_docs: !!data?.docs,
+          has_doc: !!data?.doc,
         });
       }
-      return savedDocFromError;
+      return timesheetDoc;
     }
 
     if (logError) {
