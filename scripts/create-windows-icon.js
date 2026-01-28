@@ -5,8 +5,8 @@ const fs = require('fs');
 // Note: This script creates a PNG file. For a true .ico file, you'll need additional tools.
 // However, electron-builder can use PNG files for Windows icons if they're the right size.
 
-const iconPath = path.join(__dirname, '..', 'SupagigsIcon.ico');
-const outputPath = path.join(__dirname, '..', 'SupagigsIcon.ico');
+const iconPath = path.join(__dirname, '..', 'assets', 'SupagigsIcon.ico');
+const outputPath = path.join(__dirname, '..', 'assets', 'SupagigsIcon.ico');
 
 async function createWindowsIcon() {
   try {

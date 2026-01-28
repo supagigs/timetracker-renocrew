@@ -1004,9 +1004,9 @@ function createWindow() {
   try{
   if (process.platform === 'darwin') {
     // macOS prefers .icns, but .png also works, .ico as last resort
-    const icnsPath = path.join(__dirname, 'SupagigsIcon.icns');
-    const pngPath = path.join(__dirname, 'android-chrome-512x512.png');
-    const icoPath = path.join(__dirname, 'favicon.ico');
+    const icnsPath = path.join(__dirname, 'assets', 'SupagigsIcon.icns');
+    const pngPath = path.join(__dirname, 'assets', 'android-chrome-512x512.png');
+    const icoPath = path.join(__dirname, 'assets', 'favicon.ico');
     if (fs.existsSync(icnsPath)) {
       iconPath = icnsPath;
     } else if (fs.existsSync(pngPath)) {
@@ -1016,7 +1016,7 @@ function createWindow() {
     }
   } else {
     // Windows and Linux use .ico
-    const icoPath = path.join(__dirname, 'favicon.ico');
+    const icoPath = path.join(__dirname, 'assets', 'favicon.ico');
     if (fs.existsSync(icoPath)) {
       iconPath = icoPath;
     }
@@ -2348,7 +2348,7 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
     logInfo('Toast', `  Toast position: (${x}, ${y})`);
     logInfo('Toast', `  Toast size: ${TOAST_WIDTH}x${TOAST_HEIGHT}`);
 
-    newToastWin.loadFile(path.join(__dirname, 'toast.html'));
+    newToastWin.loadFile(path.join(__dirname, 'assets', 'toast.html'));
 
     newToastWin.once('ready-to-show', () => {
       // Check if window still exists (might have been closed)
@@ -2453,7 +2453,7 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
 
     // Handle errors during load
     newToastWin.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      logError('Toast', `Failed to load toast.html for displayKey="${displayKey}": ${errorCode} - ${errorDescription}`);
+      logError('Toast', `Failed to load assets/toast.html for displayKey="${displayKey}": ${errorCode} - ${errorDescription}`);
     });
 
     // Auto-close after 9 seconds

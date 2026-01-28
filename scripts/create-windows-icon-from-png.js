@@ -6,7 +6,7 @@ const fs = require('fs');
 // Note: sharp doesn't directly support ICO, but electron-builder can use PNG
 // However, for best compatibility, we'll create a 256x256 PNG that electron-builder can use
 
-const pngPath = path.join(__dirname, '..', 'android-chrome-512x512.png');
+const pngPath = path.join(__dirname, '..', 'assets', 'android-chrome-512x512.png');
 const outputIcoPath = path.join(__dirname, '..', 'icon.ico');
 const outputPng256Path = path.join(__dirname, '..', 'icon-256.png');
 
