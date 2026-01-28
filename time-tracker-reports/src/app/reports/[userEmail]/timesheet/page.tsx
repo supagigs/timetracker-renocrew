@@ -497,7 +497,7 @@ export default async function TimesheetPage({
                         <LocalTime isoString={row.startTime} formatString="p" />
                       </td>
                       <td className="px-4 py-3 text-foreground">
-                        <LocalTime isoString={row.endTime} formatString="p" />
+                        <LocalTime isoString={row.endTime} formatString="PPP p" />
                       </td>
                     </tr>
                   ))}
