@@ -220,6 +220,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     }
+
+    // If we have an active session, check whether the system just resumed/unlocked
+    // (e.g. laptop lid was closed then opened). On Windows, resume may not fire
+    // for lid; unlock-screen does. If we missed the IPC, this check catches it on load.
+    if (sessionStartTime && isActive && window.electronAPI?.getLastSystemResume) {
+      const RESUME_CHECK_DELAY_MS = 800;
+      const RESUME_WINDOW_MS = 60000;
+      setTimeout(() => {
+        if (lockSuspendClockOutTriggered || !sessionStartTime || !isActive) return;
+        window.electronAPI.getLastSystemResume().then((ts) => {
+          if (ts == null || typeof ts !== 'number') return;
+          if (Date.now() - ts > RESUME_WINDOW_MS) return;
+          if (lockSuspendClockOutTriggered || !sessionStartTime || !isActive) return;
+          lockSuspendClockOutTriggered = true;
+          console.log('Clock out on load: system had resumed/unlocked recently (lid opened)');
+          clockOut({ auto: true, reason: 'resume_after_suspend' }).catch((err) => {
+            console.error('Resume clock out (on load) failed:', err);
+          });
+        }).catch(() => {});
+      }, RESUME_CHECK_DELAY_MS);
+    }
   }
 
   function initializeIdleTracker() {
@@ -762,7 +783,9 @@ document.addEventListener('DOMContentLoaded', () => {
         totalIdleTime = 0;
 
         // Session ended silently
-        window.location.href = 'home.html';
+        // After any clock-out (manual or automatic), always return the user
+        // to the projects screen so they can explicitly choose what to do next.
+        window.location.href = 'projects.html';
       } catch (error) {
         console.error('Error during clock out:', error);
         alert('Error ending session. Please try again.');
@@ -2100,6 +2123,19 @@ document.addEventListener('DOMContentLoaded', () => {
       console.log(`Clock out on ${reason} (lid closed / system suspend)`);
       clockOut({ auto: true, reason }).catch((err) => {
         console.error('Lock/suspend clock out failed:', err);
+      });
+    });
+  }
+
+  // When system resumes (e.g. laptop lid opened), clock out if we still have an active session.
+  // This handles the case where lock/suspend IPC was never processed because the renderer was suspended.
+  if (window.electronAPI && window.electronAPI.onSystemResumed) {
+    window.electronAPI.onSystemResumed(() => {
+      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) return;
+      lockSuspendClockOutTriggered = true;
+      console.log('Clock out on system resume (lid opened after suspend)');
+      clockOut({ auto: true, reason: 'resume_after_suspend' }).catch((err) => {
+        console.error('Resume clock out failed:', err);
       });
     });
   }

@@ -1,4 +1,17 @@
 require('dotenv').config();
+const {autoUpdater} = require('electron-updater');
+
+/*autoUpdater.on('update-available', (info) => {
+  logInfo('AutoUpdater', 'Update available:', info);
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  logInfo('AutoUpdater', 'Update downloaded:', info);
+});
+*/
+
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
 
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
@@ -1117,6 +1130,36 @@ function createWindow() {
       });
     } catch (e) {
       logWarn('PowerMonitor', 'Unable to register idle listeners', e);
+    }
+  }
+
+  // When system resumes or screen unlocks (e.g. laptop lid opened), tell renderer to clock out
+  // if the lock/suspend event was never processed. On Windows, lid open often fires
+  // unlock-screen rather than resume, so we handle both.
+  const broadcastSystemResumed = () => {
+    try {
+      global.__lastSystemResumeAt = Date.now();
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
+          win.webContents.send('system-resumed', {});
+        }
+      });
+      logInfo('PowerMonitor', 'Broadcast system-resumed');
+    } catch (e) {
+      logWarn('PowerMonitor', `Failed to broadcast system-resumed: ${e?.message || e}`);
+    }
+  };
+  try {
+    powerMonitor.on('resume', () => broadcastSystemResumed());
+  } catch (e) {
+    logWarn('PowerMonitor', 'Unable to register resume broadcast', e);
+  }
+  // Windows: lid open often triggers unlock-screen, not resume
+  if (powerMonitor.listenerCount('unlock-screen') === 0) {
+    try {
+      powerMonitor.on('unlock-screen', () => broadcastSystemResumed());
+    } catch (e) {
+      logWarn('PowerMonitor', 'Unable to register unlock-screen broadcast', e);
     }
   }
 
@@ -3791,6 +3834,10 @@ ipcMain.handle('auth:me', async () => {
   }
 });
 
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
 ipcMain.handle('frappe:get-user-projects', async () => {
   try {
     const projects = await frappeGetUserProjects();
@@ -4013,6 +4060,10 @@ ipcMain.handle('get-system-idle-state', (event, thresholdSeconds) => {
     logError('IPC', 'Error getting idle state', e);
     return 'unknown';
   }
+});
+
+ipcMain.handle('get-last-system-resume', () => {
+  return global.__lastSystemResumeAt ?? null;
 });
 
 ipcMain.on('update-idle-state', (_event, isIdle) => {
@@ -5267,6 +5318,7 @@ ipcMain.handle('open-external-url', async (event, url) => {
 
 // ============ APP LIFECYCLE ============
 app.whenReady().then(() => {
+  logInfo('App', 'APP VERSION:', app.getVersion());
   // Enable auto-launch on system startup
   app.setLoginItemSettings({
     openAtLogin: true
@@ -5286,7 +5338,34 @@ app.whenReady().then(() => {
   logInfo('Session', 'Cookie persistence enabled for Frappe sessions');
   
   createWindow();
+
+   // 🔁 Auto-update: requires GitHub release to include latest.yml (use electron-builder --publish=always
+   //    so it uploads the .exe and latest.yml; manual uploads must include latest.yml with correct format).
+   autoUpdater.on('error', (err) => {
+     logError('AutoUpdater', 'Update check failed: ' + (err?.message || err), err);
+   });
+   autoUpdater.on('update-available', (info) => {
+     logInfo('AutoUpdater', 'Update available:', info?.version || info);
+   });
+   autoUpdater.on('update-not-available', () => {
+     logInfo('AutoUpdater', 'No update available');
+   });
+   autoUpdater.checkForUpdates();
 });
+// 📦 When update is downloaded
+autoUpdater.on("update-downloaded", () => {
+  dialog.showMessageBox({
+    type: "info",
+    buttons: ["Restart now", "Later"],
+    title: "Update Ready",
+    message: "A new version is ready. Restart to install."
+  }).then(result => {
+    if (result.response === 0) {
+      autoUpdater.quitAndInstall();
+    }
+  });
+});
+
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {

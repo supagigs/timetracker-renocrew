@@ -13,7 +13,8 @@
         content="default-src 'self';
                  connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
                  script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-                 style-src 'self' 'unsafe-inline';
+                 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+                 font-src 'self' https://fonts.gstatic.com;
                  img-src 'self' data: blob:;
                  media-src 'self' data: blob:;">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -38,8 +39,8 @@
             <img src="../../assets/Overview1.png" class="auth-card__image auth-card__image-1" />
           </div>
           
-          <h1 class="auth-card__title">Track Your Time</h1>
-          
+          <h1 class="auth-card__title">Tracker</h1>
+          <p id="appVersion" class="auth-card__description" style="margin-top: 4px; font-size: 12px; color: #8BA5BC;"></p>
           <p class="auth-card__description">
             Boost productivity with precise time tracking and clear work insights.
           </p>

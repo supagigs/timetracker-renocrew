@@ -36,6 +36,18 @@ async function initializeLoginPage() {
   if (window.electronAPI?.setUserLoggedIn) {
     window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state:', err));
   }
+
+  // Show app version from package.json (via main process)
+  const versionEl = document.getElementById('appVersion');
+  if (versionEl && window.electronAPI?.getAppVersion) {
+    try {
+      const version = await window.electronAPI.getAppVersion();
+      versionEl.textContent = version ? `Version ${version}` : '';
+    } catch (err) {
+      console.warn('Could not load app version:', err);
+      versionEl.textContent = '';
+    }
+  }
   
   // Clear any stored email to ensure fresh login
   StorageService.removeItem('userEmail');

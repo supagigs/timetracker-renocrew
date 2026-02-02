@@ -81,6 +81,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('lock-or-suspend-clock-out', handler);
   },
 
+  onSystemResumed: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('system-resumed', handler);
+    return () => ipcRenderer.removeListener('system-resumed', handler);
+  },
+
+  getLastSystemResume: () =>
+    ipcRenderer.invoke('get-last-system-resume'),
+
   saveActiveSession: () =>
     ipcRenderer.invoke('save-active-session'),
 
@@ -177,7 +186,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setUserLoggedIn: (loggedIn) =>
     ipcRenderer.invoke('set-user-logged-in', loggedIn),
   requestScreenPermission: () =>
-  ipcRenderer.invoke('request-screen-permission'),
+    ipcRenderer.invoke('request-screen-permission'),
+
+  getAppVersion: () =>
+    ipcRenderer.invoke('get-app-version'),
 
 });
 

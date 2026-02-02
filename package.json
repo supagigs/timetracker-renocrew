@@ -1,17 +1,29 @@
 {
   "name": "time-tracker-new",
-  "version": "1.0.3",
+  "version": "1.0.2",
   "description": "Time tracking application to enable users to record work hours, monitor productivity, and analyze performance with accuracy.",
   "main": "main.js",
-  "productName": "Time Tracker",
+  "productName": "Time-Tracker",
   "scripts": {
-    "start": "electron .",
+    "start": "electron .",  
+    "build": "electron-builder --publish=never",
+    "release": "electron-builder --publish=always",
     "dev": "electron . --dev",
-    "build": "electron-builder",
+    "build:publish": "electron-builder --publish=always",
     "build:skip-rebuild": "electron-builder --config.npmRebuild=false",
-    "dist": "electron-builder --publish=never",
+    "dist": "electron-builder --publish=always",
     "pack": "electron-builder --dir",
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/supagigs/Supatimetracker.git"
+  },
+  "publish": {
+    "provider": "github",
+    "releaseType": "release",
+    "owner": "supagigs",
+    "repo": "Supatimetracker"
   },
   "keywords": [
     "time-tracker",
@@ -33,6 +45,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
+    "electron-updater": "^6.7.3",
     "lucide-react": "^0.552.0",
     "react-chartjs-2": "^5.3.1",
     "screenshot-desktop": "^1.15.2",
@@ -47,7 +60,7 @@
   "devDependencies": {
     "cross-env": "^10.1.0",
     "electron": "^38.3.0",
-    "electron-builder": "^24.6.4",
+    "electron-builder": "^24.13.3",
     "to-ico": "^1.0.1"
   },
   "overrides": {
@@ -59,7 +72,7 @@
   },
   "build": {
     "appId": "com.supagigs.timetracker",
-    "productName": "Time Tracker",
+    "productName": "Time-Tracker",
     "npmRebuild": true,
     "nodeGypRebuild": false,
     "directories": {
@@ -115,7 +128,7 @@
       }
     },
     "dmg": {
-      "title": "${productName} ${version}",
+      "title": "${productName}-${version}",
       "icon": "assets/android-chrome-512x512.png",
       "background": null,
       "contents": [
@@ -138,6 +151,7 @@
       "format": "UDZO"
     },
     "win": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "target": [
         {
           "target": "nsis",
