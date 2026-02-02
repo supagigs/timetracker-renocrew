@@ -1,6 +1,11 @@
 require('dotenv').config();
 const {autoUpdater} = require('electron-updater');
-const log = require('electron-log');
+
+const log1 = require('electron-log');
+
+autoUpdater.logger = log1;
+autoUpdater.logger.transports.file.level = 'info';
+
 /*autoUpdater.on('update-available', (info) => {
   logInfo('AutoUpdater', 'Update available:', info);
 });
@@ -12,8 +17,6 @@ autoUpdater.on('update-downloaded', (info) => {
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
-autoUpdater.logger = log;
-autoUpdater.logger.transports.file.level = 'info';
 
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
