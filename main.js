@@ -1,6 +1,6 @@
 require('dotenv').config();
 const {autoUpdater} = require('electron-updater');
-
+const log = require('electron-log');
 /*autoUpdater.on('update-available', (info) => {
   logInfo('AutoUpdater', 'Update available:', info);
 });
@@ -12,6 +12,8 @@ autoUpdater.on('update-downloaded', (info) => {
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.logger = log;
+autoUpdater.logger.transports.file.level = 'info';
 
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
@@ -5338,35 +5340,31 @@ app.whenReady().then(() => {
   logInfo('Session', 'Cookie persistence enabled for Frappe sessions');
   
   createWindow();
+  // Register listeners FIRST
+  autoUpdater.on('error', (err) => {
+    logError('AutoUpdater', 'Update check failed: ' + (err?.message || err), err);
+  });
 
-   // 🔁 Auto-update: requires GitHub release to include latest.yml (use electron-builder --publish=always
-   //    so it uploads the .exe and latest.yml; manual uploads must include latest.yml with correct format).
-   autoUpdater.on('error', (err) => {
-     logError('AutoUpdater', 'Update check failed: ' + (err?.message || err), err);
-   });
-   autoUpdater.on('update-available', (info) => {
-     logInfo('AutoUpdater', 'Update available:', info?.version || info);
-   });
-   autoUpdater.on('update-not-available', () => {
-     logInfo('AutoUpdater', 'No update available');
-   });
-   autoUpdater.checkForUpdates();
-});
-// 📦 When update is downloaded
-autoUpdater.on("update-downloaded", () => {
-  dialog.showMessageBox({
-    type: "info",
-    buttons: ["Restart now", "Later"],
-    title: "Update Ready",
-    message: "A new version is ready. Restart to install."
-  }).then(result => {
-    if (result.response === 0) {
-      autoUpdater.quitAndInstall();
-    }
+  autoUpdater.on('update-available', (info) => {
+    logInfo('AutoUpdater', 'Update available:', info?.version || info);
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    logInfo('AutoUpdater', 'No update available');
+  });
+  // THEN trigger check
+  if (app.isPackaged) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates();
+    }, 5000);
+  } else {
+    logInfo('AutoUpdater', 'Skipping update check (dev mode)');
+  }
+  // 📦 When update is downloaded
+  autoUpdater.on('update-downloaded', () => {
+    logInfo('AutoUpdater', 'Update downloaded; will install on quit');
   });
 });
-
-
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
@@ -5396,7 +5394,17 @@ async function flushScreenshotBatchOnShutdown() {
   await flushScreenshotBatch();
 }
 
+let isUpdateQuit = false;
+
+autoUpdater.on('before-quit-for-update', () => {
+  isUpdateQuit = true;
+});
 app.on('before-quit', (event) => {
+  if (isUpdateQuit) {
+    logInfo('Shutdown', 'Updater quit detected, skipping cleanup');
+    return; // allow quit immediately
+  }
+
   // If we're already flushing, prevent quit until flush completes
   if (isFlushingOnShutdown) {
     event.preventDefault();

@@ -19,12 +19,7 @@
     "type": "git",
     "url": "https://github.com/supagigs/Supatimetracker.git"
   },
-  "publish": {
-    "provider": "github",
-    "releaseType": "release",
-    "owner": "supagigs",
-    "repo": "Supatimetracker"
-  },
+  
   "keywords": [
     "time-tracker",
     "productivity",
@@ -78,6 +73,12 @@
     "directories": {
       "output": "dist",
       "buildResources": "build"
+    },
+    "publish": {
+    "provider": "github",
+    "releaseType": "release",
+    "owner": "supagigs",
+    "repo": "Supatimetracker"
     },
     "files": [
       "main.js",
