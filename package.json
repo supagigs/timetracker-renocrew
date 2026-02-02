@@ -1,6 +1,6 @@
 {
   "name": "time-tracker-new",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Time tracking application to enable users to record work hours, monitor productivity, and analyze performance with accuracy.",
   "main": "main.js",
   "productName": "Time-Tracker",
@@ -161,11 +161,7 @@
           ]
         }
       ],
-      "icon": "assets/android-chrome-512x512.png",
-      "sign": null,
-      "signingHashAlgorithms": null,
-      "certificateFile": null,
-      "certificatePassword": null
+      "icon": "assets/android-chrome-512x512.png"
     },
     "nsis": {
       "oneClick": false,
