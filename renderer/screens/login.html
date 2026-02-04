@@ -24,7 +24,7 @@
   <script src="../scripts/login.js" defer></script>
 </head>
 <body class="auth-body">
-  <header class="common-page-header"></header>
+  <header class="common-page-header" "></header>
   <div class="auth-background">
     <div class="auth-design-circle auth-design-circle-1"></div>
     <div class="auth-design-circle auth-design-circle-2"></div>
@@ -37,18 +37,20 @@
           <div class="auth-card__visual">
             <img src="../../assets/Overview2.png" class="auth-card__image auth-card__image-2" />
             <img src="../../assets/Overview1.png" class="auth-card__image auth-card__image-1" />
+            <img src="../../assets/Ellipse 32.svg" class="auth-card__shadow auth-card__shadow-2"/>
+            <img src="../../assets/Ellipse 33.svg" class="auth-card__shadow auth-card__shadow-1"/>
           </div>
           
-          <h1 class="auth-card__title">Track Your Time</h1>
-          <p id="appVersion" class="auth-card__description" style="margin-top: 4px; font-size: 12px; color: #8BA5BC;"></p>
-          <p class="auth-card__description">
+          <h1 class="auth-card__title" style="padding-left: 50px; font-size: 24px;">Track Your Time</h1>
+          <p id="appVersion" class="auth-card__description" style="margin-top: 2px; font-size: 12px; color: #8BA5BC;"></p>
+          <p class="auth-card__description" style=" font-size: 15px; color:black;">
             Boost productivity with precise time tracking and clear work insights.
           </p>
         </div>
 
         <div class="auth-form">
           <div class="auth-input-group">
-            <label for="email" class="auth-input-label">Email</label>
+            <label for="email" class="auth-input-label" style="font-size: 14px;">Email</label>
             <div class="auth-input-wrapper">
               <div class="auth-input-icon">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
@@ -58,16 +60,17 @@
               <input
                 type="email"
                 id="email"
-                placeholder="yourname@supagigs.com"
+                placeholder="yourname@email.com"
                 required
                 class="auth-input"
                 autocomplete="username"
+                style="overflow: hidden; padding-left: 40px;outline: none; border-color: #0051E9; box-shadow: 0 0 0 2px rgba(0, 81, 233, 0.1);"
               >
             </div>
           </div>
 
           <div class="auth-input-group">
-            <label for="password" class="auth-input-label">Password</label>
+            <label for="password" class="auth-input-label" style="font-size: 14px;">Password</label>
             <div class="auth-input-wrapper">
               <div class="auth-input-icon">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
@@ -77,7 +80,7 @@
               <input
                 type="password"
                 id="password"
-                placeholder="enter your password"
+                placeholder="Enter Your Password"
                 required
                 class="auth-input"
                 autocomplete="current-password"
