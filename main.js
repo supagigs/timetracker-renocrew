@@ -1,7 +1,10 @@
 require('dotenv').config();
+const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences, session } = require('electron');
 const {autoUpdater} = require('electron-updater');
 
 const log1 = require('electron-log');
+
+if (!app.requestSingleInstanceLock()) app.quit();
 
 autoUpdater.logger = log1;
 autoUpdater.logger.transports.file.level = 'info';
@@ -15,8 +18,21 @@ autoUpdater.on('update-downloaded', (info) => {
 });
 */
 
+// ================= SAFE AUTO UPDATER SETUP =================
+let updateDownloadedButDeferred = false;
+let updateInfoCache = null;
+let updateDialogVisible = false;
+
 autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.autoInstallOnAppQuit = false;
+
+// HARD FAILSAFE: never auto-install silently
+autoUpdater.on('error', (err) => {
+  logError('Updater', 'AutoUpdater error:', err?.message || err);
+  updateDownloadedButDeferred = false;
+  updateInfoCache = null;
+});
+
 
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
@@ -217,7 +233,6 @@ async function backgroundCaptureScreenshots() {
   }
 }
 
-const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences, session } = require('electron');
 const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, getUserCompany: frappeGetUserCompany, getUserRoleProfile: frappeGetUserRoleProfile, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
 const { 
   getUserProjects: frappeGetUserProjects, 
@@ -5321,6 +5336,65 @@ ipcMain.handle('open-external-url', async (event, url) => {
   }
 });
 
+
+ipcMain.on('timer-stopped', () => {
+  logInfo('Timer', 'Timer stopped');
+
+  isTimerActive = false;
+  timeTrackingState.active = false;
+
+  if (updateDownloadedButDeferred && updateInfoCache) {
+    updateDownloadedButDeferred = false;
+    logInfo('Updater', 'Timer stopped → showing update dialog');
+    showUpdateDialogSafely();
+  }
+});
+
+function safeQuitAndInstall() {
+  try {
+    logInfo('Updater', 'Preparing safe shutdown for update');
+
+    // 🔒 STOP background activity FIRST
+    if (global.__idlePollInterval) {
+      clearInterval(global.__idlePollInterval);
+      global.__idlePollInterval = null;
+    }
+
+    if (backgroundScreenshotInterval) {
+      clearInterval(backgroundScreenshotInterval);
+      backgroundScreenshotInterval = null;
+    }
+
+    if (batchFlushInterval) {
+      clearTimeout(batchFlushInterval);
+      batchFlushInterval = null;
+    }
+
+    // 🔕 Remove power & app listeners
+    powerMonitor.removeAllListeners();
+    app.removeAllListeners('before-quit');
+    app.removeAllListeners('window-all-closed');
+
+    // 🧹 Close windows cleanly
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.removeAllListeners();
+        win.close();
+      }
+    });
+
+    // 🧠 FINAL SAFETY: delay install slightly
+    setTimeout(() => {
+      logInfo('Updater', 'Executing quitAndInstall');
+      autoUpdater.quitAndInstall(false, true);
+    }, 300);
+
+  } catch (err) {
+    logError('Updater', 'Safe install failed:', err);
+  }
+}
+
+
 // ============ APP LIFECYCLE ============
 app.whenReady().then(() => {
   logInfo('App', 'APP VERSION:', app.getVersion());
@@ -5357,17 +5431,64 @@ app.whenReady().then(() => {
   });
   // THEN trigger check
   if (app.isPackaged) {
-    setTimeout(() => {
-      autoUpdater.checkForUpdates();
-    }, 5000);
+      try {
+        logInfo('Updater', 'Checking for updates...');
+        autoUpdater.checkForUpdates();
+      } catch (e) {
+        logWarn('Updater', 'Update check failed:', e.message);
+      }
+
   } else {
     logInfo('AutoUpdater', 'Skipping update check (dev mode)');
   }
   // 📦 When update is downloaded
-  autoUpdater.on('update-downloaded', () => {
-    logInfo('AutoUpdater', 'Update downloaded; will install on quit');
+  autoUpdater.on('update-downloaded', (info) => {
+    logInfo('Updater', `Update downloaded: v${info.version}`);
+    updateInfoCache = info;
+  
+    if (isTimerActive) {
+      updateDownloadedButDeferred = true;
+      logInfo('Updater', 'Timer running → deferring update dialog');
+      return;
+    }
+  
+    showUpdateDialogSafely();
   });
+  
 });
+
+function showUpdateDialogSafely() {
+  if (
+    updateDialogVisible ||
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    !updateInfoCache
+  ) {
+    return;
+  }
+
+  updateDialogVisible = true;
+
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Update Ready',
+    message: 'A new version is ready to install.',
+    detail: 'Restart the app to apply the update.',
+    buttons: ['Restart now', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  }).then((result) => {
+    updateDialogVisible = false;
+
+    if (result.response === 0) {
+      safeQuitAndInstall();
+    } else {
+      logInfo('Updater', 'User deferred update');
+    }
+  });
+}
+
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
@@ -5403,10 +5524,11 @@ autoUpdater.on('before-quit-for-update', () => {
   isUpdateQuit = true;
 });
 app.on('before-quit', (event) => {
-  if (isUpdateQuit) {
-    logInfo('Shutdown', 'Updater quit detected, skipping cleanup');
-    return; // allow quit immediately
-  }
+    if (isTimerActive && updateInfoCache) {
+      logWarn('Updater', 'Blocked quit — timer still running');
+      e.preventDefault();
+    }
+  
 
   // If we're already flushing, prevent quit until flush completes
   if (isFlushingOnShutdown) {

@@ -74,7 +74,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('is-background-screenshots-active'),
   onForceStopTimer: (callback) =>
     ipcRenderer.on('force-stop-timer', callback),
-
+  notifyTimerStopped: () =>
+    ipcRenderer.send('timer-stopped'),
   onLockOrSuspendClockOut: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('lock-or-suspend-clock-out', handler);
