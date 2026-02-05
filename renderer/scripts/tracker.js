@@ -18,7 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let idleStartTime = null;
   let userEmail = null;
   let removeSystemIdleListener = null;
-  /** Guard: set when auto clock-out for 2h idle is triggered so we don't fire twice */
+  /** Guard: set when auto clock-out for long idle is triggered so we don't fire twice */
   let idle2hClockOutTriggered = false;
   /** Guard: set when lock-screen/suspend clock-out is triggered so we don't fire twice */
   let lockSuspendClockOutTriggered = false;
@@ -197,10 +197,9 @@ document.addEventListener('DOMContentLoaded', () => {
     loadTodayStats();
     updateActivityChart();
     
-    // Load project distribution chart for freelancers
+    // Load project times for freelancers
     const userCategory = StorageService.getItem('userCategory');
     if (userCategory === 'Freelancer') {
-      loadProjectDistributionChart();
       loadProjectName();
       loadProjectTimes();
       // Update project times every 5 seconds
@@ -722,6 +721,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Notify main process that timer is not active
     updateTimerStateInMainProcess(false);
+
+    // Inform main process that the timer has fully stopped so deferred updates can be shown safely
+    if (window.electronAPI && typeof window.electronAPI.notifyTimerStopped === 'function') {
+      try {
+        window.electronAPI.notifyTimerStopped();
+      } catch (err) {
+        console.error('Failed to notify main process that timer stopped:', err);
+      }
+    }
     
     const shouldProceed = true; // Always proceed without confirmation
 
@@ -795,7 +803,14 @@ document.addEventListener('DOMContentLoaded', () => {
         window.location.href = 'projects.html';
       } catch (error) {
         console.error('Error during clock out:', error);
-        alert('Error ending session. Please try again.');
+        // For auto clock-out (idle/break), don't block the user with an alert — session is already ended locally; still navigate
+        const isAutoIdleOrBreak = auto && (reason === 'idle_2h' || reason === 'break_long');
+        if (!isAutoIdleOrBreak) {
+          alert('Error ending session. Please try again.');
+        } else {
+          // Clear UI state and go to projects so user isn't stuck; save error is already logged
+          window.location.href = 'projects.html';
+        }
       }
     } else {
       // User cancelled - restore timer and session state
@@ -1177,16 +1192,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Calculate current break time if on break
     let currentBreakTime = totalBreakDuration;
+    let currentBreakDuration = 0;
     if (isOnBreak && breakStartTime) {
       // Ensure breakStartTime is a valid Date object
       const breakStart = breakStartTime instanceof Date ? breakStartTime : new Date(breakStartTime);
       if (!isNaN(breakStart.getTime())) {
-        const currentBreakDuration = Math.floor((now - breakStart) / 1000);
+        currentBreakDuration = Math.floor((now - breakStart) / 1000);
         currentBreakTime = totalBreakDuration + currentBreakDuration;
       } else {
         console.error('Invalid breakStartTime:', breakStartTime);
         currentBreakTime = totalBreakDuration; // Fallback to accumulated break time only
       }
+    }
+
+    // 🔁 Auto clock-out while user is on break for too long (do not wait for user to return).
+    if (
+      isActive &&
+      isOnBreak &&
+      breakStartTime &&
+      !idle2hClockOutTriggered &&
+      currentBreakDuration >= IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS
+    ) {
+      idle2hClockOutTriggered = true;
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+      console.log(
+        `Auto clocking out: ${currentBreakDuration}s break (>= ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold) — ending session now`,
+      );
+      clockOut({ auto: true, reason: 'break_long' }).catch(err => {
+        console.error('Failed to auto clock out after long break:', err);
+      });
+      return;
     }
 
     // Calculate total session time (active + break + idle)
@@ -1247,12 +1285,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (Math.floor(Date.now() / 1000) % 5 === 0) {
       updateActivityChart();
       loadTodayStats();
-      // Update project chart and times if user is freelancer
+      // Update project times if user is freelancer
       const userCategory = StorageService.getItem('userCategory');
       if (userCategory === 'Freelancer') {
-        if (typeof loadProjectDistributionChart === 'function') {
-          loadProjectDistributionChart();
-        }
         updateProjectTimes();
       }
     }
@@ -1643,17 +1678,6 @@ document.addEventListener('DOMContentLoaded', () => {
       projectTimeList.appendChild(projectItem);
     });
   }
-
-  async function loadProjectDistributionChart() {
-     // ❌ Projects now come from Frappe, not Supabase
-  // Supabase project_id no longer exists in this flow
-
-  console.warn(
-    'Skipping loadProjectDistributionChart: Supabase projects not used'
-  );
-
-  return;
-}
 
   function startScreenshotCapture() {
     console.log('Starting background screenshot capture...');

@@ -74,6 +74,16 @@ export default function EmployeeSelector({
       
       // Ensure data is an array
       const employeesList = Array.isArray(data) ? data : [];
+
+      // Sort employees alphabetically by display name (fallback to email)
+      employeesList.sort((a: Employee, b: Employee) => {
+        const nameA = (a.display_name || a.email || '').toLowerCase();
+        const nameB = (b.display_name || b.email || '').toLowerCase();
+        if (nameA < nameB) return -1;
+        if (nameA > nameB) return 1;
+        return 0;
+      });
+
       setEmployees(employeesList);
       
       const currentFromParams = searchParams?.get('employee') ?? '';

@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let idleStartTime = null;
   let idle2hClockOutTriggered = false;
   let lockSuspendClockOutTriggered = false;
-  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours — auto clock out while still idle
+  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours — auto clock out while still idle or on break
 
   // Initialize idle tracker
   function initializeIdleTracker() {

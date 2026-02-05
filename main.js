@@ -2935,23 +2935,14 @@ async function addScreenshotToBatch(uploadData) {
         // If we have screenIndex, try to get app name for that specific display
         if (screenIndex && screenIndex > 0) {
           const displayIndex = screenIndex - 1; // screenIndex is 1-based, convert to 0-based display index
-          let appName = null;
 
-          if (screenIndex && screenIndex > 0) {
-            const displayIndex = screenIndex - 1;
-
-            appName =
-              await getAppNameForDisplay(displayIndex) ||
-              await getActiveAppName();
-          } else {
-            appName = await getActiveAppName();
-          }
-
-appName ||= 'Unknown';
-
+          capturedAppName =
+            (await getAppNameForDisplay(displayIndex)) ||
+            (await getActiveAppName()) ||
+            'Unknown';
         } else {
           // Fallback to regular getActiveAppName for single screen or unknown screen
-          capturedAppName = await getActiveAppName() || 'Unknown';
+          capturedAppName = (await getActiveAppName()) || 'Unknown';
         }
       } catch {
         capturedAppName = 'Unknown';
@@ -5462,7 +5453,8 @@ function showUpdateDialogSafely() {
     updateDialogVisible ||
     !mainWindow ||
     mainWindow.isDestroyed() ||
-    !updateInfoCache
+    !updateInfoCache ||
+    isTimerActive
   ) {
     return;
   }
