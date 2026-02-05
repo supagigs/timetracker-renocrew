@@ -1,6 +1,6 @@
 {
   "name": "time-tracker-new",
-  "version": "1.0.9",
+  "version": "1.0.6",
   "description": "Time tracking application to enable users to record work hours, monitor productivity, and analyze performance with accuracy.",
   "main": "main.js",
   "productName": "Time-Tracker",
@@ -77,7 +77,9 @@
       "provider": "github",
       "releaseType": "release",
       "owner": "supagigs",
-      "repo": "Supatimetracker"
+      "repo": "Supatimetracker",
+      "publishAutoUpdate": true
+
     },
     "files": [
       "main.js",

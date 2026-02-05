@@ -178,6 +178,72 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Start background screenshot capture for this session
+  function startScreenshotCapture() {
+    try {
+      console.log('Starting background screenshot capture (startProject)...');
+
+      const email = StorageService.getItem('userEmail');
+      if (!email) {
+        console.warn('startScreenshotCapture: userEmail not found in storage');
+        return;
+      }
+
+      const sessionId = currentSessionId || 'temp-session';
+
+      // Get numeric Supabase session ID separately - needed for time_session_id column
+      const supabaseSessionId = StorageService.getItem('supabaseSessionId');
+      let numericSupabaseSessionId = null;
+      if (supabaseSessionId) {
+        const parsed = parseInt(supabaseSessionId, 10);
+        if (!isNaN(parsed) && isFinite(parsed)) {
+          numericSupabaseSessionId = parsed;
+        }
+      }
+
+      // Frappe project/task IDs – for this screen we only have project
+      const frappeProjectId = selectedProjectId || StorageService.getItem('selectedProjectId') || null;
+      const frappeTaskId = null;
+
+      console.log('Screenshot capture (startProject) - sessionId:', sessionId);
+      console.log('Screenshot capture (startProject) - supabaseSessionId:', numericSupabaseSessionId);
+      console.log('Screenshot capture (startProject) - frappeProjectId:', frappeProjectId);
+
+      if (!window.electronAPI || !window.electronAPI.startBackgroundScreenshots) {
+        console.error('startScreenshotCapture: electronAPI.startBackgroundScreenshots not available');
+        return;
+      }
+
+      window.electronAPI
+        .startBackgroundScreenshots(email, sessionId, numericSupabaseSessionId, frappeProjectId, frappeTaskId)
+        .then(() => {
+          console.log('Background screenshot capture (startProject) started successfully');
+        })
+        .catch((error) => {
+          console.error('Failed to start background screenshot capture (startProject):', error);
+        });
+    } catch (err) {
+      console.error('startScreenshotCapture (startProject) failed:', err);
+    }
+  }
+
+  // Stop background screenshot capture for this session
+  function stopScreenshotCapture() {
+    if (!window.electronAPI || !window.electronAPI.stopBackgroundScreenshots) {
+      return;
+    }
+
+    console.log('Stopping background screenshot capture (startProject)...');
+    window.electronAPI
+      .stopBackgroundScreenshots()
+      .then(() => {
+        console.log('Background screenshot capture (startProject) stopped successfully');
+      })
+      .catch((error) => {
+        console.error('Failed to stop background screenshot capture (startProject):', error);
+      });
+  }
+
   // Start timer (Clock In) - optimized to start immediately
   async function startTimer() {
     if (isActive) return;
@@ -213,6 +279,9 @@ document.addEventListener('DOMContentLoaded', () => {
       timerInterval = setInterval(updateTimer, 1000);
     }
     updateTimer();
+
+    // Start background screenshot capture for this clock-in
+    startScreenshotCapture();
 
     // Now do database/API calls in the background (non-blocking)
     (async () => {
@@ -309,6 +378,14 @@ document.addEventListener('DOMContentLoaded', () => {
               StorageService.setItem('supabaseSessionId', numericSessionId.toString());
               currentSessionId = numericSessionId;
               console.log('Created Supabase session with ID:', numericSessionId);
+
+              // Update background screenshot capture with the numeric session ID
+              // This ensures all future screenshots have the correct time_session_id
+              if (window.electronAPI && window.electronAPI.updateBackgroundScreenshotSessionId) {
+                window.electronAPI
+                  .updateBackgroundScreenshotSessionId(numericSessionId)
+                  .catch(err => console.warn('Failed to update background screenshot session ID (startProject):', err));
+              }
             }
           }
         } catch (supabaseError) {
@@ -349,6 +426,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     clearInterval(timerInterval);
     timerInterval = null;
+
+    // Stop background screenshot capture when clocking out
+    stopScreenshotCapture();
 
     // Stop idle tracking
     if (idleTracker) {
@@ -573,6 +653,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (idleTracker) {
         idleTracker.stopTracking();
       }
+
+      // Stop background screenshot capture while on break
+      stopScreenshotCapture();
     } else if (isOnBreak) {
       if (breakStartTime) {
         const breakElapsed = Math.floor((new Date() - new Date(breakStartTime)) / 1000);
@@ -602,6 +685,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (idleTracker) {
         idleTracker.startTracking();
       }
+
+      // Resume background screenshot capture after break ends
+      startScreenshotCapture();
     }
   }
 

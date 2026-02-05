@@ -567,6 +567,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // Start background screenshot capture immediately (first screenshot at 0 seconds)
         startScreenshotCapture();
 
+        // Also take an immediate screenshot on clock-in so the user sees the toast right away
+        try {
+          await captureScreenshot();
+        } catch (screenshotError) {
+          console.error('Immediate clock-in screenshot failed:', screenshotError);
+        }
+
         idle2hClockOutTriggered = false;
         lockSuspendClockOutTriggered = false;
         // Start the timer interval to update the display every second
