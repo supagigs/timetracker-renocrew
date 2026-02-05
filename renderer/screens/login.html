@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Login - Time Tracker</title>
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
@@ -22,9 +22,29 @@
   <script src="../scripts/utils.js"></script>
   <script src="../scripts/sessionSync.js"></script>
   <script src="../scripts/login.js" defer></script>
+  <style>
+    html, body {
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+    }
+  </style>  
 </head>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const dpr = window.devicePixelRatio || 1;
+
+    if (dpr !== 1) {
+      document.body.style.transform = `scale(${1 / dpr})`;
+      document.body.style.transformOrigin = 'top left';
+      document.body.style.width = `${dpr * 100}%`;
+      document.body.style.height = `${dpr * 100}%`;
+    }
+  });
+</script>
 <body class="auth-body">
-  <header class="common-page-header" "></header>
+  <div class="window">
+    <header class="common-page-header"></header>
+  </div>
   <div class="auth-background">
     <div class="auth-design-circle auth-design-circle-1"></div>
     <div class="auth-design-circle auth-design-circle-2"></div>
@@ -33,7 +53,7 @@
   <div class="auth-wrapper">
     <div class="auth-container">
       <div class="auth-card">
-        <div class="auth-card__header">
+        <div class="auth-card__header" style="padding-top: 10px;">
           <div class="auth-card__visual">
             <img src="../../assets/Overview2.png" class="auth-card__image auth-card__image-2" />
             <img src="../../assets/Overview1.png" class="auth-card__image auth-card__image-1" />
@@ -41,7 +61,7 @@
             <img src="../../assets/Ellipse 33.svg" class="auth-card__shadow auth-card__shadow-1"/>
           </div>
           
-          <h1 class="auth-card__title" style="padding-left: 50px; font-size: 24px;">Track Your Time</h1>
+          <h1 class="auth-card__title" style="padding-left: 50px; font-size: 26px;">Track Your Time</h1>
           <p id="appVersion" class="auth-card__description" style="margin-top: 2px; font-size: 12px; color: #8BA5BC;"></p>
           <p class="auth-card__description" style=" font-size: 15px; color:black;">
             Boost productivity with precise time tracking and clear work insights.
@@ -53,18 +73,21 @@
             <label for="email" class="auth-input-label" style="font-size: 14px;">Email</label>
             <div class="auth-input-wrapper">
               <div class="auth-input-icon">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
-                  <path d="M2.5 6.66667L9.0755 11.0504C9.63533 11.4236 10.3647 11.4236 10.9245 11.0504L17.5 6.66667M4.16667 15.8333H15.8333C16.7538 15.8333 17.5 15.0872 17.5 14.1667V5.83333C17.5 4.91286 16.7538 4.16667 15.8333 4.16667H4.16667C3.24619 4.16667 2.5 4.91286 2.5 5.83333V14.1667C2.5 15.0872 3.24619 15.8333 4.16667 15.8333Z" stroke="#8BA5BC" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
+                  <img
+                    id="emailIcon"
+                    src="../../assets/mail_original.svg"
+                    alt="email icon"
+                    width="20" height="20" viewBox="0 0 20 20" fill="none"
+                  />
               </div>
               <input
                 type="email"
                 id="email"
                 placeholder="yourname@email.com"
                 required
-                class="auth-input"
+                class="auth-input auth-input-focus"
                 autocomplete="username"
-                style="overflow: hidden; padding-left: 40px;outline: none; border-color: #0051E9; box-shadow: 0 0 0 2px rgba(0, 81, 233, 0.1);"
+                style="overflow: hidden; padding-left: 40px;outline: none; box-shadow: 0 0 0 2px rgba(0, 81, 233, 0.1);"
               >
             </div>
           </div>
@@ -73,8 +96,12 @@
             <label for="password" class="auth-input-label" style="font-size: 14px;">Password</label>
             <div class="auth-input-wrapper">
               <div class="auth-input-icon">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
-                  <path d="M5.83333 9.16667V6.66667C5.83333 4.36548 7.69881 2.5 10 2.5C12.3012 2.5 14.1667 4.36548 14.1667 6.66667V9.16667M10 12.5V14.1667M6.66667 17.5H13.3333C14.2538 17.5 15 16.7538 15 15.8333V10.8333C15 9.91286 14.2538 9.16667 13.3333 9.16667H6.66667C5.74619 9.16667 5 9.91286 5 10.8333V15.8333C5 16.7538 5.74619 17.5 6.66667 17.5Z" stroke="#8BA5BC" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  <img
+                  id="passwordIcon"
+                  src="../../assets/lock_original.svg"
+                  alt="password icon"
+                  width="20" height="20" viewBox="0 0 20 20" fill="none"
+                />
                 </svg>
               </div>
               <input
@@ -82,7 +109,7 @@
                 id="password"
                 placeholder="Enter Your Password"
                 required
-                class="auth-input"
+                class="auth-input auth-input-focus"
                 autocomplete="current-password"
               >
             </div>

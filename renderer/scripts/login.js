@@ -19,9 +19,9 @@ function forceResetEmailField() {
     emailInput.style.cursor = 'text';
     emailInput.style.userSelect = 'text';
     emailInput.style.opacity = '1';
-    emailInput.style.backgroundColor = '';
-    emailInput.style.color = '';
-    emailInput.style.border = '';
+    // emailInput.style.backgroundColor = '';
+    // emailInput.style.color = '';
+    // emailInput.style.border = '';
     
     // Force focus
     emailInput.focus();
@@ -29,6 +29,61 @@ function forceResetEmailField() {
     console.log('Email field reset complete. Disabled:', emailInput.disabled, 'ReadOnly:', emailInput.readOnly);
   }
 }
+
+const emailInput = document.getElementById("email");
+const passwordInput = document.getElementById("password");
+const emailIcon = document.getElementById("emailIcon");
+const passwordIcon = document.getElementById("passwordIcon");
+const errorMessage = document.getElementById("errorMessage");
+
+function resetStates() {
+  emailInput.classList.remove("input-error", "input-success");
+  passwordInput.classList.remove("input-error", "input-success");
+
+  emailIcon.src = "../../assets/mail_original.svg";
+  passwordIcon.src = "../../assets/lock_original.svg";
+
+  errorMessage.style.display = "none";
+}
+
+function setErrorState({ email = false, password = false }, message) {
+  // Remove success state completely
+  emailInput.classList.remove("input-success");
+  passwordInput.classList.remove("input-success");
+
+  // Remove existing error state
+  emailInput.classList.remove("input-error");
+  passwordInput.classList.remove("input-error");
+
+  emailIcon.src = "../../assets/mail_original.svg";
+  passwordIcon.src = "../../assets/lock_original.svg";
+
+  if (email) {
+    emailInput.classList.add("input-error");
+    emailIcon.src = "../../assets/mail_incorrect.svg";
+  }
+
+  if (password) {
+    passwordInput.classList.add("input-error");
+    passwordIcon.src = "../../assets/lock_incorrect.svg";
+  }
+
+  errorMessage.textContent = message;
+  errorMessage.style.display = "block";
+}
+
+
+function setSuccessState() {
+  emailInput.classList.add("input-success");
+  passwordInput.classList.add("input-success");
+
+  emailInput.classList.add("input-success");
+  passwordInput.classList.add("input-success");
+
+  emailIcon.src = "../../assets/mail_success.svg";
+  passwordIcon.src = "../../assets/lock_success.svg";
+}
+
 
 // Initialize login page
 async function initializeLoginPage() {
@@ -226,7 +281,7 @@ window.addProject = function() {
   const projectName = newProjectInput.value.trim();
   
   if (!projectName) {
-    NotificationService.showError('Please enter a project name');
+    // NotificationService.showError('Please enter a project name');
     newProjectInput.focus();
     return;
   }
@@ -502,29 +557,80 @@ async function syncProjectsToDatabase(userEmail) {
   }
 }
 
+async function checkEmailExists(email) {
+  try {
+    const { data, error } = await window.supabase
+      .from('users')
+      .select('id')
+      .eq('email', email.toLowerCase())
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Email existence check error:', error);
+      return false;
+    }
+
+    return !!data;
+  } catch (err) {
+    console.error('Email existence check failed:', err);
+    return false;
+  }
+}
+
 async function handleLogin() {
   const emailInput = document.getElementById('email');
   const passwordInput = document.getElementById('password');
   const errorMessageEl = document.getElementById('errorMessage');
   const email = emailInput.value.trim();
   const password = passwordInput.value;
+  const normalizedEmail = email.toLowerCase().trim();
   
-  // Validate email
+  /* ---------------- EMAIL VALIDATION ---------------- */
+  
+  // Empty email
   if (!email) {
-    NotificationService.showError('Please enter an email address');
+    setErrorState(
+      { email: true, password: false },
+      'Please enter your email address'
+    );
     emailInput.focus();
     return;
   }
   
+  // Invalid email format (typo like gmial.con)
   if (!ValidationService.validateEmail(email)) {
-    NotificationService.showEmailValidationError();
+    setErrorState(
+      { email: true, password: false },
+      'Please enter a valid email address'
+    );
     emailInput.focus();
     return;
   }
-
+  
+  // Email existence check (DB)
+  const emailExists = await checkEmailExists(normalizedEmail);
+  
+  if (!emailExists) {
+    // If user typed a password as well → invalid credentials
+    if (password && password.length > 0) {
+      setErrorState(
+        { email: true, password: true },
+        'Invalid credentials'
+      );
+    } else {
+      setErrorState(
+        { email: true, password: false },
+        'Invalid email address'
+      );
+    }
+    emailInput.focus();
+    return;
+  }
+  
   // Validate password
   if (!password) {
-    NotificationService.showError('Please enter your password');
+    // NotificationService.showError('Please enter your password');
     passwordInput.focus();
     return;
   }
@@ -542,7 +648,7 @@ async function handleLogin() {
   loginBtn.innerHTML = '<span class="loading"></span> Logging in...';
 
   // Normalize email for all internal usage (database, storage, etc.)
-  const normalizedEmail = email.toLowerCase().trim();
+  // const normalizedEmail = email.toLowerCase().trim();
 
   try {
     // Check if auth API is available
@@ -557,24 +663,58 @@ async function handleLogin() {
     const result = await window.auth.login(email, password);
 
     if (!result.success) {
-      const errorMsg = result.error || 'Invalid credentials. Please check your email and password.';
-      console.error('Frappe login failed:', errorMsg);
-      
-      // Show error message
-      if (errorMessageEl) {
-        errorMessageEl.textContent = errorMsg;
-        errorMessageEl.style.display = 'block';
-      } else {
-        NotificationService.showError(errorMsg);
+      const errorText = (result.error || '').toLowerCase();
+    
+      // Email-related backend errors
+      if (
+        errorText.includes('password') ||
+        errorText.includes('credentials')
+      ) {
+        setErrorState(
+          { email: false, password: true },
+          'Incorrect password'
+        );
+        passwordInput.value = '';
+        passwordInput.focus();
+        return;
+      }     
+    
+      // Password-related backend errors
+      if (
+        errorText.includes('password')
+      ) {
+        setErrorState(
+          { email: false, password: true },
+          'Incorrect password'
+        );
+        passwordInput.value = '';
+        passwordInput.focus();
+        return;
       }
-      
+    
+      // Credentials mismatch (email exists but password wrong)
+      if (errorText.includes('credentials')) {
+        setErrorState(
+          { email: false, password: true },
+          'Incorrect password'
+        );
+        passwordInput.value = '';
+        passwordInput.focus();
+        return;
+      }
+    
+      // Absolute fallback
+      setErrorState(
+        { email: true, password: true },
+        'Invalid login credentials'
+      );
       passwordInput.value = '';
       passwordInput.focus();
       return;
     }
 
     console.log('Frappe login successful for:', email);
-    
+    setSuccessState();
     // Save email for auto-population on next login (password is never stored)
     // Store normalized email so all future logic uses a consistent key
     StorageService.setItem('savedEmail', normalizedEmail);
@@ -777,4 +917,23 @@ async function handleLogin() {
     loginBtn.disabled = false;
     loginBtn.textContent = originalText;
   }
+}
+
+function handleUserTyping(e) {
+  const target = e.target;
+
+  // Remove success/error ONLY from the field being edited
+  target.classList.remove("input-error", "input-success");
+
+  // Reset corresponding icon only
+  if (target === emailInput) {
+    emailIcon.src = "../../assets/mail_original.svg";
+  }
+
+  if (target === passwordInput) {
+    passwordIcon.src = "../../assets/lock_original.svg";
+  }
+
+  // Hide global error message when user starts correcting input
+  errorMessage.style.display = "none";
 }
