@@ -1066,18 +1066,21 @@ function createWindow() {
     width: PHONE_WIDTH,
     height: PHONE_HEIGHT,
     minWidth: PHONE_WIDTH,
-    maxWidth: PHONE_WIDTH,
     minHeight: PHONE_HEIGHT,
+    maxWidth: PHONE_WIDTH,
     maxHeight: PHONE_HEIGHT,
-    resizable: false,          // lock window size so it always stays phone-sized
-    show: false, // do not show up until ready
+    useContentSize: true,      // <--- ADD THIS: Ensures 360x640 is for the internal page
+    resizable: false,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false,
+      zoomFactor: 1.0,         // <--- ADD THIS: Forces 100% zoom regardless of user screen scaling
+      visualZoomLevelLimits: [1, 1] // <--- ADD THIS: Prevents manual zooming
     }
-  };
+};
   
   // Only set icon if file exists
   if (iconPath) {
