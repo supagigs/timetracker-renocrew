@@ -72,7 +72,6 @@ function setErrorState({ email = false, password = false }, message) {
   errorMessage.style.display = "block";
 }
 
-
 function setSuccessState() {
   emailInput.classList.add("input-success");
   passwordInput.classList.add("input-success");
@@ -88,15 +87,6 @@ function setSuccessState() {
 // Initialize login page
 async function initializeLoginPage() {
   console.log('Initializing login page');
-
-  // If there was an active session that wasn't closed (e.g. app killed via Task Manager),
-  // redirect to tracker to save it and end the session.
-  if (typeof StorageService !== 'undefined' && StorageService.getItem('isActive') === 'true' && StorageService.getItem('sessionStartTime')) {
-    console.log('Login: found orphaned session, redirecting to tracker to save and end session');
-    window.location.href = 'tracker.html?recover=1';
-    return;
-  }
-
   if (window.electronAPI?.setUserLoggedIn) {
     window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state:', err));
   }
@@ -597,46 +587,48 @@ async function handleLogin() {
   
   /* ---------------- EMAIL VALIDATION ---------------- */
   
-  // Empty email
-  if (!email) {
-    setErrorState(
-      { email: true, password: false },
-      'Please enter your email address'
-    );
-    emailInput.focus();
-    return;
-  }
-  
-  // Invalid email format (typo like gmial.con)
-  if (!ValidationService.validateEmail(email)) {
-    setErrorState(
-      { email: true, password: false },
-      'Please enter a valid email address'
-    );
-    emailInput.focus();
-    return;
-  }
-  
-  // Email existence check (DB)
-  const emailExists = await checkEmailExists(normalizedEmail);
-  
-  if (!emailExists) {
-    // If user typed a password as well → invalid credentials
-    if (password && password.length > 0) {
-      setErrorState(
-        { email: true, password: true },
-        'Invalid credentials'
-      );
-    } else {
-      setErrorState(
-        { email: true, password: false },
-        'Invalid email address'
-      );
-    }
-    emailInput.focus();
-    return;
-  }
-  
+// Empty email
+if (!email) {
+  setErrorState(
+    { email: true, password: false },
+    'Please enter your email address'
+  );
+  emailInput.focus();
+  return;
+}
+
+// Invalid email format (typo like gmial.con)
+if (!ValidationService.validateEmail(email)) {
+  setErrorState(
+    { email: true, password: false },
+    'Please enter a valid email address'
+  );
+  emailInput.focus();
+  return;
+}
+
+// Email existence check (DB)
+// Email existence check (DB)
+const emailExists = await checkEmailExists(normalizedEmail);
+
+if (!emailExists) {
+  // Email is wrong, ignore password correctness here
+  setErrorState(
+    { email: true, password: false },
+    'Incorrect Email'
+  );
+  emailInput.focus();
+  return;
+}
+
+// Validate password (only when email exists)
+if (!password) {
+  NotificationService.showError('Please enter your password');
+  passwordInput.focus();
+  return;
+}
+
+
   // Validate password
   if (!password) {
     // NotificationService.showError('Please enter your password');
