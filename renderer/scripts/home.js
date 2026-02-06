@@ -1,4 +1,10 @@
 document.addEventListener('DOMContentLoaded', () => {
+  // If there was an active session that wasn't closed (e.g. app killed), save it first.
+  if (typeof StorageService !== 'undefined' && StorageService.getItem('isActive') === 'true' && StorageService.getItem('sessionStartTime')) {
+    window.location.href = 'tracker.html?recover=1';
+    return;
+  }
+
   const welcomeText = document.getElementById('welcomeText');
   const clockInBtn = document.getElementById('clockInBtn');
   const projectsBtn = document.getElementById('projectsBtn');

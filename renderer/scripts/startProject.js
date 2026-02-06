@@ -30,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Timer state variables
   let timerInterval = null;
+  let sessionPersistInterval = null;
   let sessionStartTime = null;
   let currentSessionId = null;
   let workStartTime = null;
@@ -169,6 +170,24 @@ document.addEventListener('DOMContentLoaded', () => {
     timeDisplay.textContent = formatTime(totalSessionTime);
   }
 
+  /** Persist computed session state so that if the app is killed, recovery has the latest durations. */
+  function persistSessionSnapshotForRecovery() {
+    if (!sessionStartTime || !isActive) return;
+    const now = new Date();
+    let computedActive = totalActiveDuration;
+    if (isActive && !isOnBreak && !isIdle && workStartTime) {
+      computedActive += Math.floor((now - new Date(workStartTime)) / 1000);
+    }
+    let computedBreak = totalBreakDuration;
+    if (isOnBreak && breakStartTime) {
+      computedBreak += Math.floor((now - new Date(breakStartTime)) / 1000);
+    }
+    const computedIdle = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
+    StorageService.setItem('activeDuration', String(computedActive));
+    StorageService.setItem('breakDuration', String(computedBreak));
+    StorageService.setItem('totalIdleTime', String(computedIdle));
+  }
+
   // Helper function to update timer state in main process
   function updateTimerStateInMainProcess(active) {
     if (window.electronAPI && window.electronAPI.setTimerActive) {
@@ -277,6 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Start timer interval immediately
     if (!timerInterval) {
       timerInterval = setInterval(updateTimer, 1000);
+      sessionPersistInterval = setInterval(persistSessionSnapshotForRecovery, 15000);
     }
     updateTimer();
 
@@ -426,6 +446,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     clearInterval(timerInterval);
     timerInterval = null;
+    if (sessionPersistInterval) {
+      clearInterval(sessionPersistInterval);
+      sessionPersistInterval = null;
+    }
 
     // Stop background screenshot capture when clocking out
     stopScreenshotCapture();
@@ -844,6 +868,10 @@ document.addEventListener('DOMContentLoaded', () => {
       clearInterval(timerInterval);
       timerInterval = null;
     }
+    if (sessionPersistInterval) {
+      clearInterval(sessionPersistInterval);
+      sessionPersistInterval = null;
+    }
     if (idleTracker) {
       idleTracker.destroy();
       idleTracker = null;
@@ -865,13 +893,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Clock out when laptop lid is closed (lock-screen) or system suspends
   if (window.electronAPI && window.electronAPI.onLockOrSuspendClockOut) {
+    console.log('[PowerEvents] Renderer startProject: registering onLockOrSuspendClockOut listener');
     window.electronAPI.onLockOrSuspendClockOut((data) => {
       const reason = data?.reason || 'lock_screen';
-      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) return;
+      const ts = new Date().toISOString();
+      console.log('[PowerEvents] Renderer startProject: lock-or-suspend event received', {
+        timestamp: ts,
+        reason,
+        hasSessionStartTime: !!sessionStartTime,
+        isActive,
+        lockSuspendClockOutTriggered
+      });
+      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) {
+        console.log('[PowerEvents] Renderer startProject: lock/suspend clock-out skipped due to guard');
+        return;
+      }
       lockSuspendClockOutTriggered = true;
-      console.log(`Clock out on ${reason} (lid closed / system suspend)`);
+      console.log(`[PowerEvents] Renderer startProject: clocking out on ${reason} (lid closed / system suspend)`);
       clockOut({ auto: true, reason }).catch((err) => {
-        console.error('Lock/suspend clock out failed:', err);
+        console.error('[PowerEvents] Renderer startProject: lock/suspend clock out failed:', err);
       });
     });
   }

@@ -88,6 +88,15 @@ function setSuccessState() {
 // Initialize login page
 async function initializeLoginPage() {
   console.log('Initializing login page');
+
+  // If there was an active session that wasn't closed (e.g. app killed via Task Manager),
+  // redirect to tracker to save it and end the session.
+  if (typeof StorageService !== 'undefined' && StorageService.getItem('isActive') === 'true' && StorageService.getItem('sessionStartTime')) {
+    console.log('Login: found orphaned session, redirecting to tracker to save and end session');
+    window.location.href = 'tracker.html?recover=1';
+    return;
+  }
+
   if (window.electronAPI?.setUserLoggedIn) {
     window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state:', err));
   }

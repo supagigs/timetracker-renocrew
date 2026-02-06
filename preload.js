@@ -97,6 +97,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSessionBeforeClose: (sessionData) =>
     ipcRenderer.invoke('save-session-before-close', sessionData),
 
+  /** Tell main process that session was saved so it can close the window (used when closing from a page that had no save handler). */
+  sendSessionSavedPleaseClose: () => ipcRenderer.send('session-saved-please-close'),
+
   captureScreen: () =>
     ipcRenderer.invoke('capture-screen'),
 

@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let totalActiveDuration = 0;
   let breakCount = 0; // Track number of individual breaks taken
   let screenshotInterval;
+  let sessionPersistInterval = null; // Periodic persist for recovery after kill
   let activityChart = null; // Store chart instance for updates
   let projectChart = null; // Store project chart instance for updates
   let idleTracker = null; // Idle time tracker instance
@@ -90,6 +91,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function init() {
+    window.__isRecoveryMode = typeof window !== 'undefined' && window.location.search.includes('recover=1');
+    window.__closeAfterSave = typeof window !== 'undefined' && window.location.search.includes('closeAfterSave=1');
     // 🔐 Safety: never auto-restore timer after logout
     const wasLoggedOut = StorageService.getItem('userLoggedOut') === 'true';
     if (wasLoggedOut) {
@@ -239,6 +242,35 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         }).catch(() => {});
       }, RESUME_CHECK_DELAY_MS);
+    }
+
+    // Recover session when app was closed without saving (e.g. Task Manager end process, force quit).
+    if (window.__isRecoveryMode && isActive && sessionStartTime) {
+      console.log('[Recovery] Saving session that was not closed (app was force-closed or killed)...');
+      clockOut({ auto: true, reason: 'recovered_after_force_close' })
+        .then(() => {
+          window.location.href = 'projects.html';
+        })
+        .catch((err) => {
+          console.error('[Recovery] Clock-out failed:', err);
+          window.location.href = 'projects.html';
+        });
+      return;
+    }
+
+    // Close requested from another page (e.g. user clicked X on projects). Save session then tell main to close.
+    if (window.__closeAfterSave) {
+      const done = () => {
+        if (window.electronAPI && window.electronAPI.sendSessionSavedPleaseClose) {
+          window.electronAPI.sendSessionSavedPleaseClose();
+        }
+      };
+      if (sessionStartTime && isActive && typeof saveSessionBeforeClose === 'function') {
+        saveSessionBeforeClose().then(done).catch(() => done());
+      } else {
+        done();
+      }
+      return;
     }
   }
 
@@ -695,13 +727,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let finalActiveDuration = totalActiveDuration;
     if (wasActive && !isOnBreak && !wasIdle && previousWorkStartTime) {
-      const workElapsed = Math.floor((clockOutTime - previousWorkStartTime) / 1000);
+      let workElapsed = Math.floor((clockOutTime - previousWorkStartTime) / 1000);
+
+      // When auto clock-out is triggered on system resume or after app was killed,
+      // do not treat the entire gap as active working time.
+      if (auto && (reason === 'resume_after_suspend' || reason === 'recovered_after_force_close')) {
+        workElapsed = 0;
+      }
+
       if (workElapsed > 0) {
         finalActiveDuration += workElapsed;
       }
     }
 
     clearInterval(timerInterval);
+    if (sessionPersistInterval) {
+      clearInterval(sessionPersistInterval);
+      sessionPersistInterval = null;
+    }
     stopScreenshotCapture();
 
     // Stop idle tracking
@@ -798,18 +841,21 @@ document.addEventListener('DOMContentLoaded', () => {
         totalIdleTime = 0;
 
         // Session ended silently
-        // After any clock-out (manual or automatic), always return the user
-        // to the projects screen so they can explicitly choose what to do next.
-        window.location.href = 'projects.html';
+        // After any clock-out (manual or automatic), return the user to projects — except on window_close, so main process can finish and close the window.
+        if (reason !== 'window_close') {
+          window.location.href = 'projects.html';
+        }
       } catch (error) {
         console.error('Error during clock out:', error);
-        // For auto clock-out (idle/break), don't block the user with an alert — session is already ended locally; still navigate
-        const isAutoIdleOrBreak = auto && (reason === 'idle_2h' || reason === 'break_long');
-        if (!isAutoIdleOrBreak) {
-          alert('Error ending session. Please try again.');
+        if (reason === 'window_close') {
+          // Let main process close the window; don't block with alert
         } else {
-          // Clear UI state and go to projects so user isn't stuck; save error is already logged
-          window.location.href = 'projects.html';
+          const isAutoIdleOrBreak = auto && (reason === 'idle_2h' || reason === 'break_long');
+          if (!isAutoIdleOrBreak) {
+            alert('Error ending session. Please try again.');
+          } else {
+            window.location.href = 'projects.html';
+          }
         }
       }
     } else {
@@ -1912,6 +1958,24 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Timer state saved before navigation');
   }
 
+  /** Persist computed session state so that if the app is killed (e.g. Task Manager), recovery has the latest durations. */
+  function persistSessionSnapshotForRecovery() {
+    if (!sessionStartTime || !isActive) return;
+    const now = new Date();
+    let computedActive = totalActiveDuration;
+    if (isActive && !isOnBreak && !isIdle && workStartTime) {
+      computedActive += Math.floor((now - new Date(workStartTime)) / 1000);
+    }
+    let computedBreak = totalBreakDuration;
+    if (isOnBreak && breakStartTime) {
+      computedBreak += Math.floor((now - new Date(breakStartTime)) / 1000);
+    }
+    const computedIdle = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
+    StorageService.setItem('activeDuration', String(computedActive));
+    StorageService.setItem('breakDuration', String(computedBreak));
+    StorageService.setItem('totalIdleTime', String(computedIdle));
+  }
+
   async function logout(options = {}) {
     const { skipConfirm = false, remote = false } = options;
 
@@ -2025,7 +2089,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Handle window close events to save active session
+  // Called by main process when user closes window (X) — save session to DB and end session.
+  async function saveSessionBeforeClose() {
+    if (!sessionStartTime || !isActive) {
+      return { saved: false, error: 'No active session' };
+    }
+    try {
+      await clockOut({ auto: true, reason: 'window_close' });
+      return { saved: true };
+    } catch (error) {
+      console.error('Error saving session on window close:', error);
+      return { saved: false, error: error?.message || String(error) };
+    }
+  }
+  window.saveSessionBeforeClose = saveSessionBeforeClose;
+
+  // Handle window close events to save active session (backup when main does not call saveSessionBeforeClose)
   window.addEventListener('beforeunload', async (event) => {
     // Clean up idle tracker to prevent memory leaks
     if (idleTracker) {
@@ -2147,13 +2226,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Clock out when laptop lid is closed (lock-screen) or system suspends — stop timer immediately.
   if (window.electronAPI && window.electronAPI.onLockOrSuspendClockOut) {
+    console.log('[PowerEvents] Renderer tracker: registering onLockOrSuspendClockOut listener');
     window.electronAPI.onLockOrSuspendClockOut((data) => {
       const reason = data?.reason || 'lock_screen';
-      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) return;
+      const ts = new Date().toISOString();
+      console.log('[PowerEvents] Renderer tracker: lock-or-suspend event received', {
+        timestamp: ts,
+        reason,
+        hasSessionStartTime: !!sessionStartTime,
+        isActive,
+        lockSuspendClockOutTriggered
+      });
+      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) {
+        console.log('[PowerEvents] Renderer tracker: lock/suspend clock-out skipped due to guard');
+        return;
+      }
       lockSuspendClockOutTriggered = true;
-      console.log(`Clock out on ${reason} (lid closed / system suspend)`);
+      console.log(`[PowerEvents] Renderer tracker: clocking out on ${reason} (lid closed / system suspend)`);
       clockOut({ auto: true, reason }).catch((err) => {
-        console.error('Lock/suspend clock out failed:', err);
+        console.error('[PowerEvents] Renderer tracker: lock/suspend clock out failed:', err);
       });
     });
   }
@@ -2161,12 +2252,23 @@ document.addEventListener('DOMContentLoaded', () => {
   // When system resumes (e.g. laptop lid opened), clock out if we still have an active session.
   // This handles the case where lock/suspend IPC was never processed because the renderer was suspended.
   if (window.electronAPI && window.electronAPI.onSystemResumed) {
+    console.log('[PowerEvents] Renderer tracker: registering onSystemResumed listener');
     window.electronAPI.onSystemResumed(() => {
-      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) return;
+      const ts = new Date().toISOString();
+      console.log('[PowerEvents] Renderer tracker: system-resumed event received', {
+        timestamp: ts,
+        hasSessionStartTime: !!sessionStartTime,
+        isActive,
+        lockSuspendClockOutTriggered
+      });
+      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) {
+        console.log('[PowerEvents] Renderer tracker: resume clock-out skipped due to guard');
+        return;
+      }
       lockSuspendClockOutTriggered = true;
-      console.log('Clock out on system resume (lid opened after suspend)');
+      console.log('[PowerEvents] Renderer tracker: clocking out on system resume (lid opened after suspend)');
       clockOut({ auto: true, reason: 'resume_after_suspend' }).catch((err) => {
-        console.error('Resume clock out failed:', err);
+        console.error('[PowerEvents] Renderer tracker: resume clock out failed:', err);
       });
     });
   }
@@ -2182,7 +2284,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   window.addEventListener('focus', onVisibilityOrFocus);
 
-  // Start timer interval
-  timerInterval = setInterval(updateTimer, 1000);
+  // Start timer interval (skip when we're only loading to save and close)
+  if (!window.__closeAfterSave) {
+    timerInterval = setInterval(updateTimer, 1000);
+    // Persist session state every 15s so that if the app is killed, recovery has the latest durations
+    const PERSIST_INTERVAL_MS = 15000;
+    sessionPersistInterval = setInterval(persistSessionSnapshotForRecovery, PERSIST_INTERVAL_MS);
+  }
 });
 

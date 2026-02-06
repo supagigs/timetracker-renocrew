@@ -1189,26 +1189,35 @@ function createWindow() {
   // Stop timer and clock out when lid is closed (lock-screen) or system suspends
   const broadcastLockOrSuspendClockOut = (reason) => {
     try {
+      const ts = new Date().toISOString();
+      logInfo('PowerMonitor', `[PowerEvents] Main: lock-or-suspend broadcast initiated`, { timestamp: ts, reason });
       BrowserWindow.getAllWindows().forEach((win) => {
         if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
-          win.webContents.send('lock-or-suspend-clock-out', { reason });
+          win.webContents.send('lock-or-suspend-clock-out', { reason, timestamp: ts });
         }
       });
-      logInfo('PowerMonitor', `Broadcast lock-or-suspend-clock-out: ${reason}`);
+      logInfo('PowerMonitor', `[PowerEvents] Main: Broadcast lock-or-suspend-clock-out: ${reason}`);
     } catch (e) {
-      logWarn('PowerMonitor', `Failed to broadcast lock-or-suspend-clock-out: ${e?.message || e}`);
+      logWarn('PowerMonitor', `[PowerEvents] Main: Failed to broadcast lock-or-suspend-clock-out: ${e?.message || e}`);
     }
   };
+  // Fire immediately so renderer can clock out before system sleeps (no delay).
   if (powerMonitor.listenerCount('lock-screen') === 0) {
     try {
-      powerMonitor.on('lock-screen', () => broadcastLockOrSuspendClockOut('lock_screen'));
+      powerMonitor.on('lock-screen', () => {
+        logInfo('PowerMonitor', '[PowerEvents] Main: lock-screen — broadcasting clock-out immediately');
+        broadcastLockOrSuspendClockOut('lock_screen');
+      });
     } catch (e) {
       logWarn('PowerMonitor', 'Unable to register lock-screen listener', e);
     }
   }
   if (powerMonitor.listenerCount('suspend') === 0) {
     try {
-      powerMonitor.on('suspend', () => broadcastLockOrSuspendClockOut('suspend'));
+      powerMonitor.on('suspend', () => {
+        logInfo('PowerMonitor', '[PowerEvents] Main: suspend — broadcasting clock-out immediately');
+        broadcastLockOrSuspendClockOut('suspend');
+      });
     } catch (e) {
       logWarn('PowerMonitor', 'Unable to register suspend listener', e);
     }
@@ -1231,22 +1240,18 @@ function createWindow() {
     }, 2000);
   }
 
-  // Graceful close handler: warn when timer is active or user is logged in,
-  // but still allow the user to force-close the app.
+  // Graceful close handler: save session before window closes, then close.
   let isForceClosing = false;
 
   mainWindow.on('close', async (event) => {
-    // If we've already decided to force close, do not block again.
     if (isForceClosing) {
       return;
     }
 
-    // If timer is active, prevent close and save session first
     if (isTimerActive) {
       event.preventDefault();
-      
+
       try {
-        // Send IPC message to renderer to save session and wait for it
         const savePromise = mainWindow.webContents.executeJavaScript(`
           new Promise(async (resolve) => {
             try {
@@ -1261,20 +1266,40 @@ function createWindow() {
             }
           })
         `);
-        
-        // Wait for save with timeout
+
+        const SAVE_ON_CLOSE_TIMEOUT_MS = 12000;
         const saveResult = await Promise.race([
           savePromise,
-          new Promise((resolve) => setTimeout(() => resolve({ saved: false, error: 'Timeout' }), 3000))
+          new Promise((resolve) => setTimeout(() => resolve({ saved: false, error: 'Timeout' }), SAVE_ON_CLOSE_TIMEOUT_MS))
         ]);
-        
+
         if (saveResult && saveResult.saved) {
           logInfo('WindowClose', 'Session saved successfully before window close');
           isForceClosing = true;
           mainWindow.close();
+        } else if (saveResult && saveResult.error === 'Save function not available') {
+          // Current page has no save handler (e.g. user on projects). Navigate to tracker to save, then close on IPC.
+          logInfo('WindowClose', 'Navigating to tracker to save session before close');
+          const trackerPath = path.join(__dirname, 'renderer', 'screens', 'tracker.html');
+          const closeTimeout = setTimeout(() => {
+            logWarn('WindowClose', 'Close-after-save timeout, closing window');
+            isForceClosing = true;
+            mainWindow.close();
+          }, 15000);
+          ipcMain.once('session-saved-please-close', () => {
+            clearTimeout(closeTimeout);
+            logInfo('WindowClose', 'Renderer confirmed session saved, closing window');
+            isForceClosing = true;
+            mainWindow.close();
+          });
+          mainWindow.loadFile(trackerPath, { query: { closeAfterSave: '1' } }).catch((err) => {
+            clearTimeout(closeTimeout);
+            logError('WindowClose', `Failed to load tracker for save: ${err.message}`);
+            isForceClosing = true;
+            mainWindow.close();
+          });
         } else {
           logWarn('WindowClose', `Failed to save session: ${saveResult?.error || 'Unknown error'}`);
-          // Still allow close after timeout to prevent app from hanging
           setTimeout(() => {
             isForceClosing = true;
             mainWindow.close();
@@ -1282,14 +1307,12 @@ function createWindow() {
         }
       } catch (error) {
         logError('WindowClose', `Error saving session on window close: ${error.message}`);
-        // Allow close after timeout to prevent app from hanging
         setTimeout(() => {
           isForceClosing = true;
           mainWindow.close();
         }, 500);
       }
     } else if (isUserLoggedIn) {
-      // For logged in users without active timer, allow close
       return;
     }
   });
