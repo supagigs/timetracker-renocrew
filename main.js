@@ -2936,7 +2936,9 @@ async function addScreenshotToBatch(uploadData) {
     appName,
     displayId,
     frappeProjectId,
-    frappeTaskId
+    frappeTaskId,
+    // Optional explicit Frappe timesheet ID (preferred over inferring from sessionId)
+    frappeTimesheetId: explicitFrappeTimesheetId
   } = uploadData;
 
   const screenSuffix = screenIndex ? `_screen${screenIndex}` : '';
@@ -2978,17 +2980,21 @@ async function addScreenshotToBatch(uploadData) {
     const jpegBuffer = await compressToJpegBufferFromDataUrl(screenshotData);
     fs.writeFileSync(filePath, jpegBuffer);
 
-    // Determine Frappe timesheet ID - prefer it over numeric session IDs for storage path
-    // Frappe timesheet IDs start with "TS-" (e.g., "TS-2025-00043")
-    const frappeTimesheetId = (sessionId && typeof sessionId === 'string' && sessionId.startsWith('TS-')) 
-      ? sessionId 
-      : null;
+    // Determine Frappe timesheet ID - prefer explicit value if provided,
+    // otherwise infer from sessionId when it looks like a Timesheet ID (e.g., "TS-2025-00043")
+    let frappeTimesheetId = null;
+    if (explicitFrappeTimesheetId && typeof explicitFrappeTimesheetId === 'string') {
+      frappeTimesheetId = explicitFrappeTimesheetId.trim() || null;
+    }
+    if (!frappeTimesheetId && sessionId && typeof sessionId === 'string' && sessionId.startsWith('TS-')) {
+      frappeTimesheetId = sessionId;
+    }
     
     const batchItem = {
       userEmail,
       sessionId, // Keep original for database insert (can be Supabase session ID or Frappe timesheet ID)
       supabaseSessionId: supabaseSessionId || null, // Numeric Supabase session ID for time_session_id column
-      frappeTimesheetId, // Frappe timesheet ID for storage path (null if not a Frappe ID)
+      frappeTimesheetId, // Frappe timesheet ID for storage path & DB (null if not available)
       screenshotData, // kept for preview; cleared later
       timestamp,
       isIdle,
@@ -4224,7 +4230,7 @@ ipcMain.handle('get-time-tracking-status', async () => {
   return { ok: true, state: snapshot };
 });
 
-ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, supabaseSessionId, screenshotData, timestamp, isIdle, appName, frappeProjectId, frappeTaskId }) => {
+ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, supabaseSessionId, screenshotData, timestamp, isIdle, appName, frappeProjectId, frappeTaskId, frappeTimesheetId }) => {
   return handleScreenshotUpload({
     userEmail,
     sessionId,
@@ -4235,6 +4241,8 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
     appName, // Optional: if provided, will be used; otherwise captured automatically
     frappeProjectId, // Frappe project ID
     frappeTaskId, // Frappe task ID
+    // Pass explicit Frappe timesheet ID through to batch handler when available
+    frappeTimesheetId,
     contextLabel: 'UPLOAD'
   });
 });

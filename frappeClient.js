@@ -40,6 +40,7 @@ function createFrappeClient(useApiKey = false) {
   const headers = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
+    'Expect': '', // Prevents 417 Expectation Failed (Frappe quirk with Expect: 100-continue)
   };
   
   // Use API key authentication if requested and available

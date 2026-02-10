@@ -1,6 +1,10 @@
 const { createFrappeClient } = require('./frappeClient');
 const { getCurrentUser } = require('./frappeAuth');
 
+// User-facing message for 417 / timesheet sync issues (shown in popup instead of raw error)
+const TIMESHEET_SYNC_ERROR_MESSAGE =
+  'We couldn\'t sync your timesheet with the server right now. Your time may still have been saved—please check the Timesheet list in ERP Next. If the problem continues, try submitting any draft timesheet for this project in ERP Next and try again.';
+
 // Logging functions will be passed from main.js
 let logInfo, logError, logWarn;
 
@@ -665,12 +669,13 @@ async function getTimesheetForProject(project) {
     // Query for timesheets
     // IMPORTANT: We'll filter by employee in code rather than relying on Frappe filters
     // This ensures we have full control and can verify each timesheet
+    // Include both Draft (docstatus=0) and Submitted (docstatus=1) so we pick existing drafts and know when to create new
     // Note: time_logs might not be included in list response, so we'll fetch full details for each
     // Limit to last 200 timesheets to avoid performance issues (increased to catch more)
     const res = await frappe.get('/api/resource/Timesheet', {
       params: {
-        fields: JSON.stringify(['name', 'employee', 'company', 'status', 'modified']),
-        // Don't filter by employee in query - we'll do it in code to ensure accuracy
+        fields: JSON.stringify(['name', 'employee', 'company', 'status', 'modified', 'docstatus']),
+        filters: JSON.stringify([['docstatus', 'in', [0, 1]]]), // 0 = Draft, 1 = Submitted — ensure drafts are returned
         order_by: 'modified desc',
         limit_page_length: 200, // Increased to catch more timesheets
       },
@@ -1264,6 +1269,61 @@ async function getOrCreateTimesheet({ project, task }) {
         status: err.response?.status,
         data: err.response?.data,
       });
+    }
+
+    // 417 OverlapError: timesheet time log overlaps with another timesheet (ERPNext validation)
+    const status = err.response?.status;
+    const data = err.response?.data;
+    const exceptionStr = typeof data?.exception === 'string' ? data.exception : '';
+    if (status === 417 && (exceptionStr.includes('OverlapError') || exceptionStr.includes('overlapping'))) {
+      const otherMatch = exceptionStr.match(/overlapping with (\S+)/);
+      const otherTimesheet = otherMatch ? otherMatch[1] : 'another timesheet';
+      const userMessage = `Your time entry overlaps with ${otherTimesheet}. Please close or correct the overlapping entry in the Timesheet list in ERP Next, then try again.`;
+      const overlapErr = new Error(userMessage);
+      overlapErr.name = 'TimesheetOverlapError';
+      overlapErr.originalError = err;
+      throw overlapErr;
+    }
+
+    // 417 but operation may have succeeded (Frappe quirk). Try to recover.
+    if (status === 417) {
+      const msg = data?.message;
+      let timesheetId = typeof msg?.timesheet === 'string' ? msg.timesheet : null;
+      let rowId = typeof msg?.row === 'string' ? msg.row : null;
+      if (timesheetId && rowId) {
+        if (logWarn) {
+          logWarn('Frappe', 'get_or_create_timesheet returned 417 but response contained timesheet/row; treating as success', {
+            timesheet: timesheetId,
+            row: rowId,
+          });
+        }
+        return { timesheet: timesheetId, row: rowId };
+      }
+      // No timesheet/row in response — maybe backend created a draft. Re-fetch and use it.
+      try {
+        const existingTimesheet = await getTimesheetForProject(project);
+        if (existingTimesheet && String(existingTimesheet.status || '').trim().toLowerCase() !== 'submitted') {
+          const timeLogs = Array.isArray(existingTimesheet.time_logs) ? existingTimesheet.time_logs : [];
+          const openRow = timeLogs.find(tl => tl && (tl.to_time == null || tl.completed !== 1));
+          const rowName = openRow?.name || (timeLogs[0] && timeLogs[0].name);
+          if (existingTimesheet.name && rowName) {
+            if (logWarn) {
+              logWarn('Frappe', 'get_or_create_timesheet returned 417; re-fetched draft timesheet and using it', {
+                timesheet: existingTimesheet.name,
+                row: rowName,
+              });
+            }
+            return { timesheet: existingTimesheet.name, row: rowName };
+          }
+        }
+      } catch (recoveryErr) {
+        if (logError) logError('Frappe', '417 recovery (re-fetch draft) failed:', recoveryErr?.message);
+      }
+      // Show user-friendly popup instead of raw 417
+      const syncErr = new Error(TIMESHEET_SYNC_ERROR_MESSAGE);
+      syncErr.name = 'TimesheetSyncError';
+      syncErr.originalError = err;
+      throw syncErr;
     }
 
     throw err;
@@ -2310,7 +2370,29 @@ async function saveTimesheetWithSavedocs(timesheetDoc) {
         }
         return doc;
       }
-      // 417 but no doc in response — Frappe often still saves; avoid false "Failed to update" errors.
+      // 417 but no doc in response — Frappe often still saves. Verify by re-fetching to avoid false "Failed to update".
+      if (timesheetDoc?.name) {
+        try {
+          const verified = await getTimesheetById(timesheetDoc.name);
+          if (verified && verified.name === timesheetDoc.name) {
+            if (logWarn) {
+              logWarn('Frappe', 'savedocs returned 417 with no doc in body; re-fetched timesheet and confirmed saved', {
+                status,
+                timesheet: timesheetDoc.name,
+              });
+            }
+            return verified;
+          }
+        } catch (verifyErr) {
+          if (logWarn) {
+            logWarn('Frappe', 'savedocs returned 417; re-fetch verify failed, still treating as success', {
+              status,
+              timesheet: timesheetDoc.name,
+              verifyError: verifyErr?.message,
+            });
+          }
+        }
+      }
       if (logWarn) {
         logWarn('Frappe', 'savedocs returned 417 with no Timesheet in body; treating as success', {
           status,

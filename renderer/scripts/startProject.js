@@ -592,7 +592,8 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         } catch (frappeError) {
           console.error('Error updating Frappe timesheet:', frappeError);
-          NotificationService.showError(`Failed to update Frappe timesheet: ${frappeError.message || 'Unknown error'}`);
+          const displayMessage = getTimesheetSyncErrorMessage(frappeError) || `Failed to update ERP Next timesheet: ${frappeError.message || 'Unknown error'}`;
+          NotificationService.showError(displayMessage);
         }
       }
 
@@ -770,6 +771,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Event listeners
   backBtn.addEventListener('click', () => {
+    if (isActive) {
+      const message = 'Please clock out first before going back to the projects screen.';
+      if (typeof NotificationService !== 'undefined' && typeof NotificationService.showError === 'function') {
+        NotificationService.showError(message);
+      } else {
+        alert(message);
+      }
+      return;
+    }
     window.location.href = 'projects.html';
   });
 
@@ -878,18 +888,76 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  /**
+   * Handle visibility/focus after potential system resume (e.g. lid opened).
+   * Runs idle auto clock-out and, if the system recently resumed while a session
+   * was active, auto-clocks out and saves the session just like the main tracker.
+   */
+  function handleVisibilityOrFocus() {
+    if (!sessionStartTime) return;
+
+    // 1) Idle-based auto clock-out (e.g. 2h idle while timer running)
+    if (typeof runIdleAutoClockOutCheck === 'function') {
+      runIdleAutoClockOutCheck();
+    }
+
+    // 2) If system recently resumed (lid opened after suspend) and we still have
+    // an active session, clock out and persist session to DB.
+    if (!isActive || lockSuspendClockOutTriggered || !window.electronAPI || !window.electronAPI.getLastSystemResume) {
+      return;
+    }
+
+    const RESUME_WINDOW_MS = 90000; // 90 seconds
+    window.electronAPI.getLastSystemResume().then((ts) => {
+      if (ts == null || typeof ts !== 'number') return;
+      if (Date.now() - ts > RESUME_WINDOW_MS) return;
+      if (lockSuspendClockOutTriggered || !sessionStartTime || !isActive) return;
+
+      lockSuspendClockOutTriggered = true;
+      console.log('[PowerEvents] Renderer startProject: clocking out on visibility/focus after recent system resume');
+      clockOut({ auto: true, reason: 'resume_after_suspend' }).catch((err) => {
+        console.error('[PowerEvents] Renderer startProject: resume clock out (on visibility/focus) failed:', err);
+        // As a safety net, still navigate back to projects so user is not left on a stale timer page
+        window.location.href = 'projects.html';
+      });
+    }).catch(() => {});
+  }
+
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && isActive && sessionStartTime) {
       // Don't save on visibility change; beforeunload handles save
+      return;
     }
-    if (document.visibilityState === 'visible' && sessionStartTime && typeof runIdleAutoClockOutCheck === 'function') {
-      runIdleAutoClockOutCheck();
+    if (document.visibilityState === 'visible') {
+      handleVisibilityOrFocus();
     }
   });
   window.addEventListener('focus', () => {
-    if (!sessionStartTime || typeof runIdleAutoClockOutCheck !== 'function') return;
-    runIdleAutoClockOutCheck();
+    handleVisibilityOrFocus();
   });
+
+  // When system resumes (e.g. laptop lid opened), clock out if we still have an active session.
+  if (window.electronAPI && window.electronAPI.onSystemResumed) {
+    console.log('[PowerEvents] Renderer startProject: registering onSystemResumed listener');
+    window.electronAPI.onSystemResumed(() => {
+      const ts = new Date().toISOString();
+      console.log('[PowerEvents] Renderer startProject: system-resumed event received', {
+        timestamp: ts,
+        hasSessionStartTime: !!sessionStartTime,
+        isActive,
+        lockSuspendClockOutTriggered
+      });
+      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) {
+        console.log('[PowerEvents] Renderer startProject: resume clock-out skipped due to guard');
+        return;
+      }
+      lockSuspendClockOutTriggered = true;
+      console.log('[PowerEvents] Renderer startProject: clocking out on system resume (lid opened after suspend)');
+      clockOut({ auto: true, reason: 'resume_after_suspend' }).catch((err) => {
+        console.error('[PowerEvents] Renderer startProject: resume clock out failed:', err);
+      });
+    });
+  }
 
   // Clock out when laptop lid is closed (lock-screen) or system suspends
   if (window.electronAPI && window.electronAPI.onLockOrSuspendClockOut) {

@@ -110,6 +110,25 @@ class NotificationService {
   }
 }
 
+// User-readable message for 417 / timesheet sync errors (matches frappeService TIMESHEET_SYNC_ERROR_MESSAGE)
+const TIMESHEET_SYNC_ERROR_MESSAGE =
+  'We couldn\'t sync your timesheet with the server right now. Your time may still have been saved—please check the Timesheet list in ERP Next. If the problem continues, try submitting any draft timesheet for this project in ERP Next and try again.';
+
+/**
+ * Returns a user-friendly message for timesheet/Frappe errors (e.g. 417).
+ * Use when showing errors from getOrCreateTimesheet or saveTimesheetWithSavedocs.
+ * @param {Error} error
+ * @returns {string}
+ */
+function getTimesheetSyncErrorMessage(error) {
+  if (!error || !error.message) return '';
+  const msg = String(error.message);
+  if (msg.includes('417') || msg.includes('status code 417') || msg.includes("couldn't sync your timesheet")) {
+    return TIMESHEET_SYNC_ERROR_MESSAGE;
+  }
+  return msg;
+}
+
 // Data validation utilities
 class ValidationService {
   static validateEmail(email) {
@@ -278,6 +297,7 @@ class SupabaseService {
 // Export for use in other modules
 window.NotificationService = NotificationService;
 window.ValidationService = ValidationService;
+window.getTimesheetSyncErrorMessage = getTimesheetSyncErrorMessage;
 window.TimeUtils = TimeUtils;
 window.StorageService = StorageService;
 window.SupabaseService = SupabaseService;

@@ -117,9 +117,8 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error('[CREATE_TIMESHEET] Error message:', err?.message);
         console.error('[CREATE_TIMESHEET] Error stack:', err?.stack);
         
-        NotificationService.showError(
-          err.message || 'Failed to proceed to tracker'
-        );
+        const displayMessage = getTimesheetSyncErrorMessage(err) || err.message || 'Failed to proceed to tracker';
+        NotificationService.showError(displayMessage);
         createBtn.disabled = false;
         console.log('[CREATE_TIMESHEET] Button re-enabled after error');
       }

@@ -12,6 +12,7 @@ export default defineConfig([
           StorageService: "readonly",
           NotificationService: "readonly",
           ValidationService: "readonly",
+          getTimesheetSyncErrorMessage: "readonly",
           SupabaseService: "readonly",
           IdleTracker: "readonly",
           Chart: "readonly",

@@ -81,7 +81,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function loadAssignedProjects() {
     try {
       if (!window.frappe || !window.frappe.getUserProjects) {
-        NotificationService.showError('Frappe service not available.');
+        NotificationService.showError('ERP Next service not available.');
         projectSelect.classList.add('hidden');
         noProjectsMessage.textContent = 'Unable to connect to Frappe. Please restart the application.';
         noProjectsMessage.classList.add('show');
@@ -131,7 +131,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.log(`Loaded ${projects.length} project(s) from Frappe`);
     } catch (error) {
       console.error('Error in loadAssignedProjects:', error);
-      NotificationService.showError('An error occurred while loading projects from Frappe.');
+      NotificationService.showError('An error occurred while loading projects from ERP Next.');
       projectSelect.classList.add('hidden');
       noProjectsMessage.textContent = 'Failed to load projects. Please try again later.';
       noProjectsMessage.classList.add('show');

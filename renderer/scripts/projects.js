@@ -58,63 +58,34 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (error) {
               console.error('Error fetching sessions for project:', project.id, error);
-              return { ...project, totalTime: 0, lastWorked: null };
+              return { ...project, totalTime: 0, lastWorked: null, lastWorkedDaySeconds: 0, todaySeconds: 0 };
             }
 
-            // Calculate total time from all sessions (active + break + idle)
-            const totalSeconds = (sessions || []).reduce((sum, s) => {
-              // Ensure we're working with numbers and handle null/undefined
-              let sessionTime = 0;
-              
-              if (s.total_duration && !isNaN(s.total_duration)) {
-                sessionTime = parseInt(s.total_duration, 10) || 0;
-              } else {
-                // Fallback: calculate from components
-                const active = parseInt(s.active_duration || 0, 10) || 0;
-                const breakTime = parseInt(s.break_duration || 0, 10) || 0;
-                const idle = parseInt(s.idle_duration || 0, 10) || 0;
-                sessionTime = active + breakTime + idle;
-              }
-              
-              // Validate the session time is reasonable (not more than 24 hours in a single session)
-              // If it's unreasonably large, cap it or log a warning
-              if (sessionTime > 86400) { // More than 24 hours in a single session
-                console.warn(`Unusually large session time detected: ${sessionTime} seconds for project ${project.id}`);
-                // Cap at 24 hours to prevent display issues
-                sessionTime = Math.min(sessionTime, 86400);
-              }
-              
-              return sum + sessionTime;
-            }, 0);
-            
-            // Get most recent work date
-            let lastWorked = null;
-            if (sessions && sessions.length > 0) {
-              const sorted = sessions
-                .filter(s => s.session_date || s.start_time)
-                .sort((a, b) => {
-                  const dateA = a.session_date || a.start_time;
-                  const dateB = b.session_date || b.start_time;
-                  return new Date(dateB) - new Date(dateA);
-                });
-              if (sorted.length > 0) {
-                lastWorked = new Date(sorted[0].session_date || sorted[0].start_time);
-              }
-            }
+            const {
+              totalTime,
+              lastWorked,
+              lastWorkedDaySeconds,
+              todaySeconds
+            } = calculateProjectTimeData(project.id, sessions);
 
             return {
               ...project,
-              totalTime: totalSeconds,
-              lastWorked: lastWorked
+              totalTime,
+              lastWorked,
+              lastWorkedDaySeconds,
+              todaySeconds
             };
           } catch (err) {
             console.error('Error processing project:', project.id, err);
-              return { ...project, totalTime: 0, lastWorked: null };
+              return { ...project, totalTime: 0, lastWorked: null, lastWorkedDaySeconds: 0, todaySeconds: 0 };
           }
         })
       );
 
-      displayProjects(projectsWithTime);
+      // Store the enriched project list (including time data) for search/filtering
+      allProjects = projectsWithTime || [];
+
+      displayProjects(allProjects);
       
       loadingMessage.style.display = 'none';
       projectsList.style.display = 'flex';
@@ -178,6 +149,82 @@ document.addEventListener('DOMContentLoaded', async () => {
     return `${diffDays} days ago`;
   }
 
+  /**
+   * Calculate total time and per-day time details for a project's sessions.
+   * Returns overall total time, most recent work date, the total time for that
+   * most recent day, and the total time worked today.
+   *
+   * @param {string} projectId
+   * @param {Array} sessions
+   * @returns {{
+   *   totalTime: number,
+   *   lastWorked: Date | null,
+   *   lastWorkedDaySeconds: number,
+   *   todaySeconds: number
+   * }}
+   */
+  function calculateProjectTimeData(projectId, sessions) {
+    const dailyTotals = {};
+    let totalSeconds = 0;
+
+    const now = new Date();
+    const todayKey = now.toISOString().split('T')[0]; // YYYY-MM-DD for "today"
+
+    (sessions || []).forEach((s) => {
+      // Ensure we're working with numbers and handle null/undefined
+      let sessionTime = 0;
+
+      if (s.total_duration && !isNaN(s.total_duration)) {
+        sessionTime = parseInt(s.total_duration, 10) || 0;
+      } else {
+        // Fallback: calculate from components
+        const active = parseInt(s.active_duration || 0, 10) || 0;
+        const breakTime = parseInt(s.break_duration || 0, 10) || 0;
+        const idle = parseInt(s.idle_duration || 0, 10) || 0;
+        sessionTime = active + breakTime + idle;
+      }
+
+      // Validate the session time is reasonable (not more than 24 hours in a single session)
+      if (sessionTime > 86400) { // More than 24 hours in a single session
+        console.warn(`Unusually large session time detected: ${sessionTime} seconds for project ${projectId}`);
+        // Cap at 24 hours to prevent display issues
+        sessionTime = Math.min(sessionTime, 86400);
+      }
+
+      totalSeconds += sessionTime;
+
+      // Bucket this session's time by its calendar day
+      const rawDate = s.session_date || s.start_time;
+      if (!rawDate) return;
+      const dateObj = new Date(rawDate);
+      if (isNaN(dateObj.getTime())) return;
+      const dateKey = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
+      dailyTotals[dateKey] = (dailyTotals[dateKey] || 0) + sessionTime;
+    });
+
+    let lastWorked = null;
+    let lastWorkedDaySeconds = 0;
+
+    const dateKeys = Object.keys(dailyTotals);
+    if (dateKeys.length > 0) {
+      // Sort date keys descending to find the most recent day with work
+      dateKeys.sort((a, b) => new Date(b) - new Date(a));
+      const mostRecentKey = dateKeys[0];
+      lastWorked = new Date(mostRecentKey);
+      lastWorkedDaySeconds = dailyTotals[mostRecentKey] || 0;
+    }
+
+    // Time worked today (will be 0 if there are no sessions for today)
+    const todaySeconds = dailyTotals[todayKey] || 0;
+
+    return {
+      totalTime: totalSeconds,
+      lastWorked,
+      lastWorkedDaySeconds,
+      todaySeconds
+    };
+  }
+
   // Display projects grouped by time
   function displayProjects(projects) {
     projectsList.innerHTML = '';
@@ -234,9 +281,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         return 0;
       });
       
-      // Calculate total work time for the group
-      const groupTotalTime = groupProjects.reduce((sum, p) => sum + p.totalTime, 0);
-
       const groupDiv = document.createElement('div');
       groupDiv.className = 'projects-time-group';
 
@@ -247,12 +291,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       labelSpan.className = 'projects-time-label';
       labelSpan.textContent = groupLabel;
 
-      const timeSpan = document.createElement('span');
-      timeSpan.className = 'projects-work-time';
-      timeSpan.textContent = `Work Time ${formatTime(groupTotalTime)}`;
-
       headerDiv.appendChild(labelSpan);
-      headerDiv.appendChild(timeSpan);
       groupDiv.appendChild(headerDiv);
 
       groupProjects.forEach(project => {
@@ -294,7 +333,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const projectTime = document.createElement('span');
         projectTime.className = 'projects-project-time';
-        projectTime.textContent = formatTime(project.totalTime);
+        // Show ONLY today's time for this project. If there was no work today,
+        // this will correctly display as 00:00:00.
+        const todaySeconds = typeof project.todaySeconds === 'number'
+          ? project.todaySeconds
+          : 0;
+        projectTime.textContent = formatTime(todaySeconds);
 
         projectControls.appendChild(playIcon);
         projectControls.appendChild(projectTime);
@@ -322,72 +366,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   searchInput.addEventListener('input', (e) => {
     const searchTerm = e.target.value.toLowerCase();
     if (!searchTerm) {
-      loadProjects();
+      // When the search is cleared, show all projects with their cached time data
+      displayProjects(allProjects);
       return;
     }
 
-    // Filter and re-display
+    // Filter and re-display using cached project + time data
     const filtered = allProjects.filter(p => 
       (p.name || '').toLowerCase().includes(searchTerm) ||
       (p.description || '').toLowerCase().includes(searchTerm) ||
       (p.id || '').toLowerCase().includes(searchTerm)
     );
-
-    // Re-fetch time data for filtered projects
-    Promise.all(
-      filtered.map(async (project) => {
-        try {
-          const { data: sessions } = await window.supabase
-            .from('time_sessions')
-            .select('active_duration, break_duration, idle_duration, total_duration, session_date, start_time')
-            .eq('frappe_project_id', project.id)
-            .eq('user_email', userEmail);
-
-          // Calculate total time from all sessions (active + break + idle)
-          const totalSeconds = (sessions || []).reduce((sum, s) => {
-            // Ensure we're working with numbers and handle null/undefined
-            let sessionTime = 0;
-
-            if (s.total_duration && !isNaN(s.total_duration)) {
-              sessionTime = parseInt(s.total_duration, 10) || 0;
-            } else {
-              // Fallback: calculate from components
-              const active = parseInt(s.active_duration || 0, 10) || 0;
-              const breakTime = parseInt(s.break_duration || 0, 10) || 0;
-              const idle = parseInt(s.idle_duration || 0, 10) || 0;
-              sessionTime = active + breakTime + idle;
-            }
-
-            // Validate the session time is reasonable (not more than 24 hours in a single session)
-            if (sessionTime > 86400) { // More than 24 hours
-              console.warn(`Unusually large session time detected: ${sessionTime} seconds for project ${project.id}`);
-              sessionTime = Math.min(sessionTime, 86400);
-            }
-
-            return sum + sessionTime;
-          }, 0);
-          let lastWorked = null;
-          if (sessions && sessions.length > 0) {
-            const sorted = sessions
-              .filter(s => s.session_date || s.start_time)
-              .sort((a, b) => {
-                const dateA = a.session_date || a.start_time;
-                const dateB = b.session_date || b.start_time;
-                return new Date(dateB) - new Date(dateA);
-              });
-            if (sorted.length > 0) {
-              lastWorked = new Date(sorted[0].session_date || sorted[0].start_time);
-            }
-          }
-
-          return { ...project, totalTime: totalSeconds, lastWorked };
-        } catch (err) {
-              return { ...project, totalTime: 0, lastWorked: null };
-        }
-      })
-    ).then(projectsWithTime => {
-      displayProjects(projectsWithTime);
-    });
+    displayProjects(filtered);
   });
 
   // View Reports button

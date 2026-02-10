@@ -249,11 +249,20 @@ document.addEventListener('DOMContentLoaded', () => {
       console.log('[Recovery] Saving session that was not closed (app was force-closed or killed)...');
       clockOut({ auto: true, reason: 'recovered_after_force_close' })
         .then(() => {
+          // On successful recovery, go back to projects as before.
           window.location.href = 'projects.html';
         })
         .catch((err) => {
           console.error('[Recovery] Clock-out failed:', err);
-          window.location.href = 'projects.html';
+          // If recovery clock-out fails (e.g. ERP Next save failed), do NOT
+          // pretend the session closed cleanly. Show a clear message and
+          // route the user to login so they can re-auth and fix it.
+          if (typeof NotificationService !== 'undefined' && NotificationService?.showError) {
+            NotificationService.showError(
+              'Could not safely close your last ERP Next session. Please log in again to resolve it.'
+            );
+          }
+          window.location.href = 'login.html';
         });
       return;
     }
@@ -616,7 +625,8 @@ document.addEventListener('DOMContentLoaded', () => {
         updateTimer();
       } catch (error) {
         console.error('Error starting timer:', error);
-        NotificationService.showError(error.message || 'Failed to start timer');
+        const displayMessage = getTimesheetSyncErrorMessage(error) || error.message || 'Failed to start timer';
+        NotificationService.showError(displayMessage);
       }
     }
   }
@@ -717,7 +727,9 @@ document.addEventListener('DOMContentLoaded', () => {
   async function clockOut({ auto = false, reason = null } = {}) {
     const wasActive = isActive;
     const wasIdle = isIdle;
+    const wasOnBreak = isOnBreak;
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
+    const previousBreakStartTime = breakStartTime ? (breakStartTime instanceof Date ? breakStartTime : new Date(breakStartTime)) : null;
     const previousIdleStartTime = idleStartTime ? new Date(idleStartTime) : null;
     const previousTotalActiveDuration = totalActiveDuration;
 
@@ -726,7 +738,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const clockOutTime = new Date();
 
     let finalActiveDuration = totalActiveDuration;
-    if (wasActive && !isOnBreak && !wasIdle && previousWorkStartTime) {
+    if (wasActive && !wasOnBreak && !wasIdle && previousWorkStartTime) {
       let workElapsed = Math.floor((clockOutTime - previousWorkStartTime) / 1000);
 
       // When auto clock-out is triggered on system resume or after app was killed,
@@ -737,6 +749,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (workElapsed > 0) {
         finalActiveDuration += workElapsed;
+      }
+    }
+
+    // When user is on break at clock-out, include the current break in the saved session
+    let finalBreakDuration = totalBreakDuration;
+    let finalBreakCount = breakCount;
+    if (wasActive && wasOnBreak && previousBreakStartTime) {
+      const breakElapsed = Math.floor((clockOutTime - previousBreakStartTime) / 1000);
+      if (breakElapsed > 0) {
+        finalBreakDuration += breakElapsed;
+        finalBreakCount += 1;
       }
     }
 
@@ -785,8 +808,10 @@ document.addEventListener('DOMContentLoaded', () => {
           sessionDuration,
           totalActiveDuration,
           totalBreakDuration,
+          finalBreakDuration,
           finalActiveDuration,
           wasActive,
+          wasOnBreak,
           wasIdle,
           workStartTime: previousWorkStartTime,
           clockOutTime
@@ -797,13 +822,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
 
         // Calculate total session duration (active + break + idle)
-        const totalSessionDurationSeconds = finalActiveDuration + totalBreakDuration + finalIdleTime;
+        const totalSessionDurationSeconds = finalActiveDuration + finalBreakDuration + finalIdleTime;
         const totalSessionDurationMinutes = totalSessionDurationSeconds / 60;
         const totalSessionDurationHours = totalSessionDurationSeconds / 3600;
 
         console.log('📊 Total Session Duration (Time Tracker):', {
           activeDuration: `${finalActiveDuration}s (${(finalActiveDuration / 60).toFixed(2)} minutes, ${(finalActiveDuration / 3600).toFixed(4)} hours)`,
-          breakDuration: `${totalBreakDuration}s (${(totalBreakDuration / 60).toFixed(2)} minutes, ${(totalBreakDuration / 3600).toFixed(4)} hours)`,
+          breakDuration: `${finalBreakDuration}s (${(finalBreakDuration / 60).toFixed(2)} minutes, ${(finalBreakDuration / 3600).toFixed(4)} hours)`,
           idleDuration: `${finalIdleTime}s (${(finalIdleTime / 60).toFixed(2)} minutes, ${(finalIdleTime / 3600).toFixed(4)} hours)`,
           totalSessionSeconds: `${totalSessionDurationSeconds}s`,
           totalSessionMinutes: `${totalSessionDurationMinutes.toFixed(2)} minutes`,
@@ -812,8 +837,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         // Save session to database and wait for completion
-        // Use totalSessionDurationSeconds (sum of components) instead of sessionDuration (elapsed time)
-        await saveSession(totalSessionDurationSeconds, totalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
+        // Use totalSessionDurationSeconds (sum of components) and final break duration/count (includes current break if user was on break)
+        await saveSession(totalSessionDurationSeconds, finalBreakDuration, finalActiveDuration, finalIdleTime, finalBreakCount);
 
         // Clear session data
         StorageService.removeItem('sessionStartTime');
@@ -904,6 +929,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const today = new Date().toISOString().split('T')[0];
     let selectedProjectId = StorageService.getItem('selectedProjectId');
 
+    // Use mutable copies so we can adjust them based on the canonical
+    // duration that Frappe calculates from from_time/to_time.
+    let adjustedTotalDuration = totalDuration;
+    let adjustedActiveDuration = activeDuration;
+
     console.warn('Skipping Supabase session lookup for Frappe timesheet ID');
 
     console.log('Saving session with data:', {
@@ -916,6 +946,10 @@ document.addEventListener('DOMContentLoaded', () => {
       idleDuration,
       breakCountVal
     });
+
+    // Track Frappe errors so the caller (e.g. recovery flow) can react
+    // correctly after we still attempt Supabase updates.
+    let frappeUpdateError = null;
 
     try {
       // Update Frappe timesheet row using savedocs API
@@ -964,6 +998,32 @@ document.addEventListener('DOMContentLoaded', () => {
               calculatedHours: `${calculatedHours.toFixed(4)} hours`,
               note: 'Frappe will calculate hours automatically via doc.calculate_hours() - this is for reference only'
             });
+
+            // 🔄 Align local session duration with Frappe when there is a large mismatch.
+            // This covers edge cases like app crashes or forced quits where our local
+            // counters might miss part of the wall‑clock time, but Frappe still records
+            // the full from_time → to_time interval.
+            if (Number.isFinite(timeDifferenceSeconds)) {
+              const DIFF_TOLERANCE_SECONDS = 30; // allow small drift without adjustment
+              const delta = timeDifferenceSeconds - adjustedTotalDuration;
+
+              if (delta > DIFF_TOLERANCE_SECONDS) {
+                try {
+                  console.warn('Adjusting session duration to match Frappe wall-clock time:', {
+                    previousTotalSeconds: adjustedTotalDuration,
+                    frappeSeconds: timeDifferenceSeconds,
+                    deltaSeconds: delta
+                  });
+                } catch (_) {
+                  // console may not be available in some environments – ignore
+                }
+
+                // Treat any missing time as additional active time so that
+                // active + break + idle == Frappe from_time/to_time duration.
+                adjustedActiveDuration = Math.max(0, adjustedActiveDuration + delta);
+                adjustedTotalDuration = adjustedActiveDuration + breakDuration + idleDuration;
+              }
+            }
             
             // 4️⃣ Close the active Timesheet Detail ONLY
             // ❌ Do NOT touch from_time
@@ -1040,7 +1100,9 @@ document.addEventListener('DOMContentLoaded', () => {
               await window.frappe.saveTimesheetWithSavedocs(timesheet);
               console.log(`Successfully saved timesheet ${session.frappeTimesheetId} via savedocs with completed row`);
             } catch (saveError) {
-              // Log detailed error information
+              // Log detailed error information, but DO NOT throw here so we
+              // can still attempt Supabase updates. Instead, remember the
+              // error and surface it after Supabase is done.
               console.error('Error saving timesheet via savedocs:', {
                 error: saveError,
                 message: saveError.message,
@@ -1048,14 +1110,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 timesheetId: session.frappeTimesheetId,
                 rowId: session.frappeTimesheetRowId
               });
-              // Re-throw to show error to user
-              throw new Error(`Failed to save timesheet in Frappe: ${saveError.message || 'Unknown error'}`);
+              frappeUpdateError = saveError;
             }
           }
         } catch (frappeError) {
+          // Capture any Frappe error but allow Supabase fallback to proceed.
           console.error('Error updating Frappe timesheet via savedocs:', frappeError);
-          // Show error to user instead of silently continuing
-          NotificationService.showError(`Failed to update Frappe timesheet: ${frappeError.message || 'Unknown error'}`);
+          if (!frappeUpdateError) {
+            frappeUpdateError = frappeError;
+          }
           // Still continue with Supabase update as fallback
         }
       }
@@ -1086,10 +1149,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const updateData = {
           end_time: new Date().toISOString(),
           break_duration: breakDuration,
-          active_duration: activeDuration,
+          active_duration: adjustedActiveDuration,
           idle_duration: idleDuration,
           break_count: breakCountVal,
-          total_duration: totalDuration // Sum of active_duration + break_duration + idle_duration
+          total_duration: adjustedTotalDuration // Sum of active_duration + break_duration + idle_duration
         };
 
         // Add company if available
@@ -1155,10 +1218,10 @@ document.addEventListener('DOMContentLoaded', () => {
           start_time: sessionStartTime ? (sessionStartTime instanceof Date ? sessionStartTime.toISOString() : sessionStartTime) : new Date().toISOString(),
           end_time: new Date().toISOString(),
           break_duration: breakDuration,
-          active_duration: activeDuration,
+          active_duration: adjustedActiveDuration,
           idle_duration: idleDuration,
           break_count: breakCountVal,
-          total_duration: totalDuration, // Sum of active_duration + break_duration + idle_duration
+          total_duration: adjustedTotalDuration, // Sum of active_duration + break_duration + idle_duration
           session_date: today,
           company: company // Add company from user's Employee record
         };
@@ -1196,9 +1259,20 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
       }
+
+      // If Frappe failed at any point, surface that failure after Supabase work
+      // so callers (including recovery) know ERP did not close cleanly.
+      if (frappeUpdateError) {
+        const displayMessage =
+          getTimesheetSyncErrorMessage(frappeUpdateError) ||
+          frappeUpdateError.message ||
+          'Failed to update ERP Next timesheet';
+        throw new Error(displayMessage);
+      }
     } catch (error) {
       console.error('Error saving session:', error);
-      NotificationService.showError(`Error saving session: ${error.message || 'Unknown error'}`);
+      const displayMessage = getTimesheetSyncErrorMessage(error) || error.message || 'Unknown error';
+      NotificationService.showError(`Error saving session: ${displayMessage}`);
     }
   }
 
@@ -1907,6 +1981,8 @@ document.addEventListener('DOMContentLoaded', () => {
             userEmail: email,
             sessionId: sessionIdForUpload, // Use Frappe timesheet ID if available, otherwise currentSessionId
             supabaseSessionId: numericSupabaseSessionId, // Numeric Supabase session ID for time_session_id column
+            // Explicitly pass Frappe timesheet ID so storage path and DB row always know it
+            frappeTimesheetId: frappeTimesheetId || null,
             screenshotData: screenshot.dataURL,
             timestamp: baseTimestamp, // Keep original ISO format
             isIdle,
@@ -2273,11 +2349,33 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Re-run idle auto clock-out check when window becomes visible or focused (e.g. after laptop wake).
-  // Handles the case where the timer didn't tick during sleep — we check immediately on resume.
+  // When window becomes visible or focused (e.g. after laptop wake): run idle clock-out check and,
+  // if the system recently resumed (lid was closed), clock out and go to projects so the user isn't
+  // stuck on the timer page with a stale state (e.g. was on break, lid closed, reopen → go to projects).
   function onVisibilityOrFocus() {
-    if (!sessionStartTime || typeof runIdleAutoClockOutCheck !== 'function') return;
-    runIdleAutoClockOutCheck();
+    if (!sessionStartTime) return;
+
+    // 1) Idle auto clock-out (e.g. 2h idle while timer running)
+    if (typeof runIdleAutoClockOutCheck === 'function') {
+      runIdleAutoClockOutCheck();
+    }
+
+    // 2) If system recently resumed (lid opened after suspend) and we have an active session,
+    //    clock out and navigate to projects. Handles the case where the resume IPC was never
+    //    processed (e.g. user was on break, lid closed, renderer suspended).
+    if (!isActive || lockSuspendClockOutTriggered || !window.electronAPI?.getLastSystemResume) return;
+    const RESUME_WINDOW_MS = 90000; // 90s
+    window.electronAPI.getLastSystemResume().then((ts) => {
+      if (ts == null || typeof ts !== 'number') return;
+      if (Date.now() - ts > RESUME_WINDOW_MS) return;
+      if (lockSuspendClockOutTriggered || !sessionStartTime || !isActive) return;
+      lockSuspendClockOutTriggered = true;
+      console.log('Clock out on visibility: system had resumed recently (lid opened), navigating to projects');
+      clockOut({ auto: true, reason: 'resume_after_suspend' }).catch((err) => {
+        console.error('Resume clock out (on visibility) failed:', err);
+        window.location.href = 'projects.html';
+      });
+    }).catch(() => {});
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') onVisibilityOrFocus();
