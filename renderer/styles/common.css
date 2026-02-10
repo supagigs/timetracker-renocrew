@@ -2226,7 +2226,7 @@ label {
 
 .projects-main-container {
   width: 100%;
-  height: 889px;
+  height: 100vh;
   border-radius: 16px;
   background: #FFF;
   background: color(display-p3 1 1 1);
@@ -2237,10 +2237,10 @@ label {
 
 .projects-header-bar {
   width: 422px;
-  height: 32px;
+  height: 96px;
   align-self: stretch;
-  background: #D9D9D9;
-  background: color(display-p3 0.851 0.851 0.851);
+  background: #FF0000;
+  background: color(display-p3 1 0 0);
   display: flex;
   align-items: center;
   padding: 0 20px;
@@ -2253,7 +2253,7 @@ label {
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   padding: 0;
 }
 
@@ -2318,8 +2318,8 @@ label {
   width: 100%;
   padding-left: 16px;
   padding-right: 45px;
-  padding-top: 10px;
-  padding-bottom: 10px;
+  padding-top: 8px;
+  padding-bottom: 8px;
   border: 1px solid #E5E7EB;
   border-radius: 8px;
   font-size: 16px;
@@ -2328,7 +2328,7 @@ label {
   background: #FFF;
   color: #294359;
   outline: none;
-  height: 40px;
+  height: 32px;
   box-sizing: border-box;
   position: relative;
   z-index: 0;
@@ -2345,9 +2345,9 @@ label {
 
 .projects-filter-icon-container {
   display: flex;
-  width: 40px;
-  height: 40px;
-  padding: 10px;
+  width: 32px;
+  height: 32px;
+  padding: 6px;
   justify-content: center;
   align-items: center;
   border-radius: 8px;
@@ -2382,18 +2382,11 @@ label {
   width: 100%;
   flex-direction: column;
   align-items: center;
+  overflow: hidden;
   gap: 10px;
   padding: 12px;
   flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  /* Hide scrollbar but keep scroll functionality */
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE and Edge */
-}
-
-.projects-content-container::-webkit-scrollbar {
-  display: none; /* Chrome, Safari, Opera */
+  padding-bottom: 10px;
 }
 
 .projects-title {
@@ -2412,20 +2405,13 @@ label {
 .projects-list-container {
   display: flex;
   width: 100%;
-  min-height: 0;
+  min-height: 100%;
   flex: 1;
   padding: 6px;
+  overflow-y: auto;
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  overflow-y: auto;
-  /* Hide scrollbar but keep scroll functionality */
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE and Edge */
-}
-
-.projects-list-container::-webkit-scrollbar {
-  display: none; /* Chrome, Safari, Opera */
 }
 
 .projects-list {
@@ -2564,10 +2550,18 @@ label {
   justify-content: space-between;
   align-items: center;
   width: 100%;
-  padding: 8px 4px 4px;
-  margin-top: auto;
+  padding: 12px 6px 8px;
   flex-shrink: 0;
+  height: 70px;
   border-top: 1px solid #E5E7EB;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #FFF;
+  background: color(display-p3 1 1 1);
+  border-radius: 0 0 16px 16px;
+  z-index: 10;
 }
 
 .projects-view-reports-btn {
@@ -2965,4 +2959,56 @@ label {
   font-style: normal;
   font-weight: 400;
   line-height: var(--paraghraph-sm-line-hieght, 16px);
+}
+
+/* SCROLLBAR STYLING*/
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3b82f6;
+  border-radius: 1px;
+  min-height: 20px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2563eb;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
+  width: 5px;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: #1d4ed8;
+}
+
+/* For Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3b82f6 transparent;
+}
+
+.projects-page-body {
+  height: 100vh;
+  overflow: hidden;   /* ⛔ stop body scrolling */
+}
+
+
+.projects-list-container::-webkit-scrollbar {
+  width: 4px;
+}
+
+.projects-list-container::-webkit-scrollbar-thumb {
+  background: #3b82f6;
+  border-radius: 4px;
+}
+
+.projects-list-container {
+  scrollbar-width: thin;
+  scrollbar-color: #3b82f6 transparent;
 }
