@@ -23,6 +23,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let idle2hClockOutTriggered = false;
   /** Guard: set when lock-screen/suspend clock-out is triggered so we don't fire twice */
   let lockSuspendClockOutTriggered = false;
+  /** Guard: prevents double clockOut when main and beforeunload both fire on window close (e.g. user on break). */
+  let clockOutInProgress = false;
   /** Continuous idle time (seconds) after which we auto clock out — while user is still idle. */
   const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours
   /** Last time we successfully fetched remote status / stats from backend */
@@ -725,6 +727,12 @@ document.addEventListener('DOMContentLoaded', () => {
    * @param {string|null} [options.reason=null] - Optional machine-readable reason (e.g. 'idle_2h').
    */
   async function clockOut({ auto = false, reason = null } = {}) {
+    if (clockOutInProgress) {
+      console.log('Clock out already in progress, skipping duplicate call');
+      return;
+    }
+    clockOutInProgress = true;
+    try {
     const wasActive = isActive;
     const wasIdle = isIdle;
     const wasOnBreak = isOnBreak;
@@ -922,6 +930,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
     }
+    } finally {
+      clockOutInProgress = false;
+    }
   }
 
   async function saveSession(totalDuration, breakDuration, activeDuration, idleDuration = 0, breakCountVal = 0) {
@@ -947,12 +958,97 @@ document.addEventListener('DOMContentLoaded', () => {
       breakCountVal
     });
 
-    // Track Frappe errors so the caller (e.g. recovery flow) can react
-    // correctly after we still attempt Supabase updates.
+    // Track Frappe errors so the caller (e.g. recovery flow) can react after time tracker is saved.
     let frappeUpdateError = null;
 
     try {
-      // Update Frappe timesheet row using savedocs API
+      // 1️⃣ Save to time tracker (Supabase) FIRST so session data is persisted even if window closes during Frappe update (e.g. close while on break).
+      const supabaseSessionId = StorageService.getItem('supabaseSessionId');
+      const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
+
+      const sessionIdToUpdate = supabaseSessionId ||
+        (currentSessionId && !isNaN(parseInt(currentSessionId)) && isFinite(parseInt(currentSessionId)) ? currentSessionId : null);
+
+      if (sessionIdToUpdate) {
+        let company = null;
+        try {
+          const companyResult = await window.auth.getUserCompany(email);
+          if (companyResult && companyResult.success) {
+            company = companyResult.company;
+          }
+        } catch (companyError) {
+          console.warn('Error getting company for user:', companyError);
+        }
+
+        const updateData = {
+          end_time: new Date().toISOString(),
+          break_duration: breakDuration,
+          active_duration: adjustedActiveDuration,
+          idle_duration: idleDuration,
+          break_count: breakCountVal,
+          total_duration: adjustedTotalDuration
+        };
+        if (company) updateData.company = company;
+        if (frappeTimesheetId) updateData.frappe_timesheet_id = frappeTimesheetId;
+        const selectedProjectId = StorageService.getItem('selectedProjectId');
+        const selectedTaskId = StorageService.getItem('selectedTaskId');
+        if (selectedProjectId) updateData.frappe_project_id = selectedProjectId;
+        if (selectedTaskId && selectedTaskId !== '' && selectedTaskId !== null) updateData.frappe_task_id = selectedTaskId;
+
+        console.log('Updating Supabase session with data:', updateData);
+        const { data, error } = await window.supabase
+          .from('time_sessions')
+          .update(updateData)
+          .eq('id', parseInt(sessionIdToUpdate))
+          .select();
+
+        if (error) {
+          console.error('Error updating session:', error);
+          NotificationService.showError(`Failed to update session: ${error.message}`);
+          throw new Error(`Failed to update session: ${error.message}`);
+        }
+        console.log('Session updated successfully:', data);
+      } else {
+        console.warn('No Supabase session ID found, creating new session');
+        const selectedProjectId = StorageService.getItem('selectedProjectId');
+        const selectedTaskId = StorageService.getItem('selectedTaskId');
+        let company = null;
+        try {
+          const companyResult = await window.auth.getUserCompany(email);
+          if (companyResult && companyResult.success) company = companyResult.company;
+        } catch (companyError) {
+          console.warn('Error getting company for user:', companyError);
+        }
+        const insertData = {
+          user_email: email,
+          start_time: sessionStartTime ? (sessionStartTime instanceof Date ? sessionStartTime.toISOString() : sessionStartTime) : new Date().toISOString(),
+          end_time: new Date().toISOString(),
+          break_duration: breakDuration,
+          active_duration: adjustedActiveDuration,
+          idle_duration: idleDuration,
+          break_count: breakCountVal,
+          total_duration: adjustedTotalDuration,
+          session_date: today,
+          company: company
+        };
+        if (frappeTimesheetId) insertData.frappe_timesheet_id = frappeTimesheetId;
+        if (selectedProjectId) insertData.frappe_project_id = selectedProjectId;
+        if (selectedTaskId && selectedTaskId !== '' && selectedTaskId !== null) insertData.frappe_task_id = selectedTaskId;
+        console.log('Inserting new session with data:', insertData);
+        const { data, error } = await window.supabase
+          .from('time_sessions')
+          .insert([insertData])
+          .select()
+          .single();
+        if (error) {
+          console.error('Error saving session:', error);
+          NotificationService.showError(`Failed to save session: ${error.message}`);
+          throw new Error(`Failed to save session: ${error.message}`);
+        }
+        console.log('Session saved successfully:', data);
+      }
+
+      // 2️⃣ Then update Frappe timesheet row using savedocs API
       const frappeSessionStr = StorageService.getItem('frappeSession');
       if (frappeSessionStr) {
         try {
@@ -1123,144 +1219,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      // Check if we have a Supabase session ID (integer) or Frappe timesheet ID (string)
-      const supabaseSessionId = StorageService.getItem('supabaseSessionId');
-      const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
-      
-      // Prefer Supabase session ID for updates (it's an integer)
-      // If currentSessionId is a number, use it; otherwise use supabaseSessionId
-      const sessionIdToUpdate = supabaseSessionId || 
-        (currentSessionId && !isNaN(parseInt(currentSessionId)) && isFinite(parseInt(currentSessionId)) ? currentSessionId : null);
-      
-      if (sessionIdToUpdate) {
-        // Get company for the user (in case it wasn't set initially)
-        let company = null;
-        try {
-          const companyResult = await window.auth.getUserCompany(email);
-          if (companyResult && companyResult.success) {
-            company = companyResult.company;
-          }
-        } catch (companyError) {
-          console.warn('Error getting company for user:', companyError);
-          // Continue without company - non-fatal
-        }
-
-        // Update existing Supabase session
-        const updateData = {
-          end_time: new Date().toISOString(),
-          break_duration: breakDuration,
-          active_duration: adjustedActiveDuration,
-          idle_duration: idleDuration,
-          break_count: breakCountVal,
-          total_duration: adjustedTotalDuration // Sum of active_duration + break_duration + idle_duration
-        };
-
-        // Add company if available
-        if (company) {
-          updateData.company = company;
-        }
-
-        // Add Frappe IDs if available
-        if (frappeTimesheetId) {
-          updateData.frappe_timesheet_id = frappeTimesheetId;
-        }
-        const selectedProjectId = StorageService.getItem('selectedProjectId');
-        const selectedTaskId = StorageService.getItem('selectedTaskId');
-        if (selectedProjectId) {
-          updateData.frappe_project_id = selectedProjectId;
-        }
-        // Only include task ID if it's a valid non-empty value
-        if (selectedTaskId && selectedTaskId !== '' && selectedTaskId !== null) {
-          updateData.frappe_task_id = selectedTaskId;
-        }
-
-        console.log('Updating Supabase session with data:', updateData);
-
-        const { data, error } = await window.supabase
-          .from('time_sessions')
-          .update(updateData)
-          .eq('id', parseInt(sessionIdToUpdate))
-          .select();
-
-        if (error) {
-          console.error('Error updating session:', error);
-          console.error('Error details:', JSON.stringify(error, null, 2));
-          NotificationService.showError(`Failed to update session: ${error.message}`);
-          throw new Error(`Failed to update session: ${error.message}`);
-        } else {
-          console.log('Session updated successfully:', data);
-          if (data && data[0]) {
-            console.log('Updated session includes frappe_project_id:', data[0].frappe_project_id);
-            console.log('Updated session active_duration:', data[0].active_duration);
-          }
-        }
-      } else {
-        // Fallback: create new session (shouldn't happen with new flow, but handle it)
-        console.warn('No Supabase session ID found, creating new session');
-        const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
-        const selectedProjectId = StorageService.getItem('selectedProjectId');
-        const selectedTaskId = StorageService.getItem('selectedTaskId');
-        
-        // Get company for the user
-        let company = null;
-        try {
-          const companyResult = await window.auth.getUserCompany(email);
-          if (companyResult && companyResult.success) {
-            company = companyResult.company;
-          }
-        } catch (companyError) {
-          console.warn('Error getting company for user:', companyError);
-          // Continue without company - non-fatal
-        }
-
-        const insertData = {
-          user_email: email,
-          start_time: sessionStartTime ? (sessionStartTime instanceof Date ? sessionStartTime.toISOString() : sessionStartTime) : new Date().toISOString(),
-          end_time: new Date().toISOString(),
-          break_duration: breakDuration,
-          active_duration: adjustedActiveDuration,
-          idle_duration: idleDuration,
-          break_count: breakCountVal,
-          total_duration: adjustedTotalDuration, // Sum of active_duration + break_duration + idle_duration
-          session_date: today,
-          company: company // Add company from user's Employee record
-        };
-
-        // Add Frappe IDs if available
-        if (frappeTimesheetId) {
-          insertData.frappe_timesheet_id = frappeTimesheetId;
-        }
-        if (selectedProjectId) {
-          insertData.frappe_project_id = selectedProjectId;
-        }
-        // Only include task ID if it's a valid non-empty value
-        if (selectedTaskId && selectedTaskId !== '' && selectedTaskId !== null) {
-          insertData.frappe_task_id = selectedTaskId;
-        }
-
-        console.log('Inserting new session with data:', insertData);
-
-        const { data, error } = await window.supabase
-          .from('time_sessions')
-          .insert([insertData])
-          .select()
-          .single();
-
-        if (error) {
-          console.error('Error saving session:', error);
-          console.error('Error details:', JSON.stringify(error, null, 2));
-          NotificationService.showError(`Failed to save session: ${error.message}`);
-          throw new Error(`Failed to save session: ${error.message}`);
-        } else {
-          console.log('Session saved successfully:', data);
-          if (data) {
-            console.log('Saved session includes frappe_project_id:', data.frappe_project_id);
-            console.log('Saved session active_duration:', data.active_duration);
-          }
-        }
-      }
-
-      // If Frappe failed at any point, surface that failure after Supabase work
+      // If Frappe failed at any point, surface that failure (time tracker already saved)
       // so callers (including recovery) know ERP did not close cleanly.
       if (frappeUpdateError) {
         const displayMessage =
@@ -2199,45 +2158,21 @@ document.addEventListener('DOMContentLoaded', () => {
     clearInterval(timerInterval);
     
     if (isActive && sessionStartTime) {
-      console.log('Window closing, saving active session...');
-      
+      console.log('Window closing, auto clocking out active session (beforeunload)...');
       try {
         // Stop screenshot capture first
         stopScreenshotCapture();
-        
+
         // Remove screenshot notification listener
         if (window.electronAPI && window.electronAPI.removeScreenshotCapturedListener) {
           window.electronAPI.removeScreenshotCapturedListener();
         }
-        
-        // Calculate final durations
-        const now = new Date();
-        const sessionDuration = Math.floor((now - new Date(sessionStartTime)) / 1000);
-        
-        let finalActiveDuration = totalActiveDuration;
-        let finalBreakDuration = totalBreakDuration;
-        
-        // Add current work time if not on break
-        if (isActive && !isOnBreak && !isIdle && workStartTime) {
-          const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
-          finalActiveDuration += workElapsed;
-        }
-        
-        // Add current break time if on break
-        if (isOnBreak && breakStartTime) {
-          const breakElapsed = Math.floor((now - breakStartTime) / 1000);
-          finalBreakDuration += breakElapsed;
-        }
-        
-        // Get final idle time
-        const finalIdleTime = totalIdleTime; // Use stored value since tracker is destroyed
-        
-        // Save the session to database
-        await saveSession(sessionDuration, finalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
-        
-        console.log('Session saved successfully before window close');
+
+        // Use the same clockOut path as manual/auto clock-outs so that
+        // break/idle durations and DB updates are handled consistently.
+        await clockOut({ auto: true, reason: 'window_close' });
       } catch (error) {
-        console.error('Error saving session before window close:', error);
+        console.error('Error auto clocking out before window close:', error);
       }
     }
   });
