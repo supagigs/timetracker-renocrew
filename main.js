@@ -246,7 +246,8 @@ const {
   getTimesheetById,
   saveTimesheetWithSavedocs,
   getFrappeServerTime,
-  getUsersAssignedToProject
+  getUsersAssignedToProject, 
+  resolveRowForStart
 } = require('./frappeService');
 const path = require('path');
 const fs = require('fs');
@@ -3996,6 +3997,10 @@ ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
 
 ipcMain.handle('frappe:update-timesheet-row', async (_e, payload) => {
   return await updateTimesheetRow(payload);
+});
+
+ipcMain.handle('frappe:resolve-row-for-start', async (_e, payload) => {
+  return await resolveRowForStart(payload);
 });
 
 ipcMain.handle('frappe:get-timesheet-by-id', async (_e, timesheetId) => {

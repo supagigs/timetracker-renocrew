@@ -1028,64 +1028,102 @@ async function getOrCreateTimesheet({ project, task }) {
   return { timesheet: newTimesheet.name };
 }
 
-async function resolveRowForStart(timesheetId, project, task) {
-  const doc = await getTimesheetById(timesheetId);
-  const logs = Array.isArray(doc?.time_logs) ? doc.time_logs : [];
+async function resolveRowForStart({ timesheet, project, task }) {
+  const doc = await getTimesheetById(timesheet);
+  const timeLogs = Array.isArray(doc.time_logs) ? doc.time_logs : [];
 
-  // 1️⃣ If a row is currently running → resume
-  const runningRow = logs.find(
-    tl => tl?.from_time && !tl?.to_time
+  const runningRows = timeLogs.filter(
+    row => row && row.from_time && !row.to_time
   );
 
-  if (runningRow) {
-    return runningRow.name;
+  // 🚨 HARD GUARD
+  if (runningRows.length > 1) {
+    throw new Error(
+      'Multiple running rows detected. Please fix this timesheet manually in ERPNext.'
+    );
   }
 
-  if (runningRows.length > 1) {
-    throw new Error("Multiple running rows detected. Manual correction required.");
+  // Resume existing
+  if (runningRows.length === 1) {
+    return runningRows[0].name;
   }
-  
-  // 2️⃣ Otherwise ALWAYS create new row
-  const newRow = await createNewRowInTimesheet(timesheetId, project, task);
+
+  // Otherwise create new
+  const newRow = await createNewRowInTimesheet(timesheet, project, task);
   return newRow.name;
 }
+
 
 /**
  * Start a timesheet session
  * Uses Frappe method endpoint: POST /api/method/start_timesheet_session
  */
-/*
-
 async function startTimesheetSession({ timesheet, row }) {
   const frappe = createFrappeClient();
 
-  try {
-    const res = await frappe.post(
-      "/api/method/start_timesheet_session",
-      { timesheet, row }
-    );
-
-    return res.data.message;
-
-  } catch (err) {
-    const status = err?.response?.status;
-
-    if (status === 417) {
-      // Recovery: check if already running
-      const doc = await getTimesheetById(timesheet);
-      const logs = Array.isArray(doc?.time_logs) ? doc.time_logs : [];
-
-      const target = logs.find(tl => tl?.name === row);
-
-      if (target?.from_time && !target?.to_time) {
-        return { ok: true, already_started: true };
-      }
-    }
-
-    throw err;
+  if (!timesheet || !row) {
+    throw new Error('Timesheet and row are required');
   }
+
+  const res = await frappe.post(
+    '/api/method/start_timesheet_session',
+    { timesheet, row }
+  );
+
+  if (!res?.data?.message) {
+    throw new Error('Invalid response from start_timesheet_session');
+  }
+
+  return res.data.message;
 }
 
+async function createNewRowInTimesheet(timesheetId, project, task) {
+  const frappe = createFrappeClient();
+
+  if (!timesheetId) {
+    throw new Error('Timesheet ID required');
+  }
+
+  const res = await frappe.get(`/api/resource/Timesheet/${timesheetId}`);
+  const doc = res?.data?.data;
+
+  if (!doc) {
+    throw new Error('Failed to fetch timesheet');
+  }
+
+  if (doc.docstatus !== 0) {
+    throw new Error('Cannot modify submitted timesheet');
+  }
+
+  const newRow = {
+    doctype: 'Timesheet Detail',
+    project,
+    task: task || null,
+    from_time: null,
+    to_time: null,
+    hours: 0
+  };
+
+  const updatedLogs = Array.isArray(doc.time_logs)
+    ? [...doc.time_logs, newRow]
+    : [newRow];
+
+  const updateRes = await frappe.put(
+    `/api/resource/Timesheet/${timesheetId}`,
+    { time_logs: updatedLogs }
+  );
+
+  const updatedDoc = updateRes?.data?.data;
+
+  const insertedRow =
+    updatedDoc.time_logs[updatedDoc.time_logs.length - 1];
+
+  if (!insertedRow?.name) {
+    throw new Error('Failed to create new timesheet row');
+  }
+
+  return insertedRow;
+}
 
 /**
  * Update a timesheet row with hours
@@ -2240,6 +2278,8 @@ module.exports = {
   getTimesheetById,
   saveTimesheetWithSavedocs,
   getFrappeServerTime,
-  getUsersAssignedToProject
+  getUsersAssignedToProject,
+  resolveRowForStart,
+  createNewRowInTimesheet
 };
 

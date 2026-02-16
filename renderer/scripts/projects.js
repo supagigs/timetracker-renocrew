@@ -65,7 +65,8 @@ document.addEventListener('DOMContentLoaded', async () => {
               totalTime,
               lastWorked,
               lastWorkedDaySeconds,
-              todaySeconds
+              todaySeconds,
+              lastWorkedDateKey
             } = calculateProjectTimeData(project.id, sessions);
 
             return {
@@ -73,7 +74,8 @@ document.addEventListener('DOMContentLoaded', async () => {
               totalTime,
               lastWorked,
               lastWorkedDaySeconds,
-              todaySeconds
+              todaySeconds,
+              lastWorkedDateKey
             };
           } catch (err) {
             console.error('Error processing project:', project.id, err);
@@ -163,65 +165,71 @@ document.addEventListener('DOMContentLoaded', async () => {
    *   todaySeconds: number
    * }}
    */
+  /** Get local date string YYYY-MM-DD from a Date or ISO string (used so "today" is user's calendar day, not UTC). */
+  function toLocalDateKey(dateOrString) {
+    const d = typeof dateOrString === 'string' ? new Date(dateOrString) : dateOrString;
+    if (isNaN(d.getTime())) return null;
+    const y = d.getFullYear();
+    const m = d.getMonth() + 1;
+    const day = d.getDate();
+    return `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
   function calculateProjectTimeData(projectId, sessions) {
     const dailyTotals = {};
     let totalSeconds = 0;
 
     const now = new Date();
-    const todayKey = now.toISOString().split('T')[0]; // YYYY-MM-DD for "today"
+    const todayKey = toLocalDateKey(now); // User's local "today" (YYYY-MM-DD)
 
     (sessions || []).forEach((s) => {
-      // Ensure we're working with numbers and handle null/undefined
       let sessionTime = 0;
 
       if (s.total_duration && !isNaN(s.total_duration)) {
         sessionTime = parseInt(s.total_duration, 10) || 0;
       } else {
-        // Fallback: calculate from components
         const active = parseInt(s.active_duration || 0, 10) || 0;
         const breakTime = parseInt(s.break_duration || 0, 10) || 0;
         const idle = parseInt(s.idle_duration || 0, 10) || 0;
         sessionTime = active + breakTime + idle;
       }
 
-      // Validate the session time is reasonable (not more than 24 hours in a single session)
-      if (sessionTime > 86400) { // More than 24 hours in a single session
+      if (sessionTime > 86400) {
         console.warn(`Unusually large session time detected: ${sessionTime} seconds for project ${projectId}`);
-        // Cap at 24 hours to prevent display issues
         sessionTime = Math.min(sessionTime, 86400);
       }
 
       totalSeconds += sessionTime;
 
-      // Bucket this session's time by its calendar day
+      // Bucket by the session's calendar day in the user's local timezone
       const rawDate = s.session_date || s.start_time;
       if (!rawDate) return;
-      const dateObj = new Date(rawDate);
-      if (isNaN(dateObj.getTime())) return;
-      const dateKey = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
+      const dateKey = toLocalDateKey(rawDate);
+      if (!dateKey) return;
       dailyTotals[dateKey] = (dailyTotals[dateKey] || 0) + sessionTime;
     });
 
     let lastWorked = null;
     let lastWorkedDaySeconds = 0;
+    let lastWorkedDateKey = null; // Keep local date string for getDateLabel
 
     const dateKeys = Object.keys(dailyTotals);
     if (dateKeys.length > 0) {
-      // Sort date keys descending to find the most recent day with work
       dateKeys.sort((a, b) => new Date(b) - new Date(a));
       const mostRecentKey = dateKeys[0];
-      lastWorked = new Date(mostRecentKey);
+      lastWorkedDateKey = mostRecentKey;
+      lastWorked = new Date(mostRecentKey + 'T12:00:00'); // Noon local so getDateLabel compares correct calendar day
       lastWorkedDaySeconds = dailyTotals[mostRecentKey] || 0;
     }
 
-    // Time worked today (will be 0 if there are no sessions for today)
     const todaySeconds = dailyTotals[todayKey] || 0;
 
     return {
       totalTime: totalSeconds,
       lastWorked,
       lastWorkedDaySeconds,
-      todaySeconds
+      todaySeconds,
+      lastWorkedDateKey // so display can use local date for "Today" vs "X days ago"
     };
   }
 

@@ -9,9 +9,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const projectTitle = document.getElementById('projectTitle');
   const projectSubtitle = document.getElementById('projectSubtitle');
   const clockInInstruction = document.getElementById('clockInInstruction');
+  const FRAPPE_REQUEST_TIMEOUT_MS = 15000; // 15 seconds
+
 
   // Get project info from storage
   let selectedProjectId = StorageService.getItem('selectedProjectId');
+  let clockOutInProgress = false;
   const selectedProjectName = StorageService.getItem('selectedProjectName') || 'Project';
   const displayName = StorageService.getItem('displayName') || 'User';
   const userEmail = StorageService.getItem('userEmail');
@@ -49,6 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Timer state variables
   let timerInterval = null;
   let sessionPersistInterval = null;
+  let sessionDbUpdateInterval = null; // Updates time_sessions in DB every 30s
   let sessionStartTime = null;
   let currentSessionId = null;
   let workStartTime = null;
@@ -206,6 +210,38 @@ document.addEventListener('DOMContentLoaded', () => {
     StorageService.setItem('totalIdleTime', String(computedIdle));
   }
 
+  /** Update time_sessions row in DB with current durations (called every 30s while session is active). */
+  async function updateTimeTrackerSessionInDb() {
+    if (!sessionStartTime || !isActive) return;
+    const supabaseSessionId = StorageService.getItem('supabaseSessionId');
+    if (!supabaseSessionId) return;
+    const now = new Date();
+    let computedActive = totalActiveDuration;
+    if (isActive && !isOnBreak && !isIdle && workStartTime) {
+      computedActive += Math.floor((now - new Date(workStartTime)) / 1000);
+    }
+    let computedBreak = totalBreakDuration;
+    if (isOnBreak && breakStartTime) {
+      computedBreak += Math.floor((now - new Date(breakStartTime)) / 1000);
+    }
+    const computedIdle = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
+    const totalDuration = computedActive + computedBreak + computedIdle;
+    try {
+      const { error } = await window.supabase
+        .from('time_sessions')
+        .update({
+          active_duration: computedActive,
+          break_duration: computedBreak,
+          idle_duration: computedIdle,
+          total_duration: totalDuration
+        })
+        .eq('id', parseInt(supabaseSessionId, 10));
+      if (error) console.warn('updateTimeTrackerSessionInDb failed:', error);
+    } catch (err) {
+      console.warn('updateTimeTrackerSessionInDb error:', err);
+    }
+  }
+
   // Helper function to update timer state in main process
   function updateTimerStateInMainProcess(active) {
     if (window.electronAPI && window.electronAPI.setTimerActive) {
@@ -291,281 +327,260 @@ document.addEventListener('DOMContentLoaded', () => {
   // Start timer (Clock In) — transactional: only show running after Frappe + DB succeed
   async function startTimer() {
     if (isActive) return;
+  
     if (!selectedProjectId) {
-      if (typeof NotificationService !== 'undefined' && NotificationService.showError) {
-        NotificationService.showError('Project is required to start tracking.');
-      } else {
-        alert('Project is required to start tracking.');
-      }
+      NotificationService?.showError?.('Project is required to start tracking.');
       return;
     }
-
-    // Lock UI: disable button so we don't double-start
+  
     const originalLabel = clockInBtn.textContent;
     clockInBtn.disabled = true;
     clockInBtn.textContent = 'Starting...';
-
+  
     try {
-      // Clear any cached Frappe session so we always get/create for THIS project (avoids reusing another project's timesheet)
+      // Clear cached session
       StorageService.removeItem('frappeSession');
       StorageService.removeItem('frappeTimesheetId');
       StorageService.removeItem('frappeTimesheetRowId');
-
+  
+      const projectId = StorageService.getItem('selectedProjectId');
+      let taskId = StorageService.getItem('selectedTaskId') || null;
+  
       // 1️⃣ Ensure timesheet container exists
       const { timesheet } = await callWithTimeout(
         window.frappe.getOrCreateTimesheet({
-          project: selectedProjectId
-        })
+          project: projectId,
+          task: taskId
+        }),
+        FRAPPE_REQUEST_TIMEOUT_MS
       );
-
+  
       if (!timesheet) {
         throw new Error('Failed to get or create timesheet');
       }
-
-      // 2️⃣ Safely determine correct row (resume or create new)
+  
+      // 2️⃣ Resolve correct row (resume running OR create new)
       const row = await callWithTimeout(
         window.frappe.resolveRowForStart({
           timesheet,
-          project: selectedProjectId
-        })
+          project: projectId,
+          task: taskId
+        }),
+        FRAPPE_REQUEST_TIMEOUT_MS
       );
-
+  
       if (!row) {
         throw new Error('Failed to resolve timesheet row');
       }
-
-
+  
+      // 3️⃣ Start session in Frappe
+      await callWithTimeout(
+        window.frappe.startTimesheetSession({ timesheet, row }),
+        FRAPPE_REQUEST_TIMEOUT_MS
+      );
+  
       const session = {
         frappeTimesheetId: timesheet,
         frappeTimesheetRowId: row
       };
-
-      await callWithTimeout(window.frappe.startTimesheetSession({
-        timesheet: session.frappeTimesheetId,
-        row: session.frappeTimesheetRowId
-      }));
-
-      // Only after Frappe confirms — set session and UI
+  
+      StorageService.setItem('frappeSession', JSON.stringify(session));
+      StorageService.setItem('frappeTimesheetId', timesheet);
+      StorageService.setItem('frappeTimesheetRowId', row);
+  
+      // 3b️⃣ Create time_sessions entry in time tracker DB and store its id
+      const email = StorageService.getItem('userEmail');
+      const today = new Date().toISOString().split('T')[0];
+      const startTimeIso = new Date().toISOString();
+      if (window.supabase && email) {
+        const { data: inserted, error: insertError } = await window.supabase
+          .from('time_sessions')
+          .insert([{
+            user_email: email,
+            start_time: startTimeIso,
+            session_date: today,
+            frappe_timesheet_id: timesheet,
+            frappe_project_id: projectId || null,
+            frappe_task_id: taskId || null,
+            active_duration: 0,
+            break_duration: 0,
+            idle_duration: 0,
+            total_duration: 0,
+            break_count: 0
+          }])
+          .select('id')
+          .single();
+        if (insertError) {
+          console.error('Error creating time_sessions entry:', insertError);
+          throw new Error(`Failed to create time tracker session: ${insertError.message}`);
+        }
+        if (inserted && inserted.id != null) {
+          const supabaseSessionId = String(inserted.id);
+          StorageService.setItem('supabaseSessionId', supabaseSessionId);
+          StorageService.setItem('currentSessionId', supabaseSessionId);
+          currentSessionId = supabaseSessionId;
+          if (window.electronAPI && window.electronAPI.updateBackgroundScreenshotSessionId) {
+            window.electronAPI.updateBackgroundScreenshotSessionId(inserted.id).catch(err => {
+              console.warn('updateBackgroundScreenshotSessionId failed:', err);
+            });
+          }
+        }
+      }
+  
+      // 4️⃣ Only after Frappe confirms → activate UI
       sessionStartTime = new Date();
       workStartTime = new Date();
+  
       StorageService.setItem('sessionStartTime', sessionStartTime.toISOString());
-      StorageService.setItem('isActive', 'true');
       StorageService.setItem('workStartTime', workStartTime.toISOString());
-      StorageService.setItem('frappeSession', JSON.stringify(session));
-      StorageService.setItem('frappeTimesheetId', session.frappeTimesheetId);
-      StorageService.setItem('frappeTimesheetRowId', session.frappeTimesheetRowId);
-
+      StorageService.setItem('isActive', 'true');
+  
       isActive = true;
       clockInBtn.textContent = 'Clock Out';
       clockInBtn.classList.remove('start-project-btn-primary');
       clockInBtn.classList.add('start-project-btn-danger');
       clockInBtn.disabled = false;
       takeBreakBtn.disabled = false;
-      resumeBtn.style.display = 'none';
-      if (clockInInstruction) clockInInstruction.style.display = 'none';
+  
       updateTimerStateInMainProcess(true);
-      idle2hClockOutTriggered = false;
-      lockSuspendClockOutTriggered = false;
-
+  
       if (idleTracker) idleTracker.startTracking();
-      if (!timerInterval) {
-        timerInterval = setInterval(updateTimer, 1000);
-        sessionPersistInterval = setInterval(persistSessionSnapshotForRecovery, 15000);
-      }
+      timerInterval = setInterval(updateTimer, 1000);
+      sessionPersistInterval = setInterval(persistSessionSnapshotForRecovery, 15000);
+      sessionDbUpdateInterval = setInterval(updateTimeTrackerSessionInDb, 30000); // Update DB every 30s
       updateTimer();
       startScreenshotCapture();
-
-      // Create Supabase time_sessions record (non-blocking; don't block UI)
-      (async () => {
-        try {
-          if (window.supabase) {
-            const startTimeISO = sessionStartTime.toISOString();
-            const today = new Date().toISOString().split('T')[0];
-            let company = null;
-            try {
-              const companyResult = await Promise.race([
-                window.auth.getUserCompany(userEmail).catch(() => null),
-                new Promise(r => setTimeout(() => r(null), 1000))
-              ]);
-              if (companyResult && companyResult.success) company = companyResult.company;
-            } catch (_) {}
-            const sessionData = {
-              user_email: userEmail,
-              start_time: startTimeISO,
-              end_time: null,
-              break_duration: 0,
-              active_duration: 0,
-              idle_duration: 0,
-              break_count: 0,
-              total_duration: 0,
-              session_date: today,
-              frappe_timesheet_id: session.frappeTimesheetId,
-              frappe_project_id: selectedProjectId || null,
-              frappe_task_id: null,
-              company
-            };
-            const { data: supabaseSession, error: sessionError } = await window.supabase
-              .from('time_sessions')
-              .insert([sessionData])
-              .select('id')
-              .single();
-            if (sessionError) {
-              console.error('Error creating Supabase session:', sessionError);
-            } else if (supabaseSession) {
-              StorageService.setItem('supabaseSessionId', String(supabaseSession.id));
-              currentSessionId = supabaseSession.id;
-              if (window.electronAPI && window.electronAPI.updateBackgroundScreenshotSessionId) {
-                window.electronAPI.updateBackgroundScreenshotSessionId(supabaseSession.id).catch(() => {});
-              }
-            }
-          }
-        } catch (e) {
-          console.error('Error creating Supabase session:', e);
-        }
-      })();
+  
     } catch (error) {
-      console.error('Error in start timer:', error);
+      console.error('Error starting timer:', error);
       clockInBtn.disabled = false;
       clockInBtn.textContent = originalLabel || 'Clock In';
-      const msg = (error && error.message) ? error.message : 'Failed to start timer. Please try again.';
-      if (typeof NotificationService !== 'undefined' && NotificationService.showError) {
-        NotificationService.showError(msg);
-      } else {
-        alert(msg);
-      }
+  
+      const msg = error?.message || 'Failed to start timer';
+      NotificationService?.showError?.(msg);
     }
   }
-
+  
   // Stop timer (Clock Out)
   async function clockOut({ auto = false, reason = null } = {}) {
+    if (clockOutInProgress) {
+      console.warn('[TRACKER] clockOut ignored — already in progress');
+      return;
+    }
+  
+    clockOutInProgress = true;
     const wasActive = isActive;
-    const wasOnBreak = isOnBreak;
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
-    const previousTotalActiveDuration = totalActiveDuration;
     const clockOutTime = new Date();
-
-    // If user is on break, save the current break duration before clocking out
+  
     let finalBreakDuration = totalBreakDuration;
-    if (wasOnBreak && breakStartTime) {
+    if (isOnBreak && breakStartTime) {
       const breakElapsed = Math.floor((clockOutTime - new Date(breakStartTime)) / 1000);
       if (breakElapsed > 0) {
         finalBreakDuration += breakElapsed;
-        breakCount++; // Count this break
+        breakCount++;
       }
     }
-
+  
     let finalActiveDuration = totalActiveDuration;
-    if (wasActive && !wasOnBreak && !isIdle && previousWorkStartTime) {
+    if (wasActive && !isOnBreak && !isIdle && previousWorkStartTime) {
       const workElapsed = Math.floor((clockOutTime - previousWorkStartTime) / 1000);
       if (workElapsed > 0) {
         finalActiveDuration += workElapsed;
       }
     }
-
+  
+    // Stop UI intervals ONLY (do not change state yet)
     clearInterval(timerInterval);
     timerInterval = null;
+  
     if (sessionPersistInterval) {
       clearInterval(sessionPersistInterval);
       sessionPersistInterval = null;
     }
-
-    // Stop background screenshot capture when clocking out
-    stopScreenshotCapture();
-
-    // Stop idle tracking
-    if (idleTracker) {
-      idleTracker.stopTracking();
+    if (sessionDbUpdateInterval) {
+      clearInterval(sessionDbUpdateInterval);
+      sessionDbUpdateInterval = null;
     }
-
-    isActive = false;
-    StorageService.setItem('isActive', 'false');
-    isIdle = false;
-    StorageService.setItem('isIdle', 'false');
-    workStartTime = null;
-    StorageService.removeItem('workStartTime');
-    idleStartTime = null;
-    StorageService.removeItem('idleStartTime');
-
-    updateTimerStateInMainProcess(false);
-
-    const shouldProceed = true; // Always proceed without confirmation
-
-    if (shouldProceed) {
-      try {
-        const sessionStart = sessionStartTime instanceof Date ? sessionStartTime : new Date(sessionStartTime);
-        const sessionDuration = sessionStart ? Math.floor((clockOutTime - sessionStart) / 1000) : 0;
-
-        const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
-        const totalSessionDurationSeconds = finalActiveDuration + finalBreakDuration + finalIdleTime;
-
-        // Save session to database
-        // Use totalSessionDurationSeconds (sum of components) instead of sessionDuration (elapsed time)
-        await saveSession(totalSessionDurationSeconds, finalBreakDuration, finalActiveDuration, finalIdleTime, breakCount);
-
-        // Clear session data
-        StorageService.removeItem('sessionStartTime');
-        StorageService.removeItem('currentSessionId');
-        StorageService.removeItem('supabaseSessionId');
-        StorageService.removeItem('frappeSession');
-        StorageService.removeItem('frappeTimesheetId');
-        StorageService.removeItem('frappeTimesheetRowId');
-        StorageService.removeItem('workStartTime');
-        StorageService.removeItem('isActive');
-        StorageService.removeItem('isOnBreak');
-        StorageService.removeItem('breakDuration');
-        StorageService.removeItem('activeDuration');
-        StorageService.removeItem('breakCount');
-        StorageService.removeItem('totalIdleTime');
-        StorageService.removeItem('isIdle');
-        StorageService.removeItem('idleStartTime');
-
-        // Reset idle tracker
-        if (idleTracker) {
-          idleTracker.destroy();
-          idleTracker = null;
-        }
-        totalIdleTime = 0;
-
-        // Reset buttons
-        clockInBtn.textContent = 'Clock In';
-        clockInBtn.classList.remove('start-project-btn-danger');
-        clockInBtn.classList.add('start-project-btn-primary');
-        resumeBtn.style.display = 'none';
-        takeBreakBtn.style.display = 'inline-flex';
-        takeBreakBtn.disabled = true;
-        if (clockInInstruction) clockInInstruction.style.display = '';
-
-        // Reset timer display
-        timeDisplay.textContent = '00:00:00';
-
-        // Session ended silently
-        // Only navigate if not auto clock out (window close)
-        if (!auto) {
-          window.location.href = 'projects.html';
-        }
-      } catch (error) {
-        console.error('Error during clock out:', error);
-        alert('Error ending session. Please try again.');
+  
+    stopScreenshotCapture();
+    if (idleTracker) idleTracker.stopTracking();
+  
+    try {
+      const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
+      const totalSessionDurationSeconds =
+        finalActiveDuration + finalBreakDuration + finalIdleTime;
+  
+      await saveSession(
+        totalSessionDurationSeconds,
+        finalBreakDuration,
+        finalActiveDuration,
+        finalIdleTime,
+        breakCount
+      );
+  
+      // ✅ ONLY NOW mark as stopped
+      isActive = false;
+      isIdle = false;
+      workStartTime = null;
+      idleStartTime = null;
+  
+      StorageService.setItem('isActive', 'false');
+      StorageService.setItem('isIdle', 'false');
+      StorageService.removeItem('workStartTime');
+      StorageService.removeItem('idleStartTime');
+  
+      updateTimerStateInMainProcess(false);
+  
+      // Clear session storage
+      StorageService.removeItem('sessionStartTime');
+      StorageService.removeItem('currentSessionId');
+      StorageService.removeItem('supabaseSessionId');
+      StorageService.removeItem('frappeSession');
+      StorageService.removeItem('frappeTimesheetId');
+      StorageService.removeItem('frappeTimesheetRowId');
+      StorageService.removeItem('breakDuration');
+      StorageService.removeItem('activeDuration');
+      StorageService.removeItem('breakCount');
+      StorageService.removeItem('totalIdleTime');
+      StorageService.removeItem('isOnBreak');
+  
+      if (idleTracker) {
+        idleTracker.destroy();
+        idleTracker = null;
       }
-    } else {
-      // User cancelled - restore state
-      totalActiveDuration = previousTotalActiveDuration;
-      StorageService.setItem('activeDuration', previousTotalActiveDuration.toString());
-      isActive = wasActive;
-      StorageService.setItem('isActive', wasActive ? 'true' : 'false');
-      if (wasActive) {
-        if (previousWorkStartTime && !wasIdle) {
-          workStartTime = previousWorkStartTime;
-          StorageService.setItem('workStartTime', previousWorkStartTime.toISOString());
-        }
-        updateTimerStateInMainProcess(true);
-        timerInterval = setInterval(updateTimer, 1000);
-        if (idleTracker) {
-          idleTracker.startTracking();
-        }
+  
+      clockInBtn.textContent = 'Clock In';
+      clockInBtn.classList.remove('start-project-btn-danger');
+      clockInBtn.classList.add('start-project-btn-primary');
+  
+      if (!auto) {
+        window.location.href = 'projects.html';
       }
+  
+    } catch (error) {
+      console.error('Clock out failed — restoring state:', error);
+  
+      // 🔁 ROLLBACK
+      isActive = true;
+      StorageService.setItem('isActive', 'true');
+      updateTimerStateInMainProcess(true);
+  
+      timerInterval = setInterval(updateTimer, 1000);
+      sessionPersistInterval = setInterval(persistSessionSnapshotForRecovery, 15000);
+      sessionDbUpdateInterval = setInterval(updateTimeTrackerSessionInDb, 30000);
+  
+      if (idleTracker) idleTracker.startTracking();
+      startScreenshotCapture();
+  
+      NotificationService?.showError?.(
+        error.message || 'Failed to stop timer. Please try again.'
+      );
+    }finally{
+      clockOutInProgress = false;
     }
   }
+  
 
   // Save session to database
   async function saveSession(totalDuration, breakDuration, activeDuration, idleDuration = 0, breakCountVal = 0) {
@@ -781,6 +796,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!timerInterval) {
       timerInterval = setInterval(updateTimer, 1000);
       sessionPersistInterval = setInterval(persistSessionSnapshotForRecovery, 15000);
+      sessionDbUpdateInterval = setInterval(updateTimeTrackerSessionInDb, 30000);
     }
     const screenshotCaptureActive = StorageService.getItem('screenshotCaptureActive') === 'true';
     if (screenshotCaptureActive) startScreenshotCapture();

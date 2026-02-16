@@ -1,5 +1,5 @@
 import { createServerSupabaseClient } from './supabaseServer';
-import { getFrappeCurrentUserRoleProfile, getFrappeRoleProfileForEmail } from './frappeClient';
+import { getFrappeRoleProfileForEmail } from './frappeClient';
 
 export type UserProfile = {
   id: number | null;
@@ -21,6 +21,46 @@ function formatProfileError(err: unknown): string {
     return parts.join(' ');
   }
   return String(err);
+}
+
+function isNetworkError(msg: string): boolean {
+  return msg.includes('fetch failed') || msg.includes('Failed to fetch') || msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND');
+}
+
+/** When Supabase is unreachable, try to build a minimal profile from Frappe so the page still works. */
+async function fetchMinimalProfileFromFrappe(email: string): Promise<UserProfile | null> {
+  try {
+    const { createFrappeClient } = await import('@/lib/frappeClient');
+    const frappe = createFrappeClient(true);
+    const role = await getFrappeRoleProfileForEmail(email);
+
+    let displayName: string | null = null;
+    try {
+      const userRes = await frappe.get('/api/resource/User', {
+        params: {
+          fields: JSON.stringify(['name', 'full_name']),
+          filters: JSON.stringify([['name', '=', email]]),
+          limit_page_length: 1,
+        },
+      });
+      const users = userRes?.data?.data || [];
+      if (users.length > 0 && users[0]?.full_name) {
+        displayName = users[0].full_name;
+      }
+    } catch {
+      // ignore
+    }
+
+    return {
+      id: null,
+      email,
+      displayName,
+      role,
+      company: null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchUserProfile(email: string): Promise<UserProfile | null> {
@@ -50,26 +90,27 @@ export async function fetchUserProfile(email: string): Promise<UserProfile | nul
     data = result.data;
     error = result.error;
   } catch (fetchErr) {
-    // Supabase client can throw on network failure (e.g. "TypeError: fetch failed")
     const msg = formatProfileError(fetchErr);
-    console.error('[userProfile] Failed to fetch profile:', msg);
-    if (msg.includes('fetch failed') || msg.includes('Failed to fetch')) {
+    if (isNetworkError(msg)) {
       console.warn(
-        '[userProfile] Network error: ensure NEXT_PUBLIC_SUPABASE_URL is reachable from this server (no firewall/proxy blocking outbound HTTPS).'
+        '[userProfile] Supabase unreachable (fetch failed). Using Frappe fallback. Ensure NEXT_PUBLIC_SUPABASE_URL is set in time-tracker-reports/.env.local if you need Supabase.'
       );
+      return fetchMinimalProfileFromFrappe(normalizedEmail);
     }
+    console.error('[userProfile] Failed to fetch profile:', msg);
     return null;
   }
 
   if (error) {
     const errMsg = error.message || formatProfileError(error);
+    if (isNetworkError(errMsg)) {
+      console.warn(
+        '[userProfile] Supabase unreachable (query error). Using Frappe fallback. Ensure NEXT_PUBLIC_SUPABASE_URL is set in time-tracker-reports/.env.local if you need Supabase.'
+      );
+      return fetchMinimalProfileFromFrappe(normalizedEmail);
+    }
     const cause = (error as { cause?: unknown }).cause;
     console.error('[userProfile] Supabase query error:', errMsg, cause != null ? `(cause: ${cause})` : '');
-    if (errMsg.includes('fetch failed') || errMsg.includes('Failed to fetch')) {
-      console.warn(
-        '[userProfile] Network error: ensure NEXT_PUBLIC_SUPABASE_URL is reachable from this server (no firewall/proxy blocking outbound HTTPS).'
-      );
-    }
     return null;
   }
 
