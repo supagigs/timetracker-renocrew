@@ -1279,8 +1279,8 @@ function createWindow() {
           mainWindow.close();
         } else if (saveResult && saveResult.error === 'Save function not available') {
           // Current page has no save handler (e.g. user on projects). Navigate to tracker to save, then close on IPC.
-          logInfo('WindowClose', 'Navigating to tracker to save session before close');
-          const trackerPath = path.join(__dirname, 'renderer', 'screens', 'tracker.html');
+          logInfo('WindowClose', 'Navigating to startProject to save session before close');
+          const startProjectPath = path.join(__dirname, 'renderer', 'screens', 'startProject.html');
           const closeTimeout = setTimeout(() => {
             logWarn('WindowClose', 'Close-after-save timeout, closing window');
             isForceClosing = true;
@@ -1292,9 +1292,9 @@ function createWindow() {
             isForceClosing = true;
             mainWindow.close();
           });
-          mainWindow.loadFile(trackerPath, { query: { closeAfterSave: '1' } }).catch((err) => {
+          mainWindow.loadFile(startProjectPath, { query: { closeAfterSave: '1' } }).catch((err) => {
             clearTimeout(closeTimeout);
-            logError('WindowClose', `Failed to load tracker for save: ${err.message}`);
+            logError('WindowClose', `Failed to load startProject for save: ${err.message}`);
             isForceClosing = true;
             mainWindow.close();
           });
@@ -3913,13 +3913,22 @@ ipcMain.handle('frappe:add-time-log-to-timesheet', async (_e, timesheetId, timeL
   return await addTimeLogToTimesheet(timesheetId, timeLog);
 });
 
+// Timeout for Frappe IPC so requests never hang forever (session/network issues)
+const FRAPPE_IPC_TIMEOUT_MS = 15000;
+function callWithTimeout(promise, ms = FRAPPE_IPC_TIMEOUT_MS) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Request timeout')), ms)
+  );
+  return Promise.race([promise, timeout]);
+}
+
 ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
   const startTime = Date.now();
   console.log('[IPC] frappe:get-or-create-timesheet called at', new Date().toISOString());
   console.log('[IPC] Payload received:', JSON.stringify(payload, null, 2));
   
   try {
-    const result = await getOrCreateTimesheet(payload);
+    const result = await callWithTimeout(getOrCreateTimesheet(payload));
     const duration = Date.now() - startTime;
     console.log('[IPC] frappe:get-or-create-timesheet SUCCESS in', duration, 'ms');
     console.log('[IPC] Result:', JSON.stringify(result, null, 2));
@@ -3955,7 +3964,7 @@ ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
   console.log('[IPC] Payload received:', JSON.stringify(payload, null, 2));
   
   try {
-    const result = await startTimesheetSession(payload);
+    const result = await callWithTimeout(startTimesheetSession(payload));
     const duration = Date.now() - startTime;
     console.log('[IPC] frappe:start-timesheet-session SUCCESS in', duration, 'ms');
     console.log('[IPC] Result:', JSON.stringify(result, null, 2));
@@ -3990,15 +3999,15 @@ ipcMain.handle('frappe:update-timesheet-row', async (_e, payload) => {
 });
 
 ipcMain.handle('frappe:get-timesheet-by-id', async (_e, timesheetId) => {
-  return await getTimesheetById(timesheetId);
+  return await callWithTimeout(getTimesheetById(timesheetId));
 });
 
 ipcMain.handle('frappe:save-timesheet-with-savedocs', async (_e, timesheetDoc) => {
-  return await saveTimesheetWithSavedocs(timesheetDoc);
+  return await callWithTimeout(saveTimesheetWithSavedocs(timesheetDoc));
 });
 
 ipcMain.handle('frappe:get-server-time', async () => {
-  return await getFrappeServerTime();
+  return await callWithTimeout(getFrappeServerTime());
 });
 
 ipcMain.handle(

@@ -287,12 +287,18 @@ function formatSecondsToHoursMinutes(totalSeconds: number): string {
   const minutes = totalMinutes % 60;
   const remainingSeconds = seconds % 60;
 
-  // If we have hours, show as "Xh Ym" (no seconds)
+  // If we have hours, show "Xh Ym" or "Xh Ym Zs" when there are leftover seconds (so Total matches Active+Break+Idle)
   if (hours > 0) {
-    if (minutes === 0) {
+    if (minutes === 0 && remainingSeconds === 0) {
       return `${hours}h`;
     }
-    return `${hours}h ${minutes}m`;
+    if (minutes === 0) {
+      return `${hours}h ${remainingSeconds}s`;
+    }
+    if (remainingSeconds === 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${hours}h ${minutes}m ${remainingSeconds}s`;
   }
   
   // If only minutes, show seconds if there are any

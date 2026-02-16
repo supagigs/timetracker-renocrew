@@ -1,7 +1,7 @@
 document.addEventListener('DOMContentLoaded', async () => {
   // If there was an active session that wasn't closed (e.g. app killed), save it first.
   if (typeof StorageService !== 'undefined' && StorageService.getItem('isActive') === 'true' && StorageService.getItem('sessionStartTime')) {
-    window.location.href = 'tracker.html?recover=1';
+    window.location.href = 'startProject.html?recover=1';
     return;
   }
 

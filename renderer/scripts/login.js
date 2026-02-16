@@ -19,9 +19,6 @@ function forceResetEmailField() {
     emailInput.style.cursor = 'text';
     emailInput.style.userSelect = 'text';
     emailInput.style.opacity = '1';
-    // emailInput.style.backgroundColor = '';
-    // emailInput.style.color = '';
-    // emailInput.style.border = '';
     
     // Force focus
     emailInput.focus();
@@ -362,7 +359,7 @@ function updateProjectsDisplay() {
   projectsList.appendChild(container);
 }
 
-// checkUserExists function removed - no longer needed with Frappe authentication
+
 
 /**
  * Sync projects to database after login

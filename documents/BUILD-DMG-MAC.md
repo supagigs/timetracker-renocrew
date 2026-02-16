@@ -10,7 +10,6 @@ This guide explains how to copy this project to a Mac and build a macOS DMG inst
 - **Node.js** (v18 or later recommended) — [nodejs.org](https://nodejs.org) or install via Homebrew: `brew install node`
 - **npm** (comes with Node.js)
 - **Git** (optional, if you clone the repo instead of copying files)
-
 ---
 
 ## 1. Copy the code to your Mac

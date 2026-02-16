@@ -1,5 +1,5 @@
-import { formatDistanceToNow } from 'date-fns';
 import { Users } from 'lucide-react';
+import { RelativeTime } from '@/components/RelativeTime';
 import { DashboardShell } from '@/components/dashboard';
 import { fetchUserProfile } from '@/lib/userProfile';
 import { createServerSupabaseClient } from '@/lib/supabaseServer';
@@ -87,15 +87,29 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
     throw sessionsError;
   }
 
+  // Key by lowercase email so lookups match regardless of DB vs Frappe casing
   const sessionsByUser = new Map<string, typeof sessionRows>();
   (sessionRows ?? []).forEach((session) => {
-    const list = sessionsByUser.get(session.user_email) ?? [];
+    const key = (session.user_email ?? '').trim().toLowerCase();
+    const list = sessionsByUser.get(key) ?? [];
     list.push(session);
-    sessionsByUser.set(session.user_email, list);
+    sessionsByUser.set(key, list);
   });
 
+  // Open session counts as "active" if it's from today (server) OR started within last 24h (timezone-safe)
+  const now = new Date();
+  const ms24h = 24 * 60 * 60 * 1000;
+  const isOpenSessionActive = (session: { end_time: string | null; session_date: string; start_time: string | null }) => {
+    if (session.end_time != null) return false;
+    if (session.session_date === todayStr) return true;
+    if (!session.start_time) return false;
+    const start = new Date(session.start_time).getTime();
+    return now.getTime() - start < ms24h;
+  };
+
   return employeeEmails.map((email) => {
-    const memberSessions = sessionsByUser.get(email) ?? [];
+    const key = email.trim().toLowerCase();
+    const memberSessions = sessionsByUser.get(key) ?? [];
 
     const todayActiveSeconds = memberSessions
       .filter((session) => session.session_date === todayStr)
@@ -107,12 +121,9 @@ async function fetchManagerEmployees(managerEmail: string, managerCompany: strin
     );
 
     const lastSession = memberSessions[0];
-    
-    // No-op: user_sessions table is no longer used
-    // Determine status based on time_sessions only
-    const activeSession = memberSessions.find(
-      (session) => session.end_time === null && session.session_date === todayStr,
-    );
+
+    // Determine status: active = open session that is today or started within 24h (timezone-safe)
+    const activeSession = memberSessions.find(isOpenSessionActive);
 
     let status: EmployeeSummary['status'] = 'no-data';
     if (memberSessions.length === 0) {
@@ -204,6 +215,11 @@ export default async function ManagerEmployeesPage({
   const employees = convertedRole === 'Manager'
     ? await fetchManagerEmployees(profile.email, profile.company)
     : [];
+  const sortedEmployees = [...employees].sort((a, b) => {
+    const nameA = (a.displayName || a.email).toLowerCase();
+    const nameB = (b.displayName || b.email).toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
 
   return (
     <DashboardShell
@@ -225,7 +241,7 @@ export default async function ManagerEmployeesPage({
               Only manager accounts can manage user assignments.
             </p>
           </section>
-        ) : employees.length === 0 ? (
+        ) : sortedEmployees.length === 0 ? (
           <section className="rounded-2xl border border-dashed border-border/60 bg-card p-10 text-center shadow-sm">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-secondary/70 text-secondary-foreground">
               <Users size={24} />
@@ -249,14 +265,8 @@ export default async function ManagerEmployeesPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {employees.map((employee) => {
+                  {sortedEmployees.map((employee) => {
                     // If employee is active, show "Active now" instead of time ago
-                    const lastActiveLabel = employee.status === 'active'
-                      ? 'Active now'
-                      : employee.lastActiveAt
-                        ? formatDistanceToNow(new Date(employee.lastActiveAt), { addSuffix: true })
-                        : 'No activity yet';
-
                     const statusConfig: Record<EmployeeSummary['status'], { label: string; classes: string }> = {
                       active: { label: 'Working now', classes: 'bg-emerald-100 text-emerald-700' },
                       offline: { label: 'Offline', classes: 'bg-slate-200 text-slate-700' },
@@ -282,7 +292,13 @@ export default async function ManagerEmployeesPage({
                             {label}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-foreground">{lastActiveLabel}</td>
+                        <td className="px-4 py-3 text-foreground">
+                          {employee.status === 'active'
+                            ? 'Active now'
+                            : employee.lastActiveAt
+                              ? <RelativeTime isoDate={employee.lastActiveAt} />
+                              : 'No activity yet'}
+                        </td>
                       </tr>
                     );
                   })}

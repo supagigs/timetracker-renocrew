@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { RelativeTime } from '@/components/RelativeTime';
 
 type MemberStatus = 'active' | 'offline' | 'no-data';
 
@@ -9,7 +10,8 @@ type OverviewMember = {
   displayName: string;
   todayActive: string;
   last30Active: string;
-  lastActiveLabel: string;
+  lastActiveAt: string | null;
+  hasActiveSession: boolean;
   status: MemberStatus;
 };
 
@@ -114,9 +116,13 @@ export default function ManagerOverview({
                       <StatusBadge status={member.status} />
                     </td>
 
-                    {/* LAST ACTIVITY (HIDDEN ON SMALL SCREENS) */}
+                    {/* LAST ACTIVITY (HIDDEN ON SMALL SCREENS) - relative to viewer's system time */}
                     <td className="px-4 py-4 text-foreground text-xs hidden md:table-cell">
-                      {member.lastActiveLabel}
+                      {member.hasActiveSession
+                        ? 'Active now'
+                        : member.lastActiveAt
+                          ? <RelativeTime isoDate={member.lastActiveAt} />
+                          : 'No activity yet'}
                     </td>
 
                     {/* ACTION BUTTON */}

@@ -13,6 +13,16 @@ export type UserProfile = {
  * Fetch user profile from Supabase, and if display_name is missing, fetch it from Frappe
  * This ensures the manager's name is always displayed in all tabs
  */
+function formatProfileError(err: unknown): string {
+  if (err instanceof Error) {
+    const cause = err.cause instanceof Error ? err.cause.message : (err.cause as string | undefined);
+    const parts = [err.message];
+    if (cause) parts.push(`(cause: ${cause})`);
+    return parts.join(' ');
+  }
+  return String(err);
+}
+
 export async function fetchUserProfile(email: string): Promise<UserProfile | null> {
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -20,16 +30,46 @@ export async function fetchUserProfile(email: string): Promise<UserProfile | nul
     return null;
   }
 
-  const supabase = createServerSupabaseClient();
+  let supabase;
+  try {
+    supabase = createServerSupabaseClient();
+  } catch (envErr) {
+    console.error('[userProfile] Supabase client init failed:', formatProfileError(envErr));
+    return null;
+  }
 
-  const { data, error } = await supabase
-    .from('users')
-    .select('id, email, display_name, role, company')
-    .eq('email', normalizedEmail)
-    .maybeSingle();
+  let data: { id: number; email: string; display_name: string | null; role: string | null; company: string | null } | null = null;
+  let error: { message: string } | null = null;
+
+  try {
+    const result = await supabase
+      .from('users')
+      .select('id, email, display_name, role, company')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+    data = result.data;
+    error = result.error;
+  } catch (fetchErr) {
+    // Supabase client can throw on network failure (e.g. "TypeError: fetch failed")
+    const msg = formatProfileError(fetchErr);
+    console.error('[userProfile] Failed to fetch profile:', msg);
+    if (msg.includes('fetch failed') || msg.includes('Failed to fetch')) {
+      console.warn(
+        '[userProfile] Network error: ensure NEXT_PUBLIC_SUPABASE_URL is reachable from this server (no firewall/proxy blocking outbound HTTPS).'
+      );
+    }
+    return null;
+  }
 
   if (error) {
-    console.error('[userProfile] Failed to fetch profile:', error.message || JSON.stringify(error));
+    const errMsg = error.message || formatProfileError(error);
+    const cause = (error as { cause?: unknown }).cause;
+    console.error('[userProfile] Supabase query error:', errMsg, cause != null ? `(cause: ${cause})` : '');
+    if (errMsg.includes('fetch failed') || errMsg.includes('Failed to fetch')) {
+      console.warn(
+        '[userProfile] Network error: ensure NEXT_PUBLIC_SUPABASE_URL is reachable from this server (no firewall/proxy blocking outbound HTTPS).'
+      );
+    }
     return null;
   }
 

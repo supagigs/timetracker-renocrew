@@ -1,7 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   // If there was an active session that wasn't closed (e.g. app killed), save it first.
   if (typeof StorageService !== 'undefined' && StorageService.getItem('isActive') === 'true' && StorageService.getItem('sessionStartTime')) {
-    window.location.href = 'tracker.html?recover=1';
+    window.location.href = 'startProject.html?recover=1';
     return;
   }
 
@@ -21,33 +21,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const userCategory = StorageService.getItem('userCategory');
   const isClient = userCategory === 'Client';
 
-  // Configure UI based on user category
+  // Single flow for all: Projects → select project → timer (no task selection)
   if (isClient) {
-    // Hide Clock In button for Clients
     clockInBtn.style.display = 'none';
-    // Show Projects button
     projectsBtn.style.display = 'inline-block';
-    // Update info text
     infoText.textContent = 'Manage your projects and view reports';
-    
-    // Projects button event listener
     projectsBtn.addEventListener('click', () => {
       window.location.href = 'projects.html';
     });
   } else {
-    // Show Clock In button for Freelancers
     clockInBtn.style.display = 'inline-block';
-    // Hide Projects button
     projectsBtn.style.display = 'none';
-    // Check for active timer
     checkActiveTimer();
   }
-
-  // Remove the original clockInBtn event listener since it's now handled in checkActiveTimer
-  // clockInBtn.addEventListener('click', () => {
-  //   // Go to clock-in screen
-  //   window.location.href = 'clockIn.html';
-  // });
 
   reportBtn.addEventListener('click', () => {
     const reportsBaseUrl = (window.env && window.env.REPORTS_URL) || '';
@@ -206,16 +192,16 @@ document.addEventListener('DOMContentLoaded', () => {
       clockInBtn.textContent = 'Return to Active Timer';
       clockInBtn.className = 'btn-success';
       clockInBtn.addEventListener('click', () => {
-        window.location.href = 'tracker.html';
+        window.location.href = 'startProject.html';
       });
       
       showActiveTimerNotification();
     } else {
-      // Normal clock-in button
-      clockInBtn.textContent = 'Clock In';
+      // Go to projects to select project, then timer (no task selection)
+      clockInBtn.textContent = 'Start';
       clockInBtn.className = 'btn-primary';
       clockInBtn.addEventListener('click', () => {
-        window.location.href = 'clockIn.html';
+        window.location.href = 'projects.html';
       });
     }
   }
@@ -259,7 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Add event listeners
     document.getElementById('returnToTracker').addEventListener('click', () => {
-      window.location.href = 'tracker.html';
+      window.location.href = 'startProject.html';
     });
   }
 });

@@ -43,6 +43,18 @@ function createFrappeClient(useApiKey = false) {
     'Expect': '', // Prevents 417 Expectation Failed (Frappe quirk with Expect: 100-continue)
   };
   
+  function addErrorLoggingInterceptor(instance) {
+    instance.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        console.log('[Frappe] Status:', error.response?.status);
+        console.log('[Frappe] Data:', error.response?.data);
+        return Promise.reject(error);
+      }
+    );
+    return instance;
+  }
+
   // Use API key authentication if requested and available
   if (useApiKey) {
     const apiKey = process.env.FRAPPE_API_KEY;
@@ -50,17 +62,17 @@ function createFrappeClient(useApiKey = false) {
     
     if (apiKey && apiSecret) {
       headers['Authorization'] = `token ${apiKey}:${apiSecret}`;
-      // API key auth doesn't use cookies
-      return axios.create({
+      const instance = axios.create({
         baseURL: baseURL,
         withCredentials: false,
         headers: headers,
       });
+      return addErrorLoggingInterceptor(instance);
     }
   }
   
   // Default: session-based authentication with cookies
-  return wrapper(
+  const instance = wrapper(
     axios.create({
       baseURL: baseURL,
       withCredentials: true,
@@ -68,6 +80,7 @@ function createFrappeClient(useApiKey = false) {
       headers: headers,
     })
   );
+  return addErrorLoggingInterceptor(instance);
 }
 
 module.exports = {

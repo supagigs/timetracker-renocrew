@@ -1005,434 +1005,87 @@ async function addTimeLogToTimesheet(timesheetId, { project, task, hours = 0, ro
  * 
  * If a timesheet already exists for the project and is submitted, creates a new timesheet instead
  */
+
 async function getOrCreateTimesheet({ project, task }) {
-  const startTime = Date.now();
-  console.log('[FRAPPE_SERVICE] getOrCreateTimesheet ========== START ==========');
-  console.log('[FRAPPE_SERVICE] Input params:', { project, task });
-  
-  const userEmail = await getCurrentUser();
-  console.log('[FRAPPE_SERVICE] Current user:', userEmail || 'NOT FOUND');
-  
-  if (!userEmail) {
-    const error = new Error('User not logged in');
-    console.error('[FRAPPE_SERVICE] Validation failed: User not logged in');
-    throw error;
-  }
-
-  if (!project) {
-    const error = new Error('Project is required');
-    console.error('[FRAPPE_SERVICE] Validation failed: Project is required');
-    throw error;
-  }
-
   const frappe = createFrappeClient();
-  console.log('[FRAPPE_SERVICE] Frappe client created');
 
-  try {
-    // Check if a timesheet already exists for this project
-    console.log('[FRAPPE_SERVICE] Checking for existing timesheet for project:', project);
-    const existingTimesheet = await getTimesheetForProject(project);
-    
-    if (existingTimesheet) {
-      const timesheetStatus = String(existingTimesheet.status || '').trim().toLowerCase();
-      console.log('[FRAPPE_SERVICE] Found existing timesheet:', existingTimesheet.name, 'Status:', timesheetStatus);
-      
-      // If the existing timesheet is submitted, create a new one
-      if (timesheetStatus === 'submitted') {
-        console.log('[FRAPPE_SERVICE] Existing timesheet is submitted, creating a new timesheet');
-        if (logInfo) {
-          logInfo('Frappe', `Existing timesheet ${existingTimesheet.name} for project ${project} is submitted. Creating a new timesheet.`);
-        }
-        
-        // Create a new timesheet
-        const newTimesheet = await createTimesheet({ project, task });
-        console.log('[FRAPPE_SERVICE] Created new timesheet:', newTimesheet.name);
-        
-        // Fetch the full timesheet to get the row ID
-        const fullTimesheet = await getTimesheetById(newTimesheet.name);
-        
-        // Find the row ID - get the first time_log entry that matches the project (and optionally task)
-        let rowId = null;
-        if (fullTimesheet.time_logs && Array.isArray(fullTimesheet.time_logs) && fullTimesheet.time_logs.length > 0) {
-          // Find the row that matches the project (and task if provided)
-          const matchingRow = fullTimesheet.time_logs.find(tl => {
-            if (!tl || !tl.project) return false;
-            const tlProject = typeof tl.project === 'string' ? tl.project : (tl.project.name || '');
-            if (tlProject !== project) return false;
-            
-            // If task is provided, also check task match
-            if (task) {
-              const tlTask = typeof tl.task === 'string' ? tl.task : (tl.task?.name || '');
-              return tlTask === task;
-            }
-            
-            return true;
-          });
-          
-          if (matchingRow) {
-            // Use the matching row's name if available
-            if (matchingRow.name) {
-              rowId = matchingRow.name;
-            } else {
-              // If no name yet, use the first row that has a name
-              const firstRowWithName = fullTimesheet.time_logs.find(tl => tl && tl.name);
-              if (firstRowWithName && firstRowWithName.name) {
-                rowId = firstRowWithName.name;
-                console.log('[FRAPPE_SERVICE] Matching row has no name, using first row with name:', rowId);
-              }
-            }
-          } else {
-            // No matching row found, use the first row that has a name
-            const firstRowWithName = fullTimesheet.time_logs.find(tl => tl && tl.name);
-            if (firstRowWithName && firstRowWithName.name) {
-              rowId = firstRowWithName.name;
-              console.log('[FRAPPE_SERVICE] No matching row found, using first row with name:', rowId);
-            }
-          }
-        }
-        
-        // If we still don't have a row ID, try calling the backend method to get/create the row
-        if (!rowId) {
-          console.log('[FRAPPE_SERVICE] No row ID found in newly created timesheet, calling backend method to get/create row');
-          try {
-            // Call the backend method to get or create the row
-            const payload = { project };
-            if (task) payload.task = task;
-            const res = await frappe.post('/api/method/get_or_create_timesheet', payload);
-            const message = res?.data?.message;
-            if (message && message.timesheet === newTimesheet.name && message.row) {
-              rowId = message.row;
-              console.log('[FRAPPE_SERVICE] Got row ID from backend method:', rowId);
-            }
-          } catch (backendErr) {
-            console.error('[FRAPPE_SERVICE] Failed to get row ID from backend method:', backendErr.message);
-          }
-        }
-        
-        if (!rowId) {
-          throw new Error('Failed to find timesheet row ID in newly created timesheet');
-        }
-        
-        console.log('[FRAPPE_SERVICE] Found row ID:', rowId);
-        const totalDuration = Date.now() - startTime;
-        console.log('[FRAPPE_SERVICE] getOrCreateTimesheet SUCCESS (created new) in', totalDuration, 'ms');
-        console.log('[FRAPPE_SERVICE] Returning:', { timesheet: newTimesheet.name, row: rowId });
-        
-        if (logInfo) {
-          logInfo('Frappe', `Created new timesheet ${newTimesheet.name} with row ${rowId} for project ${project} (existing timesheet was submitted)`);
-        }
-        
-        return {
-          timesheet: newTimesheet.name,
-          row: rowId,
-        };
-      } else {
-        console.log('[FRAPPE_SERVICE] Existing timesheet is not submitted, will use backend method to get or create');
-      }
-    } else {
-      console.log('[FRAPPE_SERVICE] No existing timesheet found, will use backend method to create');
+  if (!project) throw new Error("Project is required");
+
+  // 1️⃣ Check for existing DRAFT timesheet for project
+  const existing = await getTimesheetForProject(project);
+
+  if (existing) {
+    const status = String(existing.status || "").toLowerCase();
+
+    if (status !== "submitted" && status !== "cancelled") {
+      return { timesheet: existing.name };
     }
-
-    const payload = { project };
-    if (task) payload.task = task;
-
-    console.log('[FRAPPE_SERVICE] Prepared payload:', JSON.stringify(payload, null, 2));
-    console.log('[FRAPPE_SERVICE] Calling Frappe API: POST /api/method/get_or_create_timesheet');
-
-    if (logInfo) {
-      logInfo(
-        'Frappe',
-        `Calling get_or_create_timesheet for project ${project}, user ${userEmail}`
-      );
-    }
-
-    const apiStartTime = Date.now();
-    let res;
-    try {
-      res = await frappe.post(
-        '/api/method/get_or_create_timesheet',
-        payload
-      );
-      const apiDuration = Date.now() - apiStartTime;
-      console.log('[FRAPPE_SERVICE] API call completed in', apiDuration, 'ms');
-      console.log('[FRAPPE_SERVICE] Response status:', res?.status);
-      console.log('[FRAPPE_SERVICE] Response headers:', JSON.stringify(res?.headers, null, 2));
-      console.log('[FRAPPE_SERVICE] Full response data:', JSON.stringify(res?.data, null, 2));
-    } catch (apiErr) {
-      const apiDuration = Date.now() - apiStartTime;
-      console.error('[FRAPPE_SERVICE] API call FAILED after', apiDuration, 'ms');
-      console.error('[FRAPPE_SERVICE] API error type:', apiErr?.constructor?.name);
-      console.error('[FRAPPE_SERVICE] API error message:', apiErr?.message);
-      console.error('[FRAPPE_SERVICE] API error code:', apiErr?.code);
-      if (apiErr?.response) {
-        console.error('[FRAPPE_SERVICE] API error response status:', apiErr.response.status);
-        console.error('[FRAPPE_SERVICE] API error response data:', JSON.stringify(apiErr.response.data, null, 2));
-      }
-      if (apiErr?.request) {
-        console.error('[FRAPPE_SERVICE] API request details:', {
-          path: apiErr.request?.path,
-          method: apiErr.request?.method
-        });
-      }
-      throw apiErr;
-    }
-
-    const message = res?.data?.message;
-    console.log('[FRAPPE_SERVICE] Extracted message from response:', JSON.stringify(message, null, 2));
-
-    if (!message) {
-      const error = new Error('Invalid response from get_or_create_timesheet method - message is missing');
-      console.error('[FRAPPE_SERVICE] Validation failed: message is missing');
-      console.error('[FRAPPE_SERVICE] Full response structure:', {
-        hasData: !!res?.data,
-        dataKeys: res?.data ? Object.keys(res.data) : [],
-        fullData: JSON.stringify(res?.data, null, 2)
-      });
-      throw error;
-    }
-
-    const { timesheet, row } = message;
-    console.log('[FRAPPE_SERVICE] Extracted values from message:', {
-      timesheet: timesheet,
-      timesheetType: typeof timesheet,
-      timesheetIsString: typeof timesheet === 'string',
-      row: row,
-      rowType: typeof row,
-      rowIsString: typeof row === 'string'
-    });
-
-    // ✅ Validate STRINGS, not objects
-    if (typeof timesheet !== 'string' || !timesheet) {
-      const error = new Error(`Invalid timesheet id from get_or_create_timesheet method - got type: ${typeof timesheet}, value: ${JSON.stringify(timesheet)}`);
-      console.error('[FRAPPE_SERVICE] Validation failed:', error.message);
-      throw error;
-    }
-
-    if (typeof row !== 'string' || !row) {
-      const error = new Error(`Invalid timesheet row id from get_or_create_timesheet method - got type: ${typeof row}, value: ${JSON.stringify(row)}`);
-      console.error('[FRAPPE_SERVICE] Validation failed:', error.message);
-      throw error;
-    }
-
-    const totalDuration = Date.now() - startTime;
-    console.log('[FRAPPE_SERVICE] getOrCreateTimesheet SUCCESS in', totalDuration, 'ms');
-    console.log('[FRAPPE_SERVICE] Returning:', { timesheet, row });
-
-    if (logInfo) {
-      logInfo(
-        'Frappe',
-        `get_or_create_timesheet OK → timesheet=${timesheet}, row=${row}`
-      );
-    }
-
-    console.log('[FRAPPE_SERVICE] ========== SUCCESS ==========');
-    // ✅ Return IDs only
-    return {
-      timesheet,
-      row,
-    };
-  } catch (err) {
-    const totalDuration = Date.now() - startTime;
-    const errorMessage =
-      err.response?.data?.message ||
-      err.response?.data?.exc ||
-      err.message ||
-      'Failed to get or create timesheet';
-
-    console.error('[FRAPPE_SERVICE] ========== ERROR ==========');
-    console.error('[FRAPPE_SERVICE] Operation failed after', totalDuration, 'ms');
-    console.error('[FRAPPE_SERVICE] Error name:', err?.name);
-    console.error('[FRAPPE_SERVICE] Error message:', errorMessage);
-    console.error('[FRAPPE_SERVICE] Error stack:', err?.stack);
-    
-    if (err?.response) {
-      console.error('[FRAPPE_SERVICE] Error response status:', err.response.status);
-      console.error('[FRAPPE_SERVICE] Error response statusText:', err.response.statusText);
-      console.error('[FRAPPE_SERVICE] Error response data:', JSON.stringify(err.response.data, null, 2));
-    }
-    
-    if (err?.config) {
-      console.error('[FRAPPE_SERVICE] Request config:', {
-        url: err.config?.url,
-        baseURL: err.config?.baseURL,
-        method: err.config?.method,
-        data: err.config?.data,
-        headers: Object.keys(err.config?.headers || {})
-      });
-    }
-    
-    console.error('[FRAPPE_SERVICE] Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
-    console.error('[FRAPPE_SERVICE] ============================');
-
-    if (logError) {
-      logError('Frappe', `Error in get_or_create_timesheet: ${errorMessage}`, {
-        status: err.response?.status,
-        data: err.response?.data,
-      });
-    }
-
-    // 417 OverlapError: timesheet time log overlaps with another timesheet (ERPNext validation)
-    const status = err.response?.status;
-    const data = err.response?.data;
-    const exceptionStr = typeof data?.exception === 'string' ? data.exception : '';
-    if (status === 417 && (exceptionStr.includes('OverlapError') || exceptionStr.includes('overlapping'))) {
-      const otherMatch = exceptionStr.match(/overlapping with (\S+)/);
-      const otherTimesheet = otherMatch ? otherMatch[1] : 'another timesheet';
-      const userMessage = `Your time entry overlaps with ${otherTimesheet}. Please close or correct the overlapping entry in the Timesheet list in ERP Next, then try again.`;
-      const overlapErr = new Error(userMessage);
-      overlapErr.name = 'TimesheetOverlapError';
-      overlapErr.originalError = err;
-      throw overlapErr;
-    }
-
-    // 417 but operation may have succeeded (Frappe quirk). Try to recover.
-    if (status === 417) {
-      const msg = data?.message;
-      let timesheetId = typeof msg?.timesheet === 'string' ? msg.timesheet : null;
-      let rowId = typeof msg?.row === 'string' ? msg.row : null;
-      if (timesheetId && rowId) {
-        if (logWarn) {
-          logWarn('Frappe', 'get_or_create_timesheet returned 417 but response contained timesheet/row; treating as success', {
-            timesheet: timesheetId,
-            row: rowId,
-          });
-        }
-        return { timesheet: timesheetId, row: rowId };
-      }
-      // No timesheet/row in response — maybe backend created a draft. Re-fetch and use it.
-      try {
-        const existingTimesheet = await getTimesheetForProject(project);
-        if (existingTimesheet && String(existingTimesheet.status || '').trim().toLowerCase() !== 'submitted') {
-          const timeLogs = Array.isArray(existingTimesheet.time_logs) ? existingTimesheet.time_logs : [];
-          const openRow = timeLogs.find(tl => tl && (tl.to_time == null || tl.completed !== 1));
-          const rowName = openRow?.name || (timeLogs[0] && timeLogs[0].name);
-          if (existingTimesheet.name && rowName) {
-            if (logWarn) {
-              logWarn('Frappe', 'get_or_create_timesheet returned 417; re-fetched draft timesheet and using it', {
-                timesheet: existingTimesheet.name,
-                row: rowName,
-              });
-            }
-            return { timesheet: existingTimesheet.name, row: rowName };
-          }
-        }
-      } catch (recoveryErr) {
-        if (logError) logError('Frappe', '417 recovery (re-fetch draft) failed:', recoveryErr?.message);
-      }
-      // Show user-friendly popup instead of raw 417
-      const syncErr = new Error(TIMESHEET_SYNC_ERROR_MESSAGE);
-      syncErr.name = 'TimesheetSyncError';
-      syncErr.originalError = err;
-      throw syncErr;
-    }
-
-    throw err;
   }
+
+  // 2️⃣ Otherwise create new timesheet
+  const newTimesheet = await createTimesheet({ project, task });
+
+  return { timesheet: newTimesheet.name };
 }
+
+async function resolveRowForStart(timesheetId, project, task) {
+  const doc = await getTimesheetById(timesheetId);
+  const logs = Array.isArray(doc?.time_logs) ? doc.time_logs : [];
+
+  // 1️⃣ If a row is currently running → resume
+  const runningRow = logs.find(
+    tl => tl?.from_time && !tl?.to_time
+  );
+
+  if (runningRow) {
+    return runningRow.name;
+  }
+
+  if (runningRows.length > 1) {
+    throw new Error("Multiple running rows detected. Manual correction required.");
+  }
+  
+  // 2️⃣ Otherwise ALWAYS create new row
+  const newRow = await createNewRowInTimesheet(timesheetId, project, task);
+  return newRow.name;
+}
+
 /**
  * Start a timesheet session
  * Uses Frappe method endpoint: POST /api/method/start_timesheet_session
  */
+/*
+
 async function startTimesheetSession({ timesheet, row }) {
-  const startTime = Date.now();
-  console.log('[FRAPPE_SERVICE] startTimesheetSession ========== START ==========');
-  console.log('[FRAPPE_SERVICE] Input params:', { timesheet, row });
-  
-  if (!timesheet || !row) {
-    const error = new Error(`Timesheet and row are required - timesheet: ${timesheet || 'MISSING'}, row: ${row || 'MISSING'}`);
-    console.error('[FRAPPE_SERVICE] Validation failed:', error.message);
-    throw error;
-  }
-
-  console.log('[FRAPPE_SERVICE] Validation passed');
   const frappe = createFrappeClient();
-  console.log('[FRAPPE_SERVICE] Frappe client created');
-
-  const payload = { timesheet, row };
-  console.log('[FRAPPE_SERVICE] Prepared payload:', JSON.stringify(payload, null, 2));
-  console.log('[FRAPPE_SERVICE] Calling Frappe API: POST /api/method/start_timesheet_session');
 
   try {
-    const apiStartTime = Date.now();
-    let res;
-    try {
-      res = await frappe.post(
-        '/api/method/start_timesheet_session',
-        payload
-      );
-      const apiDuration = Date.now() - apiStartTime;
-      console.log('[FRAPPE_SERVICE] API call completed in', apiDuration, 'ms');
-      console.log('[FRAPPE_SERVICE] Response status:', res?.status);
-      console.log('[FRAPPE_SERVICE] Response headers:', JSON.stringify(res?.headers, null, 2));
-      console.log('[FRAPPE_SERVICE] Full response data:', JSON.stringify(res?.data, null, 2));
-    } catch (apiErr) {
-      const apiDuration = Date.now() - apiStartTime;
-      console.error('[FRAPPE_SERVICE] API call FAILED after', apiDuration, 'ms');
-      console.error('[FRAPPE_SERVICE] API error type:', apiErr?.constructor?.name);
-      console.error('[FRAPPE_SERVICE] API error message:', apiErr?.message);
-      console.error('[FRAPPE_SERVICE] API error code:', apiErr?.code);
-      if (apiErr?.response) {
-        console.error('[FRAPPE_SERVICE] API error response status:', apiErr.response.status);
-        console.error('[FRAPPE_SERVICE] API error response data:', JSON.stringify(apiErr.response.data, null, 2));
-      }
-      if (apiErr?.request) {
-        console.error('[FRAPPE_SERVICE] API request details:', {
-          path: apiErr.request?.path,
-          method: apiErr.request?.method
-        });
-      }
-      throw apiErr;
-    }
-
-    const message = res?.data?.message;
-    console.log('[FRAPPE_SERVICE] Extracted message from response:', JSON.stringify(message, null, 2));
-
-    if (!res?.data?.message) {
-      const error = new Error('Invalid response from start_timesheet_session - message is missing');
-      console.error('[FRAPPE_SERVICE] Validation failed: message is missing');
-      console.error('[FRAPPE_SERVICE] Full response structure:', {
-        hasData: !!res?.data,
-        dataKeys: res?.data ? Object.keys(res.data) : [],
-        fullData: JSON.stringify(res?.data, null, 2)
-      });
-      throw error;
-    }
-
-    const totalDuration = Date.now() - startTime;
-    console.log('[FRAPPE_SERVICE] startTimesheetSession SUCCESS in', totalDuration, 'ms');
-    console.log('[FRAPPE_SERVICE] Returning message:', JSON.stringify(message, null, 2));
-    console.log('[FRAPPE_SERVICE] ========== SUCCESS ==========');
+    const res = await frappe.post(
+      "/api/method/start_timesheet_session",
+      { timesheet, row }
+    );
 
     return res.data.message;
+
   } catch (err) {
-    const totalDuration = Date.now() - startTime;
-    console.error('[FRAPPE_SERVICE] ========== ERROR ==========');
-    console.error('[FRAPPE_SERVICE] Operation failed after', totalDuration, 'ms');
-    console.error('[FRAPPE_SERVICE] Error name:', err?.name);
-    console.error('[FRAPPE_SERVICE] Error message:', err?.message);
-    console.error('[FRAPPE_SERVICE] Error stack:', err?.stack);
-    
-    if (err?.response) {
-      console.error('[FRAPPE_SERVICE] Error response status:', err.response.status);
-      console.error('[FRAPPE_SERVICE] Error response statusText:', err.response.statusText);
-      console.error('[FRAPPE_SERVICE] Error response data:', JSON.stringify(err.response.data, null, 2));
+    const status = err?.response?.status;
+
+    if (status === 417) {
+      // Recovery: check if already running
+      const doc = await getTimesheetById(timesheet);
+      const logs = Array.isArray(doc?.time_logs) ? doc.time_logs : [];
+
+      const target = logs.find(tl => tl?.name === row);
+
+      if (target?.from_time && !target?.to_time) {
+        return { ok: true, already_started: true };
+      }
     }
-    
-    if (err?.config) {
-      console.error('[FRAPPE_SERVICE] Request config:', {
-        url: err.config?.url,
-        baseURL: err.config?.baseURL,
-        method: err.config?.method,
-        data: err.config?.data,
-        headers: Object.keys(err.config?.headers || {})
-      });
-    }
-    
-    console.error('[FRAPPE_SERVICE] Full error object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
-    console.error('[FRAPPE_SERVICE] ============================');
+
     throw err;
   }
 }
+
 
 /**
  * Update a timesheet row with hours
