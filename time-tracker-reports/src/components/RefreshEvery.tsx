@@ -3,10 +3,10 @@
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 
-const REFRESH_INTERVAL_MS = 20 * 1000; // 20 seconds
+const REFRESH_INTERVAL_MS = 30 * 1000; // 30 seconds
 
 /**
- * Refreshes the current route (re-fetches server components) every 20 seconds.
+ * Refreshes the current route (re-fetches server components) every 30 seconds.
  * Runs on all pages; no UI. Use in root layout.
  */
 export function RefreshEvery() {
