@@ -67,8 +67,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let isIdle = false;
   let idleStartTime = null;
   let idle2hClockOutTriggered = false;
+  let break2mClockOutTriggered = false;
   let lockSuspendClockOutTriggered = false;
-  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours — auto clock out while still idle or on break
+  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours — auto clock out while continuously idle
+  const BREAK_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours — auto clock out when continuously on break
 
   // Initialize idle tracker
   function initializeIdleTracker() {
@@ -109,8 +111,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (idleDuration >= IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS && isActive && !isOnBreak) {
           console.log(`Auto clocking out: ${idleDuration}s idle (>= ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold)`);
-          clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
-            console.error('Failed to auto clock out after long idle:', err);
+          clockOut({ auto: true, reason: 'idle_2m' }).catch(err => {
+            console.error('Failed to auto clock out after idle:', err);
           });
           return;
         }
@@ -146,8 +148,35 @@ document.addEventListener('DOMContentLoaded', () => {
       timerInterval = null;
     }
     console.log(`Auto clocking out: ${currentIdleDuration}s (${(currentIdleDuration / 60).toFixed(1)}m) continuous idle — ending session now`);
-    clockOut({ auto: true, reason: 'idle_2h' }).catch(err => {
+    clockOut({ auto: true, reason: 'idle_2m' }).catch(err => {
       console.error('Failed to auto clock out:', err);
+    });
+    return true;
+  }
+
+  /** Auto clock out when user has been on break for 2 continuous minutes. */
+  function runBreakAutoClockOutCheck() {
+    if (!isActive || !isOnBreak || !breakStartTime || break2mClockOutTriggered) return false;
+    const breakStart = breakStartTime instanceof Date ? breakStartTime : new Date(breakStartTime);
+    if (isNaN(breakStart.getTime())) return false;
+    const currentBreakDuration = Math.floor((new Date() - breakStart) / 1000);
+    if (currentBreakDuration < BREAK_AUTO_CLOCKOUT_THRESHOLD_SECONDS) return false;
+    break2mClockOutTriggered = true;
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+    if (sessionPersistInterval) {
+      clearInterval(sessionPersistInterval);
+      sessionPersistInterval = null;
+    }
+    if (sessionDbUpdateInterval) {
+      clearInterval(sessionDbUpdateInterval);
+      sessionDbUpdateInterval = null;
+    }
+    console.log(`Auto clocking out: ${currentBreakDuration}s (${(currentBreakDuration / 60).toFixed(1)}m) continuous break — ending session now`);
+    clockOut({ auto: true, reason: 'break_2m' }).catch(err => {
+      console.error('Failed to auto clock out after break:', err);
     });
     return true;
   }
@@ -176,10 +205,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const totalSessionTime = currentActiveTime + currentBreakTime + currentIdleTime;
 
     if (runIdleAutoClockOutCheck()) return;
+    if (runBreakAutoClockOutCheck()) return;
 
     if (isActive && !isOnBreak && isIdle && idleTracker && !idle2hClockOutTriggered) {
       const d = idleTracker.getCurrentIdleTime();
-      if (d >= Math.max(0, IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS - 120)) {
+      if (d >= Math.max(0, IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS - 30)) {
         const last = (window.__idleClockOutLogAt || 0);
         if (now.getTime() - last >= 60 * 1000) {
           window.__idleClockOutLogAt = now.getTime();
@@ -554,9 +584,13 @@ document.addEventListener('DOMContentLoaded', () => {
       clockInBtn.classList.remove('start-project-btn-danger');
       clockInBtn.classList.add('start-project-btn-primary');
   
-      if (!auto) {
-        window.location.href = 'projects.html';
+      // Show Windows notification when timer stops (manual or auto)
+      if (window.electronAPI?.showTimerStoppedNotification) {
+        window.electronAPI.showTimerStoppedNotification();
       }
+  
+      // Navigate to projects screen after any clock out (manual or auto)
+      window.location.href = 'projects.html';
   
     } catch (error) {
       console.error('Clock out failed — restoring state:', error);
@@ -984,7 +1018,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function handleVisibilityOrFocus() {
     if (!sessionStartTime) return;
 
-    // 1) Idle-based auto clock-out (e.g. 2h idle while timer running)
+    // 1) Idle-based auto clock-out (e.g. 2m idle while timer running)
     if (typeof runIdleAutoClockOutCheck === 'function') {
       runIdleAutoClockOutCheck();
     }
@@ -1047,28 +1081,39 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Clock out when laptop lid is closed (lock-screen) or system suspends
+  // Clock out when laptop lid is closed (lock-screen) or system suspends.
+  // Works for all session states: active working, idle, or on break.
   if (window.electronAPI && window.electronAPI.onLockOrSuspendClockOut) {
     console.log('[PowerEvents] Renderer startProject: registering onLockOrSuspendClockOut listener');
     window.electronAPI.onLockOrSuspendClockOut((data) => {
       const reason = data?.reason || 'lock_screen';
       const ts = new Date().toISOString();
+      const notifyDone = window.electronAPI?.notifyLidCloseClockOutDone;
       console.log('[PowerEvents] Renderer startProject: lock-or-suspend event received', {
         timestamp: ts,
         reason,
         hasSessionStartTime: !!sessionStartTime,
         isActive,
+        isOnBreak,
+        isIdle,
         lockSuspendClockOutTriggered
       });
+      // Clock out whenever we have an active session, regardless of active/idle/on break
       if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) {
         console.log('[PowerEvents] Renderer startProject: lock/suspend clock-out skipped due to guard');
+        if (notifyDone) notifyDone();
         return;
       }
       lockSuspendClockOutTriggered = true;
       console.log(`[PowerEvents] Renderer startProject: clocking out on ${reason} (lid closed / system suspend)`);
-      clockOut({ auto: true, reason }).catch((err) => {
-        console.error('[PowerEvents] Renderer startProject: lock/suspend clock out failed:', err);
-      });
+      clockOut({ auto: true, reason })
+        .then(() => {
+          if (notifyDone) notifyDone();
+        })
+        .catch((err) => {
+          console.error('[PowerEvents] Renderer startProject: lock/suspend clock out failed:', err);
+          if (notifyDone) notifyDone();
+        });
     });
   }
 

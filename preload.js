@@ -84,6 +84,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('lock-or-suspend-clock-out', handler);
     return () => ipcRenderer.removeListener('lock-or-suspend-clock-out', handler);
   },
+  /** Notify main process that lid-close/suspend clock-out completed (releases power save blocker). */
+  notifyLidCloseClockOutDone: () => ipcRenderer.send('lid-close-clock-out-done'),
+  /** Show native Windows notification when timer is stopped (manual or auto). */
+  showTimerStoppedNotification: () => ipcRenderer.send('show-timer-stopped-notification'),
 
   onSystemResumed: (callback) => {
     const handler = (_event, data) => callback(data);

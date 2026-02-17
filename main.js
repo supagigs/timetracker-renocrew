@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, screen, dialog, shell, systemPreferences, session } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, powerSaveBlocker, Notification, screen, dialog, shell, systemPreferences, session } = require('electron');
 const {autoUpdater} = require('electron-updater');
 
 const log1 = require('electron-log');
@@ -1187,11 +1187,50 @@ function createWindow() {
     }
   }
 
-  // Stop timer and clock out when lid is closed (lock-screen) or system suspends
+  // Stop timer and clock out when lid is closed (lock-screen) or system suspends.
+  // Use powerSaveBlocker to delay suspend so the renderer has time to save the session.
+  const LID_CLOSE_CLOCKOUT_TIMEOUT_MS = 15000;
+  let lidCloseBlockerId = null;
+  let lidCloseBlockerTimeout = null;
+
+  const releaseLidCloseBlocker = () => {
+    if (lidCloseBlockerTimeout) {
+      clearTimeout(lidCloseBlockerTimeout);
+      lidCloseBlockerTimeout = null;
+    }
+    if (lidCloseBlockerId != null) {
+      try {
+        powerSaveBlocker.stop(lidCloseBlockerId);
+        logInfo('PowerMonitor', '[PowerEvents] Main: Released power save blocker');
+      } catch (e) {
+        logWarn('PowerMonitor', `[PowerEvents] Main: Failed to stop power save blocker: ${e?.message || e}`);
+      }
+      lidCloseBlockerId = null;
+    }
+  };
+
+  ipcMain.on('lid-close-clock-out-done', () => {
+    logInfo('PowerMonitor', '[PowerEvents] Main: Renderer reported lid-close clock-out done');
+    releaseLidCloseBlocker();
+  });
+
   const broadcastLockOrSuspendClockOut = (reason) => {
     try {
       const ts = new Date().toISOString();
       logInfo('PowerMonitor', `[PowerEvents] Main: lock-or-suspend broadcast initiated`, { timestamp: ts, reason });
+      // Prevent app suspension so the renderer has time to complete clock-out (works for active/idle/on break)
+      if (lidCloseBlockerId == null) {
+        try {
+          lidCloseBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+          logInfo('PowerMonitor', '[PowerEvents] Main: Started power save blocker to allow clock-out');
+          lidCloseBlockerTimeout = setTimeout(() => {
+            logInfo('PowerMonitor', '[PowerEvents] Main: Lid-close blocker timeout, releasing');
+            releaseLidCloseBlocker();
+          }, LID_CLOSE_CLOCKOUT_TIMEOUT_MS);
+        } catch (e) {
+          logWarn('PowerMonitor', `[PowerEvents] Main: Failed to start power save blocker: ${e?.message || e}`);
+        }
+      }
       BrowserWindow.getAllWindows().forEach((win) => {
         if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
           win.webContents.send('lock-or-suspend-clock-out', { reason, timestamp: ts });
@@ -1200,6 +1239,7 @@ function createWindow() {
       logInfo('PowerMonitor', `[PowerEvents] Main: Broadcast lock-or-suspend-clock-out: ${reason}`);
     } catch (e) {
       logWarn('PowerMonitor', `[PowerEvents] Main: Failed to broadcast lock-or-suspend-clock-out: ${e?.message || e}`);
+      releaseLidCloseBlocker();
     }
   };
   // Fire immediately so renderer can clock out before system sleeps (no delay).
@@ -4123,6 +4163,20 @@ ipcMain.handle('get-last-system-resume', () => {
   return global.__lastSystemResumeAt ?? null;
 });
 
+ipcMain.on('show-timer-stopped-notification', () => {
+  try {
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'Time-Tracker',
+        body: 'Timer stopped. Work session ended.',
+        silent: true
+      }).show();
+    }
+  } catch (e) {
+    logWarn('Notification', `Failed to show timer stopped notification: ${e?.message || e}`);
+  }
+});
+
 ipcMain.on('update-idle-state', (_event, isIdle) => {
   try {
     isUserIdle = Boolean(isIdle);
@@ -5514,18 +5568,12 @@ function showUpdateDialogSafely() {
     title: 'Update Ready',
     message: 'A new version is ready to install.',
     detail: 'Restart the app to apply the update.',
-    buttons: ['Restart now', 'Later'],
+    buttons: ['Restart now'],
     defaultId: 0,
-    cancelId: 1,
     noLink: true
-  }).then((result) => {
+  }).then(() => {
     updateDialogVisible = false;
-
-    if (result.response === 0) {
-      safeQuitAndInstall();
-    } else {
-      logInfo('Updater', 'User deferred update');
-    }
+    safeQuitAndInstall();
   });
 }
 
