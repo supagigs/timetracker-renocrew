@@ -11,6 +11,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const viewReportsBtn = document.getElementById('viewReportsBtn');
   const searchInput = document.getElementById('searchInput');
   const userAvatar = document.getElementById('userAvatar');
+  const projectsMenuTrigger = document.getElementById('projectsMenuTrigger');
+  const projectsMenuDropdown = document.getElementById('projectsMenuDropdown');
+  const projectsMenuApplyLeave = document.getElementById('projectsMenuApplyLeave');
+  const projectsMenuLogout = document.getElementById('projectsMenuLogout');
 
   // Set up user avatar (default placeholder)
   const userEmail = StorageService.getItem('userEmail');
@@ -369,6 +373,130 @@ document.addEventListener('DOMContentLoaded', async () => {
     StorageService.setItem('selectedProjectName', project.name);
     window.location.href = `startProject.html?projectId=${project.id}`;
   }
+
+  // Menu dropdown: toggle on trigger click, close on outside click
+  function closeMenu() {
+    projectsMenuDropdown.hidden = true;
+    projectsMenuTrigger.setAttribute('aria-expanded', 'false');
+  }
+
+  projectsMenuTrigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = !projectsMenuDropdown.hidden;
+    projectsMenuDropdown.hidden = isOpen;
+    projectsMenuTrigger.setAttribute('aria-expanded', String(!isOpen));
+  });
+
+  document.addEventListener('click', () => closeMenu());
+  projectsMenuDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+  projectsMenuApplyLeave.addEventListener('click', () => {
+    closeMenu();
+    // Apply Leave: open leave application (e.g. Frappe Leave Application) or show placeholder
+    const reportsBaseUrl = (window.env && window.env.REPORTS_URL) || '';
+    if (reportsBaseUrl) {
+      const leaveUrl = reportsBaseUrl.trim().replace(/\/$/, '') + '/app/leave-application/new';
+      window.electronAPI.openExternalUrl(leaveUrl).catch(() => {
+        NotificationService.showError('Unable to open leave application.');
+      });
+    } else {
+      NotificationService.showError('Leave application URL is not configured.');
+    }
+  });
+
+  async function performLogout(options = {}) {
+    const { skipConfirm = false, remote = false } = options;
+
+    if (!skipConfirm) {
+      const confirmed = confirm('Are you sure you want to logout?');
+      if (!confirmed) return;
+    }
+
+    try {
+      const isActive = StorageService.getItem('isActive') === 'true';
+      const sessionStartTime = StorageService.getItem('sessionStartTime');
+
+      if (isActive && sessionStartTime) {
+        const now = new Date();
+        const sessionDuration = Math.floor((now - new Date(sessionStartTime)) / 1000);
+        const totalActiveDuration = parseInt(StorageService.getItem('activeDuration') || '0');
+        const totalBreakDuration = parseInt(StorageService.getItem('breakDuration') || '0');
+        const isOnBreak = StorageService.getItem('isOnBreak') === 'true';
+        const workStartTime = StorageService.getItem('workStartTime');
+        const breakStartTime = StorageService.getItem('breakStartTime');
+        const isIdle = StorageService.getItem('isIdle') === 'true';
+
+        let finalActiveDuration = totalActiveDuration;
+        let finalBreakDuration = totalBreakDuration;
+        if (isActive && !isOnBreak && !isIdle && workStartTime) {
+          finalActiveDuration += Math.floor((now - new Date(workStartTime)) / 1000);
+        }
+        if (isOnBreak && breakStartTime) {
+          finalBreakDuration += Math.floor((now - new Date(breakStartTime)) / 1000);
+        }
+
+        const email = StorageService.getItem('userEmail');
+        const currentSessionId = StorageService.getItem('currentSessionId');
+        const today = new Date().toISOString().split('T')[0];
+
+        if (window.supabase && email) {
+          await window.supabase.from('time_sessions').upsert([{
+            id: currentSessionId,
+            user_email: email,
+            start_time: sessionStartTime,
+            end_time: now.toISOString(),
+            total_duration: sessionDuration,
+            break_duration: finalBreakDuration,
+            active_duration: finalActiveDuration,
+            session_date: today
+          }]);
+        }
+      }
+
+      StorageService.removeItem('userEmail');
+      StorageService.removeItem('displayName');
+      StorageService.removeItem('userCategory');
+      StorageService.removeItem('sessionStartTime');
+      StorageService.removeItem('currentSessionId');
+      StorageService.removeItem('workStartTime');
+      StorageService.removeItem('isActive');
+      StorageService.removeItem('isOnBreak');
+      StorageService.removeItem('breakStartTime');
+      StorageService.removeItem('breakDuration');
+      StorageService.removeItem('activeDuration');
+      StorageService.removeItem('breakCount');
+      StorageService.removeItem('totalIdleTime');
+      StorageService.removeItem('isIdle');
+      StorageService.removeItem('idleStartTime');
+      StorageService.removeItem('screenshotCaptureActive');
+
+      if (window.SessionSync && userEmail) {
+        await window.SessionSync.updateAppState(false);
+        window.SessionSync.clear();
+      }
+
+      if (window.electronAPI?.setUserLoggedIn) {
+        window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state during logout:', err));
+      }
+
+      window.location.href = 'login.html';
+    } catch (error) {
+      console.error('Error during logout from projects:', error);
+      if (!remote) {
+        alert('Error saving session before logout. Please try again.');
+      }
+    }
+  }
+
+  projectsMenuLogout.addEventListener('click', () => {
+    closeMenu();
+    performLogout({ skipConfirm: false, remote: false });
+  });
+
+  window.addEventListener('session:remote-logout', () => {
+    NotificationService.showWarning('You were signed out from the reports site. Please log in again from the desktop app.');
+    performLogout({ skipConfirm: true, remote: true });
+  });
 
   // Search functionality
   searchInput.addEventListener('input', (e) => {

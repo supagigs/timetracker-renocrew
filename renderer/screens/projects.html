@@ -38,14 +38,13 @@
           </div>
           <input type="text" id="searchInput" class="projects-search-input" placeholder="Search">
         </div>
-        <div class="projects-filter-icon-container">
-          <div class="projects-filter-icon-inner">
-            <svg class="projects-filter-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="16" viewBox="0 0 20 16" fill="none">
-              <path d="M15.7474 1.58331L7.41406 1.58331" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              <circle cx="2" cy="2" r="2" transform="matrix(-1 0 0 1 5.25 0.75)" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5"/>
-              <path d="M0.752604 9.91669L9.08594 9.91669" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              <circle cx="17.25" cy="12.75" r="2" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5"/>
-            </svg>
+        <div class="projects-menu-container" id="projectsMenuContainer">
+          <button type="button" class="projects-menu-trigger" id="projectsMenuTrigger" aria-haspopup="true" aria-expanded="false" aria-label="Menu">
+            <img src="../../assets/menu.svg" alt="" class="projects-menu-icon" width="20" height="20">
+          </button>
+          <div class="projects-menu-dropdown" id="projectsMenuDropdown" role="menu" hidden>
+            <button type="button" class="projects-menu-item projects-menu-item--apply" id="projectsMenuApplyLeave" role="menuitem">Apply Leave</button>
+            <button type="button" class="projects-menu-item projects-menu-item--logout" id="projectsMenuLogout" role="menuitem">Logout</button>
           </div>
         </div>
       </div>
