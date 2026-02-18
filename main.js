@@ -233,7 +233,7 @@ async function backgroundCaptureScreenshots() {
   }
 }
 
-const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, getUserCompany: frappeGetUserCompany, getUserRoleProfile: frappeGetUserRoleProfile, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
+const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, getUserCompany: frappeGetUserCompany, getUserRoleProfile: frappeGetUserRoleProfile, getUserFullName: frappeGetUserFullName, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
 const { 
   getUserProjects: frappeGetUserProjects, 
   setLoggers: setFrappeServiceLoggers, 
@@ -3881,6 +3881,16 @@ ipcMain.handle('auth:get-user-role-profile', async (event, userEmail) => {
   } catch (error) {
     logError('IPC', `Error getting user role profile: ${error.message}`, error);
     return { success: false, error: error.message || 'Failed to get role profile' };
+  }
+});
+
+ipcMain.handle('auth:get-user-full-name', async (event, userEmail) => {
+  try {
+    const fullName = await frappeGetUserFullName(userEmail);
+    return { success: true, fullName };
+  } catch (error) {
+    logError('IPC', `Error getting user full name: ${error.message}`, error);
+    return { success: false, error: error.message || 'Failed to get user full name' };
   }
 });
 

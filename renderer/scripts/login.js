@@ -499,28 +499,28 @@ async function syncProjectsToDatabase(userEmail) {
 
     // Step 4: Use atomic upsert operations to insert/update projects
     // Process entries individually to ensure proper error handling and avoid batch conflicts
+    // IMPORTANT: We call Supabase directly here (no SupabaseService) so that expected
+    // duplicate-key conflicts don't trigger user-visible error popups.
     let processedCount = 0;
     let errorCount = 0;
     let skippedCount = 0;
 
     for (const entry of uniqueEntries) {
       try {
-        // Use upsert - Supabase will automatically handle conflicts based on unique constraint
-        // The unique index on (user_email, frappe_project_id) will be used
-        const { error } = await SupabaseService.handleRequest(() =>
-          window.supabase
-            .from('projects')
-            .upsert(entry, {
-              onConflict: 'user_email,frappe_project_id',
-              ignoreDuplicates: false
-            })
-        );
+        const { error } = await window.supabase
+          .from('projects')
+          .upsert(entry, {
+            onConflict: 'user_email,frappe_project_id',
+            ignoreDuplicates: false
+          });
 
         if (error) {
           // Handle unique constraint violation gracefully
-          if (error.code === '23505' || error.message?.includes('duplicate key') || 
+          if (error.code === '23505' ||
+              error.message?.includes('duplicate key') || 
               error.message?.includes('unique constraint') || 
-              error.message?.includes('idx_projects_user_email_frappe_project_id')) {
+              error.message?.includes('idx_projects_user_email_frappe_project_id') ||
+              error.message?.includes('user_email')) {
             // Entry already exists - this is okay, treat as success
             skippedCount++;
             console.log(`Entry already exists (skipped): ${entry.user_email} - ${entry.frappe_project_id}`);
@@ -534,8 +534,10 @@ async function syncProjectsToDatabase(userEmail) {
         }
       } catch (entryError) {
         // Handle any other errors (network, etc.)
-        if (entryError?.code === '23505' || entryError?.message?.includes('duplicate key') ||
-            entryError?.message?.includes('unique constraint')) {
+        if (entryError?.code === '23505' ||
+            entryError?.message?.includes('duplicate key') ||
+            entryError?.message?.includes('unique constraint') ||
+            entryError?.message?.includes('user_email')) {
           skippedCount++;
           console.log(`Entry already exists (skipped): ${entry.user_email} - ${entry.frappe_project_id}`);
         } else {
@@ -603,28 +605,6 @@ if (!ValidationService.validateEmail(email)) {
   emailInput.focus();
   return;
 }
-
-// Email existence check (DB)
-// Email existence check (DB)
-const emailExists = await checkEmailExists(normalizedEmail);
-
-if (!emailExists) {
-  // Email is wrong, ignore password correctness here
-  setErrorState(
-    { email: true, password: false },
-    'Incorrect Email'
-  );
-  emailInput.focus();
-  return;
-}
-
-// Validate password (only when email exists)
-if (!password) {
-  NotificationService.showError('Please enter your password');
-  passwordInput.focus();
-  return;
-}
-
 
   // Validate password
   if (!password) {
@@ -751,14 +731,17 @@ if (!password) {
     }
     
     // Check for display name:
-    // 1) Try to load from Supabase users table
-    // 2) Fallback to localStorage
+    // 1) Try to load from Frappe User (full_name / first_name + last_name)
+    // 2) Sync into Supabase users.display_name
+    // 3) Fallback to existing Supabase value or localStorage
     let displayName = StorageService.getItem('displayName');
+    let displayNameFromFrappe = null;
 
     try {
-      // Fetch company and role profile from Frappe
+      // Fetch display name, company and role profile from Frappe
       let company = null;
       let roleProfile = null;
+      let fullName = null;
       
       if (window.auth && window.auth.getUserCompany) {
         try {
@@ -795,6 +778,24 @@ if (!password) {
         }
       }
 
+      if (window.auth && window.auth.getUserFullName) {
+        try {
+          const fullNameResult = await window.auth.getUserFullName(normalizedEmail);
+          if (fullNameResult && fullNameResult.success && fullNameResult.fullName) {
+            fullName = String(fullNameResult.fullName).trim();
+            if (fullName) {
+              displayNameFromFrappe = fullName;
+              displayName = fullName;
+              StorageService.setItem('displayName', fullName);
+              console.log('Fetched full name from Frappe:', fullName);
+            }
+          }
+        } catch (fullNameError) {
+          console.error('Error fetching full name from Frappe:', fullNameError);
+          // Non-fatal - continue without full name
+        }
+      }
+
       // Store role_profile_name directly from Frappe (not converted)
       // The role_profile_name from Frappe will be stored as-is in the database
 
@@ -822,7 +823,7 @@ if (!password) {
               .from('users')
               .insert([{
                 email: normalizedEmail,
-                display_name: null,
+                display_name: displayNameFromFrappe || null,
                 role: roleProfile, // Store role_profile_name directly from Frappe
                 company: company
               }])
@@ -854,6 +855,13 @@ if (!password) {
             console.log('Setting company for user:', email, 'to', newCompany);
           }
 
+          // Update display_name from Frappe if we have it and it's different
+          const currentDisplayName = (userRow.display_name || '').trim();
+          if (displayNameFromFrappe && displayNameFromFrappe !== currentDisplayName) {
+            updateData.display_name = displayNameFromFrappe;
+            console.log('Updating display name for user from Supabase to match Frappe:', currentDisplayName, '->', displayNameFromFrappe);
+          }
+
           if (Object.keys(updateData).length > 0) {
             const { error: updateError } = await SupabaseService.handleRequest(() =>
               window.supabase
@@ -868,12 +876,13 @@ if (!password) {
               // Update local userRow with new values
               if (updateData.role) userRow.role = updateData.role;
               if (updateData.company) userRow.company = updateData.company;
+              if (updateData.display_name) userRow.display_name = updateData.display_name;
             }
           }
         }
 
-        // If Supabase has a display_name, use it and cache locally
-        if (userRow && userRow.display_name && userRow.display_name.trim() !== '') {
+        // If we didn't get a display name from Frappe, but Supabase has one, use it and cache locally
+        if (!displayNameFromFrappe && userRow && userRow.display_name && userRow.display_name.trim() !== '') {
           displayName = userRow.display_name.trim();
           StorageService.setItem('displayName', displayName);
         }

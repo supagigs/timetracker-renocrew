@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('auth', {
 
   getUserRoleProfile: (userEmail) =>
     ipcRenderer.invoke('auth:get-user-role-profile', userEmail),
+
+  getUserFullName: (userEmail) =>
+    ipcRenderer.invoke('auth:get-user-full-name', userEmail),
 });
 
 contextBridge.exposeInMainWorld('frappe', {

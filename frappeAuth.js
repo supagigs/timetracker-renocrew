@@ -88,6 +88,95 @@ async function getCurrentUser() {
   }
 }
 
+async function getUserFullName(userEmail) {
+  try {
+    if (!userEmail) {
+      return null;
+    }
+
+    const extractFullName = (user) => {
+      if (!user) return null;
+
+      // Prefer explicit full_name if present
+      if (user.full_name && typeof user.full_name === 'string' && user.full_name.trim()) {
+        return user.full_name.trim();
+      }
+
+      // Fallback: combine first_name and last_name
+      const firstName = typeof user.first_name === 'string' ? user.first_name.trim() : '';
+      const lastName = typeof user.last_name === 'string' ? user.last_name.trim() : '';
+      const combined = `${firstName} ${lastName}`.trim();
+      if (combined) {
+        return combined;
+      }
+
+      // Final fallback: use name field if it's not an email
+      if (user.name && typeof user.name === 'string' && user.name.trim()) {
+        const value = user.name.trim();
+        // If it's clearly an email, don't use it as display name
+        if (!value.includes('@')) {
+          return value;
+        }
+      }
+
+      return null;
+    };
+
+    // First, try with API key authentication (has broader permissions)
+    const apiKey = process.env.FRAPPE_API_KEY;
+    const apiSecret = process.env.FRAPPE_API_SECRET;
+
+    const baseParams = {
+      fields: JSON.stringify(['name', 'full_name', 'first_name', 'last_name']),
+      filters: JSON.stringify([['name', '=', userEmail]]),
+      limit_page_length: 1,
+    };
+
+    if (apiKey && apiSecret) {
+      try {
+        const frappeApiKey = createFrappeClient(true); // Use API key auth
+
+        const res = await frappeApiKey.get('/api/resource/User', {
+          params: baseParams,
+        });
+
+        const users = res?.data?.data || [];
+        if (users.length > 0) {
+          const fullName = extractFullName(users[0]);
+          if (fullName) {
+            if (logInfo) logInfo('Frappe', `Full name for user ${userEmail} (via API key): ${fullName}`);
+            return fullName;
+          }
+        }
+      } catch (apiKeyErr) {
+        const errorMsg = apiKeyErr.response?.data?.exception || apiKeyErr.message || 'Unknown error';
+        if (logWarn) logWarn('Frappe', `API key auth failed in getUserFullName, trying session-based: ${errorMsg}`);
+      }
+    }
+
+    // Fallback: Try with session-based authentication
+    const frappe = createFrappeClient(false); // Use session-based auth
+    const res = await frappe.get('/api/resource/User', {
+      params: baseParams,
+    });
+
+    const users = res?.data?.data || [];
+    if (users.length > 0) {
+      const fullName = extractFullName(users[0]);
+      if (fullName) {
+        if (logInfo) logInfo('Frappe', `Full name for user ${userEmail} (via session): ${fullName}`);
+        return fullName;
+      }
+    }
+
+    if (logWarn) logWarn('Frappe', `No full name found for user ${userEmail}`);
+    return null;
+  } catch (err) {
+    if (logError) logError('Frappe', 'Error getting user full name:', err);
+    return null;
+  }
+}
+
 async function getUserCompany(userEmail) {
   try {
     if (!userEmail) {
@@ -375,5 +464,5 @@ async function getUserRoleProfile(userEmail) {
   }
 }
 
-module.exports = { login, logout, getCurrentUser, getUserCompany, getUserRoleProfile, setLoggers, extractCompanyString };
+module.exports = { login, logout, getCurrentUser, getUserCompany, getUserRoleProfile, getUserFullName, setLoggers, extractCompanyString };
 
