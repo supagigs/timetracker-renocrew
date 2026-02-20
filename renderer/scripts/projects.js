@@ -392,16 +392,35 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   projectsMenuApplyLeave.addEventListener('click', () => {
     closeMenu();
-    // Apply Leave: open leave application (e.g. Frappe Leave Application) or show placeholder
+    // Apply Leave: open leave application for the current user (same URL pattern as View Reports, then /app/leave-application/new)
     const reportsBaseUrl = (window.env && window.env.REPORTS_URL) || '';
-    if (reportsBaseUrl) {
-      const leaveUrl = reportsBaseUrl.trim().replace(/\/$/, '') + '/app/leave-application/new';
-      window.electronAPI.openExternalUrl(leaveUrl).catch(() => {
-        NotificationService.showError('Unable to open leave application.');
-      });
-    } else {
+    const email = StorageService.getItem('userEmail');
+
+    if (!reportsBaseUrl) {
       NotificationService.showError('Leave application URL is not configured.');
+      return;
     }
+    if (!email) {
+      NotificationService.showError('User email not available. Please log in again.');
+      return;
+    }
+
+    const encodedEmail = encodeURIComponent(email);
+    let baseWithEmail = reportsBaseUrl.trim();
+
+    if (baseWithEmail.includes('{email}')) {
+      baseWithEmail = baseWithEmail.replace('{email}', encodedEmail);
+    } else if (baseWithEmail.includes('%EMAIL%')) {
+      baseWithEmail = baseWithEmail.replace('%EMAIL%', encodedEmail);
+    } else {
+      if (!baseWithEmail.endsWith('/')) baseWithEmail += '/';
+      baseWithEmail += `reports/${encodedEmail}`;
+    }
+
+    const leaveUrl = baseWithEmail.replace(/\/$/, '') + '/app/leave-application/new';
+    window.electronAPI.openExternalUrl(leaveUrl).catch(() => {
+      NotificationService.showError('Unable to open leave application.');
+    });
   });
 
   async function performLogout(options = {}) {
