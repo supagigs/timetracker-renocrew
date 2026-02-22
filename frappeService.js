@@ -630,8 +630,10 @@ async function verifyTimesheetBelongsToUser(timesheet, userEmail) {
 /**
  * Find existing timesheet for a project
  * Returns the timesheet if found, null if not found
+ * @param {string} project - Frappe project ID
+ * @param {string} [frappeEmployeeId] - Frappe employee ID from employees table (preferred; when provided, skips Frappe lookup)
  */
-async function getTimesheetForProject(project) {
+async function getTimesheetForProject(project, frappeEmployeeId) {
   const userEmail = await getCurrentUser();
   if (!userEmail) {
     throw new Error('User not logged in');
@@ -644,15 +646,21 @@ async function getTimesheetForProject(project) {
   const frappe = createFrappeClient();
 
   try {
-    // Get employee ID for the current user
-    let employeeId = await getEmployeeForUser(userEmail);
-    
-    // Normalize employee ID for consistent use throughout this function
+    // Use frappe_employee_id from employees table (Supabase) when provided
     let normalizedEmployeeId = null;
-    if (employeeId) {
-      normalizedEmployeeId = String(employeeId).trim();
-      if (!normalizedEmployeeId || normalizedEmployeeId === 'null' || normalizedEmployeeId === 'undefined') {
-        normalizedEmployeeId = null;
+    if (frappeEmployeeId && String(frappeEmployeeId).trim()) {
+      normalizedEmployeeId = String(frappeEmployeeId).trim();
+      if (logInfo) {
+        logInfo('Frappe', `Using frappe_employee_id from employees table: "${normalizedEmployeeId}"`);
+      }
+    } else {
+      // Fallback: get employee ID from Frappe (legacy path)
+      let employeeId = await getEmployeeForUser(userEmail);
+      if (employeeId) {
+        normalizedEmployeeId = String(employeeId).trim();
+        if (!normalizedEmployeeId || normalizedEmployeeId === 'null' || normalizedEmployeeId === 'undefined') {
+          normalizedEmployeeId = null;
+        }
       }
     }
     
@@ -1006,13 +1014,18 @@ async function addTimeLogToTimesheet(timesheetId, { project, task, hours = 0, ro
  * If a timesheet already exists for the project and is submitted, creates a new timesheet instead
  */
 
-async function getOrCreateTimesheet({ project, task }) {
+async function getOrCreateTimesheet({ project, task, frappeEmployeeId }) {
   const frappe = createFrappeClient();
 
   if (!project) throw new Error("Project is required");
 
-  // 1️⃣ Check for existing DRAFT timesheet for project
-  const existing = await getTimesheetForProject(project);
+  // frappeEmployeeId from employees table is required for employee-based timesheet flow
+  if (!frappeEmployeeId || !String(frappeEmployeeId).trim()) {
+    throw new Error("Employee record is required. Please ensure your user is linked to an employee in the employees table.");
+  }
+
+  // 1️⃣ Check for existing DRAFT timesheet for project and employee
+  const existing = await getTimesheetForProject(project, frappeEmployeeId);
 
   if (existing) {
     const status = String(existing.status || "").toLowerCase();
@@ -1023,7 +1036,7 @@ async function getOrCreateTimesheet({ project, task }) {
   }
 
   // 2️⃣ Otherwise create new timesheet
-  const newTimesheet = await createTimesheet({ project, task });
+  const newTimesheet = await createTimesheet({ project, task, frappeEmployeeId });
 
   return { timesheet: newTimesheet.name };
 }
@@ -1191,7 +1204,7 @@ async function updateTimesheetRow({ timesheetId, timesheetRowId, hours }) {
   }
 }
 
-async function createTimesheet({ project, task }) {
+async function createTimesheet({ project, task, frappeEmployeeId }) {
   const userEmail = await getCurrentUser();
   if (!userEmail) {
     throw new Error('User not logged in');
@@ -1203,8 +1216,10 @@ async function createTimesheet({ project, task }) {
 
   const frappe = createFrappeClient();
 
-  // 1️⃣ Get employee for the current user (timesheets are associated with employees)
-  let employeeId = await getEmployeeForUser(userEmail);
+  // 1️⃣ Use frappe_employee_id from employees table when provided; otherwise fetch from Frappe
+  let employeeId = frappeEmployeeId && String(frappeEmployeeId).trim()
+    ? String(frappeEmployeeId).trim()
+    : await getEmployeeForUser(userEmail);
   
   if (!employeeId) {
     // Employee is REQUIRED for proper user separation
