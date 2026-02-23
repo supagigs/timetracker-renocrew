@@ -354,6 +354,38 @@ document.addEventListener('DOMContentLoaded', () => {
     return Promise.race([promise, t]);
   }
 
+  /**
+   * Fetch frappe_employee_id and company from employees table for the logged-in user.
+   * Uses users (by email) -> employees (by user_id).
+   * @returns {{ frappeEmployeeId: string, company: string|null } | null}
+   */
+  async function fetchEmployeeForUser(userEmail) {
+    if (!userEmail || !window.supabase) return null;
+    try {
+      const { data: userRow, error: userError } = await window.supabase
+        .from('users')
+        .select('id')
+        .eq('email', userEmail.toLowerCase().trim())
+        .maybeSingle();
+      if (userError || !userRow) return null;
+
+      const { data: empRow, error: empError } = await window.supabase
+        .from('employees')
+        .select('frappe_employee_id, company')
+        .eq('user_id', userRow.id)
+        .maybeSingle();
+      if (empError || !empRow || !empRow.frappe_employee_id) return null;
+
+      return {
+        frappeEmployeeId: String(empRow.frappe_employee_id).trim(),
+        company: empRow.company ? String(empRow.company).trim() : null
+      };
+    } catch (err) {
+      console.error('fetchEmployeeForUser error:', err);
+      return null;
+    }
+  }
+
   // Start timer (Clock In) — transactional: only show running after Frappe + DB succeed
   async function startTimer() {
     if (isActive) return;
@@ -373,14 +405,22 @@ document.addEventListener('DOMContentLoaded', () => {
       StorageService.removeItem('frappeTimesheetId');
       StorageService.removeItem('frappeTimesheetRowId');
   
+      const userEmail = StorageService.getItem('userEmail');
       const projectId = StorageService.getItem('selectedProjectId');
       let taskId = StorageService.getItem('selectedTaskId') || null;
   
-      // 1️⃣ Ensure timesheet container exists
+      // 0️⃣ Get frappe_employee_id from employees table (required for timesheet)
+      const employeeData = await fetchEmployeeForUser(userEmail);
+      if (!employeeData || !employeeData.frappeEmployeeId) {
+        throw new Error('Employee record not found. Please ensure your user is linked to an employee in the system.');
+      }
+  
+      // 1️⃣ Ensure timesheet container exists (check/create draft timesheet for project + employee)
       const { timesheet } = await callWithTimeout(
         window.frappe.getOrCreateTimesheet({
           project: projectId,
-          task: taskId
+          task: taskId,
+          frappeEmployeeId: employeeData.frappeEmployeeId
         }),
         FRAPPE_REQUEST_TIMEOUT_MS
       );
@@ -419,25 +459,30 @@ document.addEventListener('DOMContentLoaded', () => {
       StorageService.setItem('frappeTimesheetRowId', row);
   
       // 3b️⃣ Create time_sessions entry in time tracker DB and store its id
-      const email = StorageService.getItem('userEmail');
+      const email = userEmail || StorageService.getItem('userEmail');
       const today = new Date().toISOString().split('T')[0];
       const startTimeIso = new Date().toISOString();
       if (window.supabase && email) {
+        const insertPayload = {
+          user_email: email,
+          start_time: startTimeIso,
+          session_date: today,
+          frappe_timesheet_id: timesheet,
+          frappe_project_id: projectId || null,
+          frappe_task_id: taskId || null,
+          frappe_employee_id: employeeData.frappeEmployeeId || null,
+          active_duration: 0,
+          break_duration: 0,
+          idle_duration: 0,
+          total_duration: 0,
+          break_count: 0
+        };
+        if (employeeData.company) {
+          insertPayload.company = employeeData.company;
+        }
         const { data: inserted, error: insertError } = await window.supabase
           .from('time_sessions')
-          .insert([{
-            user_email: email,
-            start_time: startTimeIso,
-            session_date: today,
-            frappe_timesheet_id: timesheet,
-            frappe_project_id: projectId || null,
-            frappe_task_id: taskId || null,
-            active_duration: 0,
-            break_duration: 0,
-            idle_duration: 0,
-            total_duration: 0,
-            break_count: 0
-          }])
+          .insert([insertPayload])
           .select('id')
           .single();
         if (insertError) {

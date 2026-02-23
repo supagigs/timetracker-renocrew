@@ -33,14 +33,81 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let allProjects = [];
 
-  // Load projects from Frappe
+  /**
+   * Fetch projects from Supabase project_users and projects tables.
+   * No Frappe API call - uses local database.
+   */
+  async function fetchProjectsFromSupabase(userEmail) {
+    if (!userEmail || !window.supabase) {
+      console.warn('Cannot fetch projects: missing userEmail or Supabase');
+      return [];
+    }
+    try {
+      // 1) Get user_id from users table by email
+      const { data: userRow, error: userError } = await window.supabase
+        .from('users')
+        .select('id')
+        .eq('email', userEmail.toLowerCase().trim())
+        .maybeSingle();
+
+      if (userError) {
+        console.error('Error fetching user for projects:', userError);
+        return [];
+      }
+      if (!userRow) {
+        console.warn('No user found for email:', userEmail);
+        return [];
+      }
+
+      const userId = userRow.id;
+
+      // 2) Get project_ids from project_users for this user
+      const { data: projectUsers, error: puError } = await window.supabase
+        .from('project_users')
+        .select('project_id')
+        .eq('user_id', userId);
+
+      if (puError) {
+        console.error('Error fetching project_users:', puError);
+        return [];
+      }
+      if (!projectUsers || projectUsers.length === 0) {
+        return [];
+      }
+
+      const projectIds = projectUsers.map((pu) => pu.project_id);
+
+      // 3) Get project details (frappe_project_id, project_name) from projects
+      const { data: projects, error: projError } = await window.supabase
+        .from('projects')
+        .select('id, frappe_project_id, project_name')
+        .in('id', projectIds);
+
+      if (projError) {
+        console.error('Error fetching projects:', projError);
+        return [];
+      }
+
+      // Return in format expected by UI: { id: frappe_project_id, name: project_name }
+      return (projects || []).map((p) => ({
+        id: p.frappe_project_id || p.id,
+        name: p.project_name || p.id,
+        description: p.project_name || null
+      }));
+    } catch (err) {
+      console.error('fetchProjectsFromSupabase error:', err);
+      return [];
+    }
+  }
+
+  // Load projects from Supabase (project_users + projects tables)
   async function loadProjects() {
     try {
       loadingMessage.style.display = 'block';
       projectsList.style.display = 'none';
       noProjectsMessage.style.display = 'none';
 
-      const projects = await window.frappe.getUserProjects();
+      const projects = await fetchProjectsFromSupabase(userEmail);
       allProjects = projects || [];
 
       if (!allProjects || allProjects.length === 0) {
@@ -392,16 +459,35 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   projectsMenuApplyLeave.addEventListener('click', () => {
     closeMenu();
-    // Apply Leave: open leave application (e.g. Frappe Leave Application) or show placeholder
+    // Apply Leave: open leave application for the current user (same URL pattern as View Reports, then /app/leave-application/new)
     const reportsBaseUrl = (window.env && window.env.REPORTS_URL) || '';
-    if (reportsBaseUrl) {
-      const leaveUrl = reportsBaseUrl.trim().replace(/\/$/, '') + '/app/leave-application/new';
-      window.electronAPI.openExternalUrl(leaveUrl).catch(() => {
-        NotificationService.showError('Unable to open leave application.');
-      });
-    } else {
+    const email = StorageService.getItem('userEmail');
+
+    if (!reportsBaseUrl) {
       NotificationService.showError('Leave application URL is not configured.');
+      return;
     }
+    if (!email) {
+      NotificationService.showError('User email not available. Please log in again.');
+      return;
+    }
+
+    const encodedEmail = encodeURIComponent(email);
+    let baseWithEmail = reportsBaseUrl.trim();
+
+    if (baseWithEmail.includes('{email}')) {
+      baseWithEmail = baseWithEmail.replace('{email}', encodedEmail);
+    } else if (baseWithEmail.includes('%EMAIL%')) {
+      baseWithEmail = baseWithEmail.replace('%EMAIL%', encodedEmail);
+    } else {
+      if (!baseWithEmail.endsWith('/')) baseWithEmail += '/';
+      baseWithEmail += `reports/${encodedEmail}`;
+    }
+
+    const leaveUrl = baseWithEmail.replace(/\/$/, '') + '/app/leave-application/new';
+    window.electronAPI.openExternalUrl(leaveUrl).catch(() => {
+      NotificationService.showError('Unable to open leave application.');
+    });
   });
 
   async function performLogout(options = {}) {
