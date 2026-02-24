@@ -70,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let break2mClockOutTriggered = false;
   let lockSuspendClockOutTriggered = false;
   const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 1800; // 2 hours — auto clock out while continuously idle
-  const BREAK_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours — auto clock out when continuously on break
+  const BREAK_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 30 mins — auto clock out when continuously on break
 
   // Initialize idle tracker
   function initializeIdleTracker() {
