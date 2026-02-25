@@ -1,28 +1,182 @@
 {
-  "name": "supatimetracker",
-  "version": "1.0.0",
-  "description": "Time Tracker for Supagigs",
+  "name": "time-tracker-new",
+  "version": "1.1.1",
+  "description": "Time tracking application to enable users to record work hours, monitor productivity, and analyze performance with accuracy.",
   "main": "main.js",
+  "productName": "Time-Tracker",
   "scripts": {
     "start": "electron .",
-    "dev": "electron .",
-    "test": "npm run dev"
+    "build": "electron-builder --publish=never",
+    "release": "electron-builder --publish=always", 
+    "dev": "electron . --dev",  
+    "build:publish": "electron-builder --publish=always",
+    "build:skip-rebuild": "electron-builder --config.npmRebuild=false",
+    "dist": "electron-builder --publish=always",
+    "pack": "electron-builder --dir",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint main.js preload.js renderer/**/*.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/supagigs/Supatimetracker.git"
+    "url": "https://github.com/supagigs/Supatimetracker.git"
   },
   "keywords": [
-    "TimeTracker"
+    "time-tracker",
+    "productivity",
+    "electron",
+    "supabase",
+    "time-management"
   ],
-  "author": "Shree Mundade",
+  "author": "Your Name",
   "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/supagigs/Supatimetracker/issues"
-  },
-  "homepage": "https://github.com/supagigs/Supatimetracker#readme",
   "dependencies": {
-    "@supabase/supabase-js": "^2.53.0",
-    "electron": "^28.0.0"
+    "@paymoapp/active-window": "^2.0.0",
+    "@supabase/supabase-js": "^2.78.0",
+    "active-win": "^7.7.2",
+    "axios": "^1.13.2",
+    "axios-cookiejar-support": "^4.0.7",
+    "canvas": "^3.2.0",
+    "chart.js": "^4.5.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "dotenv": "^17.2.3",
+    "electron-log": "^5.4.3",
+    "electron-updater": "^6.7.3",
+    "lucide-react": "^0.552.0",
+    "react-chartjs-2": "^5.3.1",
+    "screenshot-desktop": "^1.15.2",
+    "sharp": "^0.34.4",
+    "tailwind-merge": "^3.3.1",
+    "tough-cookie": "^4.1.4",
+    "tw-animate-css": "^1.4.0"
+  },
+  "optionalDependencies": {
+    "node-mac-permissions": "^2.5.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "cross-env": "^10.1.0",
+    "electron": "^38.3.0",
+    "electron-builder": "^26.7.0",
+    "eslint": "^9.39.2",
+    "globals": "^17.3.0",
+    "to-ico": "^1.0.1"
+  },
+  "overrides": {
+    "form-data": "^4.0.0",
+    "jpeg-js": "^0.4.4",
+    "minimist": "^1.2.8",
+    "tough-cookie": "^4.1.4",
+    "url-regex": "^5.0.0"
+  },
+  "build": {
+    "appId": "com.supagigs.timetracker",
+    "productName": "Time-Tracker",
+    "nodeGypRebuild": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "publish": {
+      "provider": "github",
+      "releaseType": "release",
+      "owner": "supagigs",
+      "repo": "Supatimetracker",
+      "publishAutoUpdate": true
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "frappeAuth.js",
+      "frappeClient.js",
+      "frappeService.js",
+      "assets/**/*",
+      "renderer/**/*",
+      "node_modules/**/*",
+      "package.json",
+      "!**/node_modules/active-win/build-tmp*/**",
+      "!**/node_modules/active-win/**/*.make",
+      "!**/node_modules/active-win/**/Makefile"
+    ],
+    "asarUnpack": [
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
+      "node_modules/active-win/**/*",
+      "node_modules/@paymoapp/active-window/**/*"
+    ],
+    "extraResources": [
+      ".env"
+    ],
+    "asar": true,
+    "compression": "maximum",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/android-chrome-512x512.png",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": "universal"
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "identity": null,
+      "extendInfo": {
+        "NSCameraUsageDescription": "This app needs camera access for screenshot functionality.",
+        "NSMicrophoneUsageDescription": "This app does not use the microphone.",
+        "NSDesktopFolderUsageDescription": "This app needs to save screenshots to your desktop.",
+        "NSDocumentsFolderUsageDescription": "This app needs to save screenshots to your documents folder.",
+        "NSAppleEventsUsageDescription": "This app needs to detect which application you are using for accurate time tracking.",
+        "NSScreenCaptureUsageDescription": "This app needs screen recording permission to capture screenshots."
+      }
+    },
+    "dmg": {
+      "title": "${productName}-${version}",
+      "icon": "assets/android-chrome-512x512.png",
+      "background": null,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220,
+          "type": "file"
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "format": "UDZO"
+    },
+    "win": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/android-chrome-512x512.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Time-Tracker"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/favicon.ico"
+    }
   }
 }

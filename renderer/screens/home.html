@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Home - Time Tracker</title>
+  <link rel="stylesheet" href="../styles/common.css">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net;
+                 script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+                 style-src 'self' 'unsafe-inline';
+                 img-src 'self' data: blob:;
+                 media-src 'self' data: blob:;">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../scripts/supabaseClient.js"></script>
+  <script src="../scripts/utils.js"></script>
+  <script src="../scripts/sessionSync.js"></script>
+  <script src="../scripts/home.js" defer></script>
+</head>
+<body class="home-body">
+  <header class="common-page-header"></header>
+  <div class="home-background">
+    <div class="home-glow home-glow-primary"></div>
+    <div class="home-glow home-glow-accent"></div>
+    <div class="auth-design-circle auth-design-circle-1"></div>
+    <div class="auth-design-circle auth-design-circle-2"></div>
+  </div>
+
+  <div class="home-wrapper">
+    <header class="home-topbar">
+      <div class="home-brand">
+        <div class="home-brand__icon">⏱</div>
+        <div class="home-brand__text">
+          <p class="home-brand__title">Time Tracker</p>
+          <p class="home-brand__subtitle">Stay focused, ship on time</p>
+        </div>
+      </div>
+      <div class="home-status">
+        <span class="home-status__dot"></span>
+        <span class="home-status__label">Your productivity streak is live</span>
+      </div>
+    </header>
+
+    <main class="home-main">
+      <section class="home-card">
+        <div class="home-card__left">
+          <span class="home-card__badge">Great to see you</span>
+          <h1>Welcome back!</h1>
+          <p id="welcomeText" class="home-card__greeting">Hello there!</p>
+          <p id="infoText" class="home-card__info">
+            Select a project to start tracking your time
+          </p>
+
+          <div class="home-actions button-group">
+            <button id="clockInBtn" class="btn-primary">Start</button>
+            <button id="projectsBtn" class="btn-primary home-btn-projects" style="display: none;">Projects</button>
+            <button id="reportBtn" class="btn-secondary btn-github">View Reports</button>
+            <button id="logoutBtn" class="btn-danger">Logout</button>
+          </div>
+
+          <div class="home-card__footnote">
+            Track your hours, organize projects, and keep your team aligned in one glance.
+          </div>
+        </div>
+
+        <div class="home-card__right">
+          <ul class="home-highlights">
+            <li>
+              <span class="home-highlights__icon">⏰</span>
+              <div>
+                <h3>Smarter clock-in</h3>
+                <p>Record sessions instantly and resume where you left off.</p>
+              </div>
+            </li>
+            <li>
+              <span class="home-highlights__icon">📊</span>
+              <div>
+                <h3>Beautiful reports</h3>
+                <p>Spot trends with clean summaries across teams and projects.</p>
+              </div>
+            </li>
+            <li>
+              <span class="home-highlights__icon">🤝</span>
+              <div>
+                <h3>Collaborative projects</h3>
+                <p>Assign work and keep everyone in sync with real-time updates.</p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

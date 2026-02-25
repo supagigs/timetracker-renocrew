@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Screen Captured</title>
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      background: transparent;
+      overflow: hidden;
+    }
+    #toast-container {
+      width: 100%;
+      height: 100%;
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05); 
+      border: none;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+
+    .toast-header-row {
+      display: flex;
+      align-items: center;
+      padding: 14px 15px;
+      background: #fff;
+      flex-shrink: 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    #app-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      background: transparent;
+      object-fit: contain;
+      margin-right: 12px;
+      display: block;
+      flex-shrink: 0;
+    }
+    #toast-title {
+      font-size: 1.08rem;
+      font-weight: 600;
+      color: #232b3a;
+      margin-right: auto;
+    }
+    #close-x {
+      font-size: 1.3rem;
+      color: #888;
+      cursor: pointer;
+      border: none;
+      background: none;
+      padding: 0;
+      transition: color 0.14s;
+    }
+    #close-x:hover {
+      color: #e11d48;
+    }
+    .toast-content-row {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      flex: 1;
+      padding: 18px 20px 18px 18px;
+      background: #f8f9fa;
+      box-sizing: border-box;
+      gap: 16px;
+      /* Allow slight overflow so side column (delete button) is never clipped,
+         especially on macOS with display scaling. */
+      overflow: visible;
+      min-height: 0;
+    }
+    #preview-img {
+      /* Slightly narrower so the side column always fits within the toast window
+         on macOS (where window scaling can reduce effective width). */
+      width: 360px;
+      height: 220px;
+      border-radius: 12px;
+      object-fit: cover;
+      background: #e8e8e8;
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px #0001;
+      image-rendering: auto;
+      display: block;
+    }
+    .side-column {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      min-width: 80px;
+      width: 80px;
+      flex-shrink: 0;
+      /* macOS-specific: ensure column is never clipped */
+      overflow: visible;
+      position: relative;
+    }
+    #vertical-loader {
+      width: 8px;
+      height: 120px;
+      background: #e8eaea;
+      border-radius: 10px;
+      display: flex;
+      align-items: flex-end;
+      overflow: hidden;
+      position: relative;
+    }
+    #loader-bar {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(180deg, #10b981 70%, #22c55e 100%);
+      border-radius: 10px;
+      position: absolute;
+      bottom: 0;
+      transition: height 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+      box-shadow: 0 2px 7px rgba(20, 211, 140, 0.16);
+    }
+    #delete-btn {
+      font-size: 0.9rem;
+      font-weight: 600;
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      padding: 8px 12px;
+      transition: all 0.15s;
+      color: #666;
+      display: block !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+      position: relative;
+      z-index: 10;
+      min-width: 60px;
+      min-height: 32px;
+      width: 100%;
+      box-sizing: border-box;
+      /* macOS-specific: ensure button is always visible */
+      -webkit-appearance: none;
+      appearance: none;
+      text-align: center;
+      white-space: nowrap;
+    }
+    #delete-btn:hover {
+      color: #fff;
+      background: #e11d48;
+      border-color: #e11d48;
+      transform: scale(1.02);
+    }
+    #delete-btn.deleting {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    #delete-btn:disabled {
+      opacity: 0.5 !important;
+      cursor: not-allowed !important;
+      color: #ccc !important;
+    }
+    .status-message {
+      font-size: 0.9rem;
+      color: #10b981;
+      text-align: center;
+      padding: 8px;
+      display: none;
+      background: rgba(16, 185, 129, 0.1);
+      border-radius: 6px;
+      margin: 8px;
+      min-height: 20px;
+    }
+    .status-message.show {
+      display: block;
+    }
+    .status-message.success {
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.1);
+    }
+    .status-message.error {
+      color: #e11d48;
+      background: rgba(225, 29, 72, 0.1);
+    }
+  </style>
+</head>
+<body>
+  <div id="toast-container">
+    <div class="toast-header-row">
+      <img id="app-logo" src="android-chrome-192x192.png"/>
+      <div id="toast-title">Time Tracker</div>
+      <button id="close-x">&times;</button>
+    </div>
+    <div class="toast-content-row">
+      <img id="preview-img" alt="Screenshot" />
+      <div class="side-column">
+        <div id="vertical-loader">
+          <div id="loader-bar"></div>
+        </div>
+        <button id="delete-btn" title="Delete screenshot">Delete</button>
+        <div class="status-message" id="status-message"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentFilePath = null;
+    let isDeleting = false;
+    let timerExpired = false;
+    let initDataReceived = false;
+
+    // ============ INITIALIZATION ============
+    // Wait for DOM to be fully ready before setting up preload listener
+    function waitForReady() {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initializeToast);
+      } else {
+        // DOM is already ready, but wait a bit to ensure all elements are accessible
+        setTimeout(initializeToast, 10);
+      }
+    }
+    
+    waitForReady();
+
+    function initializeToast() {
+      console.log('[TOAST] Initializing with toastAPI, readyState:', document.readyState);
+      
+      // Ensure delete button is visible and accessible
+      const deleteBtn = document.getElementById('delete-btn');
+      if (deleteBtn) {
+        deleteBtn.style.display = 'block';
+        deleteBtn.style.visibility = 'visible';
+        deleteBtn.style.opacity = '1';
+        console.log('[TOAST] Delete button initialized and made visible');
+      } else {
+        console.error('[TOAST] Delete button element not found!');
+      }
+      
+      // Set up the toastAPI listener
+      if (window.toastAPI && typeof window.toastAPI.onInit === 'function') {
+        window.toastAPI.onInit(({ filePath, base64Data }) => {
+          try {
+            currentFilePath = filePath;
+            const previewImg = document.getElementById('preview-img');
+            if (previewImg) {
+              // Validate base64Data before setting src
+              if (base64Data && typeof base64Data === 'string' && base64Data.length > 0) {
+                // Clear any previous error state
+                previewImg.style.display = 'block';
+                previewImg.style.opacity = '1';
+                
+                // Set up error handler before setting src
+                previewImg.onerror = () => {
+                  console.error('[TOAST] Failed to load preview image');
+                  previewImg.style.opacity = '0.5';
+                  previewImg.alt = 'Preview unavailable';
+                };
+                
+                // Set up load handler
+                previewImg.onload = () => {
+                  console.log('[TOAST] Preview image loaded successfully');
+                  previewImg.style.opacity = '1';
+                };
+                
+                // Set the image source
+                previewImg.src = base64Data;
+                console.log('[TOAST] Setting preview image src (length:', base64Data.length, ')');
+              } else {
+                console.warn('[TOAST] Invalid or empty base64Data, cannot display preview');
+                previewImg.style.opacity = '0.5';
+                previewImg.alt = 'Preview unavailable';
+              }
+            } else {
+              console.error('[TOAST] Preview image element not found');
+            }
+            
+            // Ensure delete button is still visible after init
+            // macOS-specific: force visibility with additional checks
+            if (deleteBtn) {
+              deleteBtn.style.display = 'block';
+              deleteBtn.style.visibility = 'visible';
+              deleteBtn.style.opacity = '1';
+              deleteBtn.style.position = 'relative';
+              deleteBtn.style.zIndex = '10';
+              // Force a reflow to ensure visibility on macOS
+              deleteBtn.offsetHeight;
+              console.log('[TOAST] Delete button visibility enforced after init');
+            }
+            
+            initDataReceived = true;
+            console.log('[TOAST] Initialized with filePath:', filePath);
+            
+            // macOS-specific: additional visibility check after a delay
+            setTimeout(() => {
+              const btn = document.getElementById('delete-btn');
+              if (btn) {
+                btn.style.display = 'block';
+                btn.style.visibility = 'visible';
+                btn.style.opacity = '1';
+                console.log('[TOAST] Delete button visibility re-checked after delay');
+              }
+            }, 200);
+          } catch (error) {
+            console.error('[TOAST] Error during initialization:', error);
+          }
+        });
+      } else {
+        console.error('[TOAST] window.toastAPI not available or onInit is not a function');
+        // Retry initialization after a short delay
+        setTimeout(() => {
+          if (!initDataReceived && window.toastAPI) {
+            initializeToast();
+          }
+        }, 100);
+      }
+    }
+
+    // ============ CLOSE BUTTON HANDLER ============
+    document.getElementById('close-x').onclick = () => {
+      console.log('[TOAST] Close button clicked');
+      window.close();
+    };
+
+    // ============ DELETE BUTTON HANDLER ============
+    // Ensure delete button handler is set up after DOM is ready
+    function setupDeleteButton() {
+      const deleteBtn = document.getElementById('delete-btn');
+      if (!deleteBtn) {
+        console.error('[TOAST] Delete button not found when setting up handler');
+        // Retry after a short delay
+        setTimeout(setupDeleteButton, 50);
+        return;
+      }
+      
+      deleteBtn.onclick = async () => {
+        // Block deletion if timer has expired
+        if (timerExpired) {
+          console.log('[TOAST] Delete blocked: timer has expired');
+          return;
+        }
+        
+        if (isDeleting || !currentFilePath) {
+          console.log('[TOAST] Delete blocked: isDeleting=', isDeleting, 'filePath=', currentFilePath);
+          return;
+        }
+        
+        isDeleting = true;
+        const btn = document.getElementById('delete-btn');
+        const statusMsg = document.getElementById('status-message');
+        
+        btn.classList.add('deleting');
+        btn.disabled = true;
+        
+        console.log('[TOAST] Delete button clicked, calling IPC with:', currentFilePath);
+
+        try {
+          // Call the delete handler in main.js
+          const result = await window.toastAPI.deleteFile(currentFilePath);
+          console.log('[TOAST] Delete result:', result);
+          
+          if (result?.success) {
+            // Show success message
+            statusMsg.textContent = '✓ Screenshot deleted';
+            statusMsg.classList.add('show', 'success');
+            statusMsg.classList.remove('error');
+            
+            console.log('[TOAST] Deletion successful, closing window in 500ms');
+            
+            // Close the window after showing success message
+            setTimeout(() => {
+              console.log('[TOAST] Closing toast window now');
+              window.close();
+            }, 500);
+          } else {
+            throw new Error(result?.message || 'Delete failed');
+          }
+        } catch (error) {
+          console.error('[TOAST] Delete error:', error);
+          
+          // Show error message
+          statusMsg.textContent = '✗ Delete failed: ' + error.message;
+          statusMsg.classList.add('show', 'error');
+          statusMsg.classList.remove('success');
+          
+          // Only re-enable delete button if timer hasn't expired
+          if (!timerExpired) {
+            isDeleting = false;
+            btn.classList.remove('deleting');
+            btn.disabled = false;
+          }
+        }
+      };
+      
+      // Ensure delete button is visible - macOS-specific fixes
+      deleteBtn.style.display = 'block';
+      deleteBtn.style.visibility = 'visible';
+      deleteBtn.style.opacity = '1';
+      deleteBtn.style.position = 'relative';
+      deleteBtn.style.zIndex = '10';
+      // Force a reflow to ensure visibility on macOS
+      deleteBtn.offsetHeight;
+      console.log('[TOAST] Delete button handler set up successfully');
+      
+      // macOS-specific: additional visibility enforcement
+      setTimeout(() => {
+        if (deleteBtn && deleteBtn.parentElement) {
+          deleteBtn.style.display = 'block';
+          deleteBtn.style.visibility = 'visible';
+          deleteBtn.style.opacity = '1';
+          console.log('[TOAST] Delete button visibility re-enforced after delay');
+        }
+      }, 150);
+    }
+    
+    // ============ TIMER INITIALIZATION ============
+    function initializeTimer() {
+      // Create timer display element
+      const sideColumn = document.querySelector('.side-column');
+      if (!sideColumn) {
+        console.error('[TOAST] Side column not found, retrying timer initialization');
+        setTimeout(initializeTimer, 50);
+        return;
+      }
+      
+      let timerDisplay = document.getElementById('timer-display');
+      if (!timerDisplay) {
+        timerDisplay = document.createElement('div');
+        timerDisplay.id = 'timer-display';
+        timerDisplay.style.cssText = 'font-size: 0.85rem; color: #666; text-align: center; margin-top: 8px; font-weight: 500;';
+        sideColumn.appendChild(timerDisplay);
+      }
+      
+      const loaderBar = document.getElementById('loader-bar');
+      if (!loaderBar) {
+        console.error('[TOAST] Loader bar not found, retrying timer initialization');
+        setTimeout(initializeTimer, 50);
+        return;
+      }
+      
+      const TIMER_DURATION = 10000; // 10 seconds
+      const startTime = Date.now();
+      
+      function disableDeleteButton() {
+        const deleteBtn = document.getElementById('delete-btn');
+        if (deleteBtn) {
+          deleteBtn.disabled = true;
+          deleteBtn.style.opacity = '0.5';
+          deleteBtn.style.cursor = 'not-allowed';
+          deleteBtn.title = 'Timer expired - deletion no longer available';
+          console.log('[TOAST] Delete button disabled after timer expiration');
+        }
+      }
+      
+      function animateLoader() {
+        const elapsed = Date.now() - startTime;
+        const remaining = Math.max(0, TIMER_DURATION - elapsed);
+        const percent = Math.max(0, (remaining / TIMER_DURATION) * 100);
+        const seconds = Math.ceil(remaining / 1000);
+        
+        if (loaderBar) {
+          loaderBar.style.height = percent + '%';
+        }
+        if (timerDisplay) {
+          timerDisplay.textContent = `${seconds}s`;
+        }
+        
+        if (remaining > 0) {
+          requestAnimationFrame(animateLoader);
+        } else {
+          timerExpired = true;
+          if (timerDisplay) {
+            timerDisplay.textContent = '0s';
+          }
+          console.log('[TOAST] Timer expired after 10 seconds');
+          
+          // Disable delete button
+          disableDeleteButton();
+          
+          // Close the toast window immediately after timer expires
+          // Only keep open if deletion is in progress
+          if (!isDeleting) {
+            console.log('[TOAST] Auto-closing window after timer expiration');
+            setTimeout(() => {
+              window.close();
+            }, 100);
+          } else {
+            console.log('[TOAST] Deletion in progress, will close after completion');
+          }
+        }
+      }
+      
+      // Start the timer animation
+      animateLoader();
+      console.log('[TOAST] Timer started - 10 seconds until auto-close');
+    }
+    
+    // Set up delete button handler
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        setupDeleteButton();
+        initializeTimer();
+      });
+    } else {
+      setupDeleteButton();
+      setTimeout(initializeTimer, 100);
+    }
+  </script>
+</body>
+</html>
