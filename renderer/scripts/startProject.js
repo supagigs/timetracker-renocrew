@@ -355,33 +355,25 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /**
-   * Fetch frappe_employee_id and company from employees table for the logged-in user.
-   * Uses users (by email) -> employees (by user_id).
+   * Fetch frappe_employee_id and company for the logged-in user from Frappe.
+   * Uses IPC via window.frappe.getEmployeeForUser instead of Supabase.
    * @returns {{ frappeEmployeeId: string, company: string|null } | null}
    */
   async function fetchEmployeeForUser(userEmail) {
-    if (!userEmail || !window.supabase) return null;
+    if (!userEmail || !window.frappe || typeof window.frappe.getEmployeeForUser !== 'function') {
+      return null;
+    }
     try {
-      const { data: userRow, error: userError } = await window.supabase
-        .from('users')
-        .select('id')
-        .eq('email', userEmail.toLowerCase().trim())
-        .maybeSingle();
-      if (userError || !userRow) return null;
-
-      const { data: empRow, error: empError } = await window.supabase
-        .from('employees')
-        .select('frappe_employee_id, company')
-        .eq('user_id', userRow.id)
-        .maybeSingle();
-      if (empError || !empRow || !empRow.frappe_employee_id) return null;
-
+      const result = await window.frappe.getEmployeeForUser(userEmail);
+      if (!result || !result.success || !result.employeeId) {
+        return null;
+      }
       return {
-        frappeEmployeeId: String(empRow.frappe_employee_id).trim(),
-        company: empRow.company ? String(empRow.company).trim() : null
+        frappeEmployeeId: String(result.employeeId).trim(),
+        company: result.company ? String(result.company).trim() : null
       };
     } catch (err) {
-      console.error('fetchEmployeeForUser error:', err);
+      console.error('fetchEmployeeForUser (Frappe) error:', err);
       return null;
     }
   }

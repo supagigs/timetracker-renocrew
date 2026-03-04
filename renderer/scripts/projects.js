@@ -33,17 +33,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let allProjects = [];
 
-  /**
-   * Fetch projects from Supabase project_users and projects tables.
-   * No Frappe API call - uses local database.
-   */
+  // Fetch projects assigned to the current user directly from Frappe.
+  // Previous Supabase-based implementation is kept below for reference.
+  /*
   async function fetchProjectsFromSupabase(userEmail) {
     if (!userEmail || !window.supabase) {
       console.warn('Cannot fetch projects: missing userEmail or Supabase');
       return [];
     }
     try {
-      // 1) Get user_id from users table by email
       const { data: userRow, error: userError } = await window.supabase
         .from('users')
         .select('id')
@@ -61,7 +59,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       const userId = userRow.id;
 
-      // 2) Get project_ids from project_users for this user
       const { data: projectUsers, error: puError } = await window.supabase
         .from('project_users')
         .select('project_id')
@@ -77,7 +74,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       const projectIds = projectUsers.map((pu) => pu.project_id);
 
-      // 3) Get project details (frappe_project_id, project_name) from projects
       const { data: projects, error: projError } = await window.supabase
         .from('projects')
         .select('id, frappe_project_id, project_name')
@@ -88,7 +84,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         return [];
       }
 
-      // Return in format expected by UI: { id: frappe_project_id, name: project_name }
       return (projects || []).map((p) => ({
         id: p.frappe_project_id || p.id,
         name: p.project_name || p.id,
@@ -99,15 +94,38 @@ document.addEventListener('DOMContentLoaded', async () => {
       return [];
     }
   }
+  */
 
-  // Load projects from Supabase (project_users + projects tables)
+  async function fetchProjectsFromFrappe() {
+    if (!window.frappe || typeof window.frappe.getUserProjects !== 'function') {
+      console.warn('Cannot fetch projects: Frappe client is not available');
+      return [];
+    }
+
+    try {
+      const projects = await window.frappe.getUserProjects();
+      const safeProjects = Array.isArray(projects) ? projects : [];
+
+      // Normalize to the shape expected by the rest of this file
+      return safeProjects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.name || null,
+      }));
+    } catch (err) {
+      console.error('fetchProjectsFromFrappe error:', err);
+      return [];
+    }
+  }
+
+  // Load projects from Frappe for the current user
   async function loadProjects() {
     try {
       loadingMessage.style.display = 'block';
       projectsList.style.display = 'none';
       noProjectsMessage.style.display = 'none';
 
-      const projects = await fetchProjectsFromSupabase(userEmail);
+      const projects = await fetchProjectsFromFrappe();
       allProjects = projects || [];
 
       if (!allProjects || allProjects.length === 0) {

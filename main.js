@@ -247,7 +247,8 @@ const {
   saveTimesheetWithSavedocs,
   getFrappeServerTime,
   getUsersAssignedToProject, 
-  resolveRowForStart
+  resolveRowForStart,
+  getEmployeeDetailsForUser
 } = require('./frappeService');
 const path = require('path');
 const fs = require('fs');
@@ -3939,6 +3940,19 @@ ipcMain.handle('frappe:get-user-projects', async () => {
   } catch (error) {
     logError('IPC', `Frappe getProjects error: ${error.message}`, error);
     return [];
+  }
+});
+
+ipcMain.handle('frappe:get-employee-for-user', async (_e, userEmail) => {
+  try {
+    const details = await getEmployeeDetailsForUser(userEmail);
+    if (!details || !details.employeeId) {
+      return { success: false, employeeId: null, company: null, error: 'Employee not found for user' };
+    }
+    return { success: true, employeeId: details.employeeId, company: details.company || null };
+  } catch (error) {
+    logError('IPC', `Frappe getEmployeeForUser error for ${userEmail}: ${error.message}`, error);
+    return { success: false, employeeId: null, company: null, error: error.message };
   }
 });
 

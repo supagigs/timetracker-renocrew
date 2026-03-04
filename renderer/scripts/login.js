@@ -512,8 +512,8 @@ if (!ValidationService.validateEmail(email)) {
       }
 
       // Store role_profile_name directly from Frappe (not converted)
-      // The role_profile_name from Frappe will be stored as-is in the database
-
+      // Supabase profile sync is temporarily disabled due to connectivity issues.
+      /*
       if (window.supabase) {
         // Look up existing user by email (case-insensitive: do not create duplicate if same email exists in different case)
         const { data: existingUser, error } = await SupabaseService.handleRequest(() =>
@@ -597,14 +597,12 @@ if (!ValidationService.validateEmail(email)) {
           }
         }
 
-        // If we didn't get a display name from Frappe, but Supabase has one, use it and cache locally
         if (!displayNameFromFrappe && userRow && userRow.display_name && userRow.display_name.trim() !== '') {
           displayName = userRow.display_name.trim();
           StorageService.setItem('displayName', displayName);
         }
-
-        // Projects are fetched from project_users table directly (no Frappe sync)
       }
+      */
     } catch (profileError) {
       console.error('Error syncing display name with Supabase:', profileError);
       // Non-fatal – we still fallback to local storage check below

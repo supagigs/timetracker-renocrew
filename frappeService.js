@@ -511,6 +511,53 @@ async function getEmployeeForUser(userEmail) {
 }
 
 /**
+ * Get employee ID and company for a user email from Frappe.
+ * Uses getEmployeeForUser for the ID, then fetches the Employee doc
+ * to read the company field.
+ * Returns { employeeId, company } or null if not found.
+ */
+async function getEmployeeDetailsForUser(userEmail) {
+  const employeeId = await getEmployeeForUser(userEmail);
+  if (!employeeId) {
+    return null;
+  }
+
+  const frappe = createFrappeClient();
+
+  try {
+    const res = await frappe.get(`/api/resource/Employee/${employeeId}`, {
+      params: {
+        fields: JSON.stringify(['name', 'company']),
+      },
+    });
+
+    const emp = res?.data?.data;
+    if (!emp) {
+      if (logWarn) {
+        logWarn('Frappe', `Employee ${employeeId} found for user ${userEmail} but Employee doc is empty when fetching details`);
+      }
+      return {
+        employeeId: String(employeeId),
+        company: null,
+      };
+    }
+
+    return {
+      employeeId: String(emp.name || employeeId),
+      company: emp.company ? String(emp.company).trim() : null,
+    };
+  } catch (err) {
+    if (logError) {
+      logError('Frappe', `Error fetching Employee details for ${employeeId}: ${err.message}`, err);
+    }
+    return {
+      employeeId: String(employeeId),
+      company: null,
+    };
+  }
+}
+
+/**
  * Get tasks assigned to the current user in Frappe
  * Returns an array of tasks
  * IMPORTANT:
@@ -2295,6 +2342,7 @@ module.exports = {
   getFrappeServerTime,
   getUsersAssignedToProject,
   resolveRowForStart,
-  createNewRowInTimesheet
+  createNewRowInTimesheet,
+  getEmployeeDetailsForUser
 };
 
