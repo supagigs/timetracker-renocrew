@@ -66,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let totalIdleTime = 0;
   let isIdle = false;
   let idleStartTime = null;
+  let isTimerTransitioning = false;
   let idle2hClockOutTriggered = false;
   let break2mClockOutTriggered = false;
   let lockSuspendClockOutTriggered = false;
@@ -355,33 +356,25 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /**
-   * Fetch frappe_employee_id and company from employees table for the logged-in user.
-   * Uses users (by email) -> employees (by user_id).
+   * Fetch frappe_employee_id and company for the logged-in user from Frappe.
+   * Uses IPC via window.frappe.getEmployeeForUser instead of Supabase.
    * @returns {{ frappeEmployeeId: string, company: string|null } | null}
    */
   async function fetchEmployeeForUser(userEmail) {
-    if (!userEmail || !window.supabase) return null;
+    if (!userEmail || !window.frappe || typeof window.frappe.getEmployeeForUser !== 'function') {
+      return null;
+    }
     try {
-      const { data: userRow, error: userError } = await window.supabase
-        .from('users')
-        .select('id')
-        .eq('email', userEmail.toLowerCase().trim())
-        .maybeSingle();
-      if (userError || !userRow) return null;
-
-      const { data: empRow, error: empError } = await window.supabase
-        .from('employees')
-        .select('frappe_employee_id, company')
-        .eq('user_id', userRow.id)
-        .maybeSingle();
-      if (empError || !empRow || !empRow.frappe_employee_id) return null;
-
+      const result = await window.frappe.getEmployeeForUser(userEmail);
+      if (!result || !result.success || !result.employeeId) {
+        return null;
+      }
       return {
-        frappeEmployeeId: String(empRow.frappe_employee_id).trim(),
-        company: empRow.company ? String(empRow.company).trim() : null
+        frappeEmployeeId: String(result.employeeId).trim(),
+        company: result.company ? String(result.company).trim() : null
       };
     } catch (err) {
-      console.error('fetchEmployeeForUser error:', err);
+      console.error('fetchEmployeeForUser (Frappe) error:', err);
       return null;
     }
   }
@@ -389,12 +382,23 @@ document.addEventListener('DOMContentLoaded', () => {
   // Start timer (Clock In) — transactional: only show running after Frappe + DB succeed
   async function startTimer() {
     if (isActive) return;
-  
+    
+    // Prevent starting if we are currently clocking out or already starting
+    if (clockOutInProgress || isTimerTransitioning) {
+      if (typeof NotificationService !== 'undefined' && NotificationService.showWarning) {
+        NotificationService.showWarning('Please wait, syncing with server...');
+      } else {
+        console.warn('Timer transition in progress, please wait.');
+      }
+      return;
+    }
+
     if (!selectedProjectId) {
       NotificationService?.showError?.('Project is required to start tracking.');
       return;
     }
-  
+    
+    isTimerTransitioning = true; //locking the process
     const originalLabel = clockInBtn.textContent;
     clockInBtn.disabled = true;
     clockInBtn.textContent = 'Starting...';
@@ -533,17 +537,26 @@ document.addEventListener('DOMContentLoaded', () => {
   
       const msg = error?.message || 'Failed to start timer';
       NotificationService?.showError?.(msg);
+    }finally{
+      isTimerTransitioning - false;
     }
   }
   
   // Stop timer (Clock Out)
-  async function clockOut({ auto = false, reason = null } = {}) {
+  async function clockOut({ auto = false, reason = null, skipRedirect = false } = {}) {
     if (clockOutInProgress) {
       console.warn('[TRACKER] clockOut ignored — already in progress');
       return;
     }
-  
+    
+    // // 2. QUEUE IF STARTING: If the app is currently clocking IN, wait and try clocking OUT again
+    // if (isTimerTransitioning) {
+    //   console.warn('[TRACKER] clockOut delayed — timer is currently starting');
+    //   return;
+    // }
+
     clockOutInProgress = true;
+    isTimerTransitioning = true;
     const wasActive = isActive;
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
     const clockOutTime = new Date();
@@ -593,7 +606,10 @@ document.addEventListener('DOMContentLoaded', () => {
         finalIdleTime,
         breakCount
       );
-  
+      
+      console.log("Session saved. Applying 2-second server sync buffer...");
+      await new Promise(resolve => setTimeout(resolve, 200));
+
       // ✅ ONLY NOW mark as stopped
       isActive = false;
       isIdle = false;
@@ -633,6 +649,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (window.electronAPI?.showTimerStoppedNotification) {
         window.electronAPI.showTimerStoppedNotification();
       }
+
+    // Only navigate if we aren't skipping project switch
+    if (!skipRedirect && reason !== 'project_switch') {
+      window.location.href = 'projects.html';
+    }
   
       // Navigate to projects screen after any clock out (manual or auto)
       window.location.href = 'projects.html';
@@ -657,6 +678,7 @@ document.addEventListener('DOMContentLoaded', () => {
       );
     }finally{
       clockOutInProgress = false;
+      isTimerTransitioning = false;
     }
   }
   
@@ -759,6 +781,44 @@ document.addEventListener('DOMContentLoaded', () => {
       throw error;
     }
   }
+
+  async function handleProjectSwitch(newProjectData) {
+    try {
+        // 'isActive' is your global variable in startproject.js tracking if a timer is on
+        if (typeof isActive !== 'undefined' && isActive) {
+          console.log("!! Rapid Switch Detected: Stopping previous project in Frappe first...");
+            
+            //Await clock out, but prevent it from navigating away
+            await clockOut({ auto: true, reason: 'project_switch', skipRedirect: true });
+            
+            console.log("Previous project closed. Enforcing strict 2-second cooldown...");
+            
+            // The "Cooldown" - prevents the 417 error for overlapping logs
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        console.log("Starting new project:", newProjectData.project);
+        
+        // Update the global variables and storage for the new project BEFORE starting
+        selectedProjectId = newProjectData.project;
+        StorageService.setItem('selectedProjectId', newProjectData.project);
+        
+        if (newProjectData.task) {
+          StorageService.setItem('selectedTaskId', newProjectData.task);
+        } else {
+          StorageService.removeItem('selectedTaskId');
+        }
+
+        //STart new timer safely
+        await startTimer(); 
+
+    } catch (error) {
+        console.error("Critical Error during project switch:", error);
+        if (typeof NotificationService !== 'undefined') {
+          NotificationService.showError("Project switch failed. Please clock out manually.");
+        }
+    }
+}
 
   // Take break
   function takeBreak() {
@@ -943,13 +1003,28 @@ document.addEventListener('DOMContentLoaded', () => {
     window.location.href = 'projects.html';
   });
 
-  clockInBtn.addEventListener('click', () => {
+clockInBtn.addEventListener('click', async () => {
+  try {
+    // Disable button to prevent double-clicks during the network call
+    clockInBtn.disabled = true;
+
     if (isActive) {
-      clockOut();
+      console.log("Stopping timer in Frappe Desk...");
+      
+      // Await ensures we don't proceed until Frappe confirms the 'Stop'
+      await clockOut(); 
+      
+      console.log("✓ Timer successfully stopped in Frappe.");
     } else {
-      startTimer();
+      console.log("Starting new timer...");
+      await startTimer();
     }
-  });
+  } catch (err) {
+    console.error("Operation failed:", err);
+  } finally {
+    clockInBtn.disabled = false;
+  }
+});
 
   takeBreakBtn.addEventListener('click', () => {
     if (isActive) {
@@ -1130,7 +1205,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Works for all session states: active working, idle, or on break.
   if (window.electronAPI && window.electronAPI.onLockOrSuspendClockOut) {
     console.log('[PowerEvents] Renderer startProject: registering onLockOrSuspendClockOut listener');
-    window.electronAPI.onLockOrSuspendClockOut((data) => {
+    window.electronAPI.onLockOrSuspendClockOut(async(data) => {
       const reason = data?.reason || 'lock_screen';
       const ts = new Date().toISOString();
       const notifyDone = window.electronAPI?.notifyLidCloseClockOutDone;
@@ -1143,22 +1218,57 @@ document.addEventListener('DOMContentLoaded', () => {
         isIdle,
         lockSuspendClockOutTriggered
       });
+
+      if (isTimerTransitioning || lockSuspendClockOutTriggered) {
+        console.warn('[PowerEvents] Guarded: Transition already in progress.');
+        if (notifyDone) notifyDone();
+        return;
+      }
       // Clock out whenever we have an active session, regardless of active/idle/on break
-      if (!sessionStartTime || !isActive || lockSuspendClockOutTriggered) {
+      if (!sessionStartTime || !isActive ) {
         console.log('[PowerEvents] Renderer startProject: lock/suspend clock-out skipped due to guard');
         if (notifyDone) notifyDone();
         return;
       }
-      lockSuspendClockOutTriggered = true;
-      console.log(`[PowerEvents] Renderer startProject: clocking out on ${reason} (lid closed / system suspend)`);
-      clockOut({ auto: true, reason })
-        .then(() => {
-          if (notifyDone) notifyDone();
-        })
-        .catch((err) => {
-          console.error('[PowerEvents] Renderer startProject: lock/suspend clock out failed:', err);
-          if (notifyDone) notifyDone();
-        });
+      
+      try {
+        isTimerTransitioning = true; // Set the lock
+        lockSuspendClockOutTriggered = true;
+        
+        console.log(`[PowerEvents] Clocking out due to: ${reason}`);
+
+        // Perform the clock out
+        await clockOut({ auto: true, reason });
+        console.log('[PowerEvents] Clock out successful. Syncing with server clock...');
+      }catch (err) {
+        console.error('[PowerEvents] Clock out failed:', err);
+        // Reset guard on failure so user can try again manually
+        lockSuspendClockOutTriggered = false; 
+      } finally {
+        isTimerTransitioning = false; // Release the lock
+        if (notifyDone) notifyDone();
+      }
+    });
+  }
+
+  if (window.electronAPI && window.electronAPI.onUnlockResumeClockIn) {
+    window.electronAPI.onUnlockResumeClockIn(() => {
+      console.log('[PowerEvents] System resumed. Checking if we can auto-start...');
+  
+      // CRITICAL: If the clock-out from the 'suspend' event is still 
+      // waiting in its 2-second buffer, this lock will be TRUE.
+      if (isTimerTransitioning || clockOutInProgress) {
+        console.warn('[PowerEvents] Auto-start blocked: Previous session is still syncing.');
+        // Optionally, retry once after 3 seconds
+        setTimeout(() => {
+           if (!isActive && selectedProjectId && !isTimerTransitioning) startTimer();
+        }, 3000);
+        return;
+      }
+  
+      if (!isActive && selectedProjectId) {
+        startTimer();
+      }
     });
   }
 

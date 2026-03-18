@@ -511,6 +511,53 @@ async function getEmployeeForUser(userEmail) {
 }
 
 /**
+ * Get employee ID and company for a user email from Frappe.
+ * Uses getEmployeeForUser for the ID, then fetches the Employee doc
+ * to read the company field.
+ * Returns { employeeId, company } or null if not found.
+ */
+async function getEmployeeDetailsForUser(userEmail) {
+  const employeeId = await getEmployeeForUser(userEmail);
+  if (!employeeId) {
+    return null;
+  }
+
+  const frappe = createFrappeClient();
+
+  try {
+    const res = await frappe.get(`/api/resource/Employee/${employeeId}`, {
+      params: {
+        fields: JSON.stringify(['name', 'company']),
+      },
+    });
+
+    const emp = res?.data?.data;
+    if (!emp) {
+      if (logWarn) {
+        logWarn('Frappe', `Employee ${employeeId} found for user ${userEmail} but Employee doc is empty when fetching details`);
+      }
+      return {
+        employeeId: String(employeeId),
+        company: null,
+      };
+    }
+
+    return {
+      employeeId: String(emp.name || employeeId),
+      company: emp.company ? String(emp.company).trim() : null,
+    };
+  } catch (err) {
+    if (logError) {
+      logError('Frappe', `Error fetching Employee details for ${employeeId}: ${err.message}`, err);
+    }
+    return {
+      employeeId: String(employeeId),
+      company: null,
+    };
+  }
+}
+
+/**
  * Get tasks assigned to the current user in Frappe
  * Returns an array of tasks
  * IMPORTANT:
@@ -1071,24 +1118,41 @@ async function resolveRowForStart({ timesheet, project, task }) {
  * Start a timesheet session
  * Uses Frappe method endpoint: POST /api/method/start_timesheet_session
  */
-async function startTimesheetSession({ timesheet, row }) {
-  const frappe = createFrappeClient();
+ async function startTimesheetSession({ timesheet, row }) {
+   const frappe = createFrappeClient();
 
-  if (!timesheet || !row) {
-    throw new Error('Timesheet and row are required');
-  }
+   if (!timesheet || !row) {
+     throw new Error('Timesheet and row are required');
+   }
 
-  const res = await frappe.post(
-    '/api/method/start_timesheet_session',
-    { timesheet, row }
-  );
+   const res = await frappe.post(
+     '/api/method/start_timesheet_session',
+     { timesheet, row }
+   );
 
-  if (!res?.data?.message) {
-    throw new Error('Invalid response from start_timesheet_session');
-  }
+   if (!res?.data?.message) {
+     throw new Error('Invalid response from start_timesheet_session');
+   }
 
   return res.data.message;
-}
+ }
+
+
+// async function startTimesheetSession(timesheetId, rowId) {
+//   const frappe = createFrappeClient();
+  
+//   // We bypass /api/method/ and use the standard /api/resource/
+//   // This updates the specific 'Time Log' row inside the Timesheet
+//   return await frappe.put(`/api/resource/Timesheet/${timesheetId}`, {
+//     time_logs: [
+//       {
+//         name: rowId,
+//         from_time: new Date().toISOString().replace('T', ' ').substring(0, 19),
+//         idx: 1 // Ensure we target the right row if name isn't enough
+//       }
+//     ]
+//   });
+// }
 
 async function createNewRowInTimesheet(timesheetId, project, task) {
   const frappe = createFrappeClient();
@@ -2295,6 +2359,7 @@ module.exports = {
   getFrappeServerTime,
   getUsersAssignedToProject,
   resolveRowForStart,
-  createNewRowInTimesheet
+  createNewRowInTimesheet,
+  getEmployeeDetailsForUser
 };
 
