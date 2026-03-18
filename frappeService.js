@@ -1118,24 +1118,41 @@ async function resolveRowForStart({ timesheet, project, task }) {
  * Start a timesheet session
  * Uses Frappe method endpoint: POST /api/method/start_timesheet_session
  */
-async function startTimesheetSession({ timesheet, row }) {
-  const frappe = createFrappeClient();
+ async function startTimesheetSession({ timesheet, row }) {
+   const frappe = createFrappeClient();
 
-  if (!timesheet || !row) {
-    throw new Error('Timesheet and row are required');
-  }
+   if (!timesheet || !row) {
+     throw new Error('Timesheet and row are required');
+   }
 
-  const res = await frappe.post(
-    '/api/method/start_timesheet_session',
-    { timesheet, row }
-  );
+   const res = await frappe.post(
+     '/api/method/start_timesheet_session',
+     { timesheet, row }
+   );
 
-  if (!res?.data?.message) {
-    throw new Error('Invalid response from start_timesheet_session');
-  }
+   if (!res?.data?.message) {
+     throw new Error('Invalid response from start_timesheet_session');
+   }
 
   return res.data.message;
-}
+ }
+
+
+// async function startTimesheetSession(timesheetId, rowId) {
+//   const frappe = createFrappeClient();
+  
+//   // We bypass /api/method/ and use the standard /api/resource/
+//   // This updates the specific 'Time Log' row inside the Timesheet
+//   return await frappe.put(`/api/resource/Timesheet/${timesheetId}`, {
+//     time_logs: [
+//       {
+//         name: rowId,
+//         from_time: new Date().toISOString().replace('T', ' ').substring(0, 19),
+//         idx: 1 // Ensure we target the right row if name isn't enough
+//       }
+//     ]
+//   });
+// }
 
 async function createNewRowInTimesheet(timesheetId, project, task) {
   const frappe = createFrappeClient();
