@@ -22,6 +22,8 @@ autoUpdater.on('update-downloaded', (info) => {
 let updateDownloadedButDeferred = false;
 let updateInfoCache = null;
 let updateDialogVisible = false;
+let lastPowerEventTime = 0;
+const POWER_EVENT_COOLDOWN_MS = 3000; // 3-second cooldown
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = false;
@@ -33,6 +35,42 @@ autoUpdater.on('error', (err) => {
   updateInfoCache = null;
 });
 
+
+// Helper function to prevent OS event spam
+function canProcessPowerEvent(eventName) {
+  const now = Date.now();
+  if (now - lastPowerEventTime < POWER_EVENT_COOLDOWN_MS) {
+    logInfo('PowerMonitor', `Ignored ${eventName} - too close to previous event.`);
+    return false;
+  }
+  lastPowerEventTime = now;
+  return true;
+}
+
+// Update your powerMonitor listeners to use the check:
+powerMonitor.on('suspend', () => {
+  if (!canProcessPowerEvent('suspend')) return;
+  logInfo('PowerMonitor', 'System suspended');
+  if (mainWindow) mainWindow.webContents.send('lock-suspend-clock-out');
+});
+
+powerMonitor.on('lock-screen', () => {
+  if (!canProcessPowerEvent('lock-screen')) return;
+  logInfo('PowerMonitor', 'Screen locked');
+  if (mainWindow) mainWindow.webContents.send('lock-suspend-clock-out');
+});
+
+powerMonitor.on('resume', () => {
+  if (!canProcessPowerEvent('resume')) return;
+  logInfo('PowerMonitor', 'System resumed');
+  if (mainWindow) mainWindow.webContents.send('unlock-resume-clock-in');
+});
+
+powerMonitor.on('unlock-screen', () => {
+  if (!canProcessPowerEvent('unlock-screen')) return;
+  logInfo('PowerMonitor', 'Screen unlocked');
+  if (mainWindow) mainWindow.webContents.send('unlock-resume-clock-in');
+});
 
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
@@ -1291,7 +1329,25 @@ function createWindow() {
 
     if (isTimerActive) {
       event.preventDefault();
-
+    
+      // Show native confirmation dialog (only when close icon or window-close is attempted)
+      const resp = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        title: 'Timer still running',
+        message: 'A timer session is still running.',
+        detail: 'Please clock out to save your session. Do you want to Clock Out & Close the app now?',
+        buttons: ['Cancel', 'Clock Out & Close'],
+        defaultId: 1,
+        cancelId: 0,
+        noLink: true
+      });
+    
+      // resp.response === 0 => Cancel, === 1 => Clock Out & Close
+      if (resp.response === 0) {
+        // user cancelled — do nothing, keep window open
+        return;
+      }
+    
       try {
         const savePromise = mainWindow.webContents.executeJavaScript(`
           new Promise(async (resolve) => {
@@ -1307,25 +1363,27 @@ function createWindow() {
             }
           })
         `);
-
+    
         const SAVE_ON_CLOSE_TIMEOUT_MS = 12000;
         const saveResult = await Promise.race([
           savePromise,
           new Promise((resolve) => setTimeout(() => resolve({ saved: false, error: 'Timeout' }), SAVE_ON_CLOSE_TIMEOUT_MS))
         ]);
-
+    
         if (saveResult && saveResult.saved) {
           logInfo('WindowClose', 'Session saved successfully before window close');
           isForceClosing = true;
           mainWindow.close();
+          return;
         } else if (saveResult && saveResult.error === 'Save function not available') {
-          // Current page has no save handler (e.g. user on projects). Navigate to tracker to save, then close on IPC.
+          // fallback: navigate to startProject to save (your existing behaviour)
           logInfo('WindowClose', 'Navigating to startProject to save session before close');
           const startProjectPath = path.join(__dirname, 'renderer', 'screens', 'startProject.html');
           const closeTimeout = setTimeout(() => {
             logWarn('WindowClose', 'Close-after-save timeout, closing window');
             isForceClosing = true;
             mainWindow.close();
+            console.log("Window close attempted. Timer active:", isTimerActive)
           }, 15000);
           ipcMain.once('session-saved-please-close', () => {
             clearTimeout(closeTimeout);
@@ -1339,12 +1397,15 @@ function createWindow() {
             isForceClosing = true;
             mainWindow.close();
           });
+          return;
         } else {
           logWarn('WindowClose', `Failed to save session: ${saveResult?.error || 'Unknown error'}`);
+          // if save failed or timed out, fall through to force-close after a short delay
           setTimeout(() => {
             isForceClosing = true;
             mainWindow.close();
           }, 500);
+          return;
         }
       } catch (error) {
         logError('WindowClose', `Error saving session on window close: ${error.message}`);
@@ -1352,9 +1413,8 @@ function createWindow() {
           isForceClosing = true;
           mainWindow.close();
         }, 500);
+        return;
       }
-    } else if (isUserLoggedIn) {
-      return;
     }
   });
 }
@@ -5675,5 +5735,27 @@ app.on('activate', () => {
     }
     mainWindow.focus();
     logInfo('App', 'Main window focused');
+  }
+});
+
+const { getEmployeeDetailsForUser }= require('./frappeService');
+
+ipcMain.handle('frappe:get-employee-for-user', async (_event, userEmail) => {
+  try {
+    // Prefer using the helper that returns both ID and company:
+    const details = await getEmployeeDetailsForUser(userEmail); // from frappeService.js
+
+    if (!details || !details.employeeId) {
+      return { success: false, error: 'Employee not found' };
+    }
+
+    return {
+      success: true,
+      employeeId: details.employeeId,
+      company: details.company || null,
+    };
+  } catch (err) {
+    logError?.('Frappe', `get-employee-for-user failed for ${userEmail}: ${err.message}`, err);
+    return { success: false, error: err.message || 'Unknown error' };
   }
 });
