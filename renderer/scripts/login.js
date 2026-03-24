@@ -1,5 +1,5 @@
 // Force reset email input field immediately
-function forceResetEmailField() {
+/*function forceResetEmailField() {
   const emailInput = document.getElementById('email');
   if (emailInput) {
     console.log('Force resetting email input field');
@@ -25,15 +25,16 @@ function forceResetEmailField() {
     
     console.log('Email field reset complete. Disabled:', emailInput.disabled, 'ReadOnly:', emailInput.readOnly);
   }
-}
+}*/
 
-const emailInput = document.getElementById("email");
-const passwordInput = document.getElementById("password");
-const emailIcon = document.getElementById("emailIcon");
-const passwordIcon = document.getElementById("passwordIcon");
-const errorMessage = document.getElementById("errorMessage");
+
 
 function resetStates() {
+  const emailInput = document.getElementById("email");
+  const passwordInput = document.getElementById("password");
+  const emailIcon = document.getElementById("emailIcon");
+  const passwordIcon = document.getElementById("passwordIcon");
+  const errorMessage = document.getElementById("errorMessage");
   emailInput.classList.remove("input-error", "input-success");
   passwordInput.classList.remove("input-error", "input-success");
 
@@ -44,6 +45,11 @@ function resetStates() {
 }
 
 function setErrorState({ email = false, password = false }, message) {
+  const emailInput = document.getElementById("email");
+  const passwordInput = document.getElementById("password");
+  const emailIcon = document.getElementById("emailIcon");
+  const passwordIcon = document.getElementById("passwordIcon");
+  const errorMessage = document.getElementById("errorMessage");
   // Remove success state completely
   emailInput.classList.remove("input-success");
   passwordInput.classList.remove("input-success");
@@ -70,6 +76,11 @@ function setErrorState({ email = false, password = false }, message) {
 }
 
 function setSuccessState() {
+  const emailInput = document.getElementById("email");
+  const passwordInput = document.getElementById("password");
+  const emailIcon = document.getElementById("emailIcon");
+  const passwordIcon = document.getElementById("passwordIcon");
+  const errorMessage = document.getElementById("errorMessage");
   emailInput.classList.add("input-success");
   passwordInput.classList.add("input-success");
 
@@ -83,130 +94,22 @@ function setSuccessState() {
 
 // Initialize login page
 async function initializeLoginPage() {
-  console.log('Initializing login page');
-  if (window.electronAPI?.setUserLoggedIn) {
-    window.electronAPI.setUserLoggedIn(false).catch(err => console.error('Failed to update logged-in state:', err));
-  }
-
-  // Show app version from package.json (via main process)
-  const versionEl = document.getElementById('appVersion');
-  if (versionEl && window.electronAPI?.getAppVersion) {
-    try {
-      const version = await window.electronAPI.getAppVersion();
-      versionEl.textContent = version ? `Version ${version}` : '';
-    } catch (err) {
-      console.warn('Could not load app version:', err);
-      versionEl.textContent = '';
-    }
-  }
-  
-  // Clear any stored email to ensure fresh login
-  StorageService.removeItem('userEmail');
-  
-  // Ensure email field is editable
   const emailInput = document.getElementById('email');
   const passwordInput = document.getElementById('password');
   const loginBtn = document.getElementById('loginBtn');
-  
-  console.log('Email input found:', emailInput);
-  console.log('Login button found:', loginBtn);
-  
-  if (emailInput) {
-    // Reset all input properties to ensure it's interactive
-    emailInput.readOnly = false;
-    emailInput.disabled = false;
-    
-    // Load saved email from localStorage and auto-populate
-    const savedEmail = StorageService.getItem('savedEmail');
-    if (savedEmail && savedEmail.trim() !== '') {
-      emailInput.value = savedEmail.trim();
-      console.log('Auto-populated email from saved value');
-    } else {
-      emailInput.value = ''; // Clear if no saved email
-    }
-    emailInput.style.pointerEvents = 'auto';
-    emailInput.style.cursor = 'text';
-    emailInput.style.userSelect = 'text';
-    emailInput.style.opacity = '1';
-    emailInput.style.backgroundColor = '';
-    emailInput.removeAttribute('readonly');
-    emailInput.removeAttribute('disabled');
-    
-    // Hide category dropdown and projects section (no longer used with Frappe auth)
-    const categoryGroup = document.getElementById('categoryGroup');
-    const projectsGroup = document.getElementById('projectsGroup');
-    if (categoryGroup) {
-      categoryGroup.style.display = 'none';
-    }
-    if (projectsGroup) {
-      projectsGroup.style.display = 'none';
-    }
-    
-    // Add Enter key support - move to password field when Enter is pressed in email
-    emailInput.addEventListener('keypress', function(e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        const passwordInput = document.getElementById('password');
-        if (passwordInput) {
-          passwordInput.focus();
-        }
-      }
-    });
-    
-    // Handle Enter key in password field to trigger login
-    if (passwordInput) {
-      passwordInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          handleLogin();
-        }
-      });
-    }
-    
-    // Remove any existing event listeners to prevent duplicates
-    emailInput.removeEventListener('click', handleEmailClick);
-    emailInput.removeEventListener('mousedown', handleEmailMouseDown);
-    
-    // Add click event to ensure field is clickable
-    emailInput.addEventListener('click', handleEmailClick);
-    
-    // Add mousedown event to ensure field responds to clicks
-    emailInput.addEventListener('mousedown', handleEmailMouseDown);
-    
-    // Force focus to ensure the field is interactive
-    setTimeout(() => {
-      emailInput.focus();
-      console.log('Email input focused and ready for input');
-    }, 100);
-    
-    // Additional check to ensure field is truly interactive
-    setTimeout(() => {
-      if (emailInput.disabled || emailInput.readOnly) {
-        console.warn('Email input is still disabled/readonly, forcing reset');
-        emailInput.disabled = false;
-        emailInput.readOnly = false;
-        emailInput.focus();
-      }
-    }, 200);
-    
-    // Final verification
-    setTimeout(() => {
-      console.log('Final email field state - Disabled:', emailInput.disabled, 'ReadOnly:', emailInput.readOnly, 'Value:', emailInput.value);
-    }, 500);
-    
-  } else {
-    console.error('Email input field not found!');
-  }
-  
-  if (loginBtn) {
-    // Remove any existing event listeners to prevent duplicates
-    loginBtn.removeEventListener('click', handleLogin);
-    loginBtn.addEventListener('click', handleLogin);
-  } else {
-    console.error('Login button not found!');
-  }
-}
 
+  if (!emailInput) return;
+
+  emailInput.disabled = false;
+  emailInput.readOnly = false;
+
+  const savedEmail = StorageService.getItem('savedEmail');
+  emailInput.value = savedEmail ? savedEmail.trim() : '';
+
+  emailInput.focus();
+
+  loginBtn?.addEventListener('click', handleLogin);
+}
 
 function handleEmailClick() {
   console.log('Email input clicked');
@@ -214,15 +117,15 @@ function handleEmailClick() {
   emailInput.focus();
 }
 
-function handleEmailMouseDown(e) {
+/*function handleEmailMouseDown(e) {
   console.log('Email input mousedown');
   e.preventDefault();
   const emailInput = document.getElementById('email');
   emailInput.focus();
-}
+}*/
 
 // Force reset immediately when script loads
-forceResetEmailField();
+//forceResetEmailField();
 
 // Wait for DOM to be ready
 if (document.readyState === 'loading') {
@@ -233,19 +136,19 @@ if (document.readyState === 'loading') {
 }
 
 // Also reinitialize when page becomes visible (e.g., after logout)
-document.addEventListener('visibilitychange', () => {
+/*document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     console.log('Page became visible, reinitializing login form');
     setTimeout(initializeLoginPage, 100);
   }
-});
+});*/
 
 // Reinitialize on window focus (additional safety)
-window.addEventListener('focus', () => {
+/*window.addEventListener('focus', () => {
   console.log('Window focused, ensuring login form is ready');
   setTimeout(initializeLoginPage, 100);
  });
-
+*/
 // Handle category change - show/hide projects section
 function handleCategoryChange() {
   const categorySelect = document.getElementById('category');
@@ -359,14 +262,20 @@ function updateProjectsDisplay() {
   projectsList.appendChild(container);
 }
 
-
+// Escape %, _, and \ for use in ILIKE so the pattern is matched literally (case-insensitive exact match).
+function escapeForIlike(s) {
+  if (typeof s !== 'string') return s;
+  return s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
 
 async function checkEmailExists(email) {
   try {
+    const normalized = (email || '').trim().toLowerCase();
+    if (!normalized) return false;
     const { data, error } = await window.supabase
       .from('users')
       .select('id')
-      .eq('email', email.toLowerCase())
+      .ilike('email', escapeForIlike(normalized))
       .limit(1)
       .maybeSingle();
 
@@ -603,15 +512,16 @@ if (!ValidationService.validateEmail(email)) {
       }
 
       // Store role_profile_name directly from Frappe (not converted)
-      // The role_profile_name from Frappe will be stored as-is in the database
-
+      // Supabase profile sync is temporarily disabled due to connectivity issues.
+      /*
       if (window.supabase) {
-        // Look up existing user by email
+        // Look up existing user by email (case-insensitive: do not create duplicate if same email exists in different case)
         const { data: existingUser, error } = await SupabaseService.handleRequest(() =>
           window.supabase
             .from('users')
             .select('id, email, display_name, role, company')
-            .eq('email', normalizedEmail)
+            .ilike('email', escapeForIlike(normalizedEmail))
+            .limit(1)
             .maybeSingle()
         );
 
@@ -687,14 +597,12 @@ if (!ValidationService.validateEmail(email)) {
           }
         }
 
-        // If we didn't get a display name from Frappe, but Supabase has one, use it and cache locally
         if (!displayNameFromFrappe && userRow && userRow.display_name && userRow.display_name.trim() !== '') {
           displayName = userRow.display_name.trim();
           StorageService.setItem('displayName', displayName);
         }
-
-        // Projects are fetched from project_users table directly (no Frappe sync)
       }
+      */
     } catch (profileError) {
       console.error('Error syncing display name with Supabase:', profileError);
       // Non-fatal – we still fallback to local storage check below
@@ -727,6 +635,11 @@ if (!ValidationService.validateEmail(email)) {
 }
 
 function handleUserTyping(e) {
+  const emailInput = document.getElementById("email");
+  const passwordInput = document.getElementById("password");
+  const emailIcon = document.getElementById("emailIcon");
+  const passwordIcon = document.getElementById("passwordIcon");
+  const errorMessage = document.getElementById("errorMessage");
   const target = e.target;
 
   // Remove success/error ONLY from the field being edited
