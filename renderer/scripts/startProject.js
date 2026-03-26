@@ -194,33 +194,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let currentBreakTime = totalBreakDuration;
+    let currentSingleBreakDuration = 0;
     if (isOnBreak && breakStartTime) {
       const breakStart = breakStartTime instanceof Date ? breakStartTime : new Date(breakStartTime);
       if (!isNaN(breakStart.getTime())) {
-        const currentBreakDuration = Math.floor((now - breakStart) / 1000);
-        currentBreakTime = totalBreakDuration + currentBreakDuration;
+        currentSingleBreakDuration = Math.floor((now - breakStart) / 1000);
+        currentBreakTime = totalBreakDuration + currentSingleBreakDuration;
       }
     }
 
     const currentIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
-    const totalSessionTime = currentActiveTime + currentBreakTime + currentIdleTime;
-
+    
     if (runIdleAutoClockOutCheck()) return;
     if (runBreakAutoClockOutCheck()) return;
 
-    if (isActive && !isOnBreak && isIdle && idleTracker && !idle2hClockOutTriggered) {
-      const d = idleTracker.getCurrentIdleTime();
-      if (d >= Math.max(0, IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS - 30)) {
-        const last = (window.__idleClockOutLogAt || 0);
-        if (now.getTime() - last >= 60 * 1000) {
-          window.__idleClockOutLogAt = now.getTime();
-          console.log(`[Idle auto clock-out] ${d}s idle / ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold`);
-        }
-      }
+    if (isOnBreak) {
+      // RESET UI
+      timeDisplay.textContent = formatTime(currentSingleBreakDuration);
+      if (clockInInstruction) clockInInstruction.textContent = 'You are on break.';
+    } else {
+      // RESUME UI
+      timeDisplay.textContent = formatTime(currentActiveTime);
+      if (clockInInstruction) clockInInstruction.textContent = isActive ? 'You are working.' : 'Click Clock In to start.';
     }
-
-    // Update time display (show total session time)
-    timeDisplay.textContent = formatTime(totalSessionTime);
   }
 
   /** Persist computed session state so that if the app is killed, recovery has the latest durations. */
