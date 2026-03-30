@@ -193,7 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
       currentActiveTime = totalActiveDuration + workElapsed;
     }
 
-    let currentBreakTime = totalBreakDuration;
+    let currentBreakTime = 0;
     let currentSingleBreakDuration = 0;
     if (isOnBreak && breakStartTime) {
       const breakStart = breakStartTime instanceof Date ? breakStartTime : new Date(breakStartTime);
@@ -208,15 +208,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (runIdleAutoClockOutCheck()) return;
     if (runBreakAutoClockOutCheck()) return;
 
-    if (isOnBreak) {
-      // RESET UI
-      timeDisplay.textContent = formatTime(currentSingleBreakDuration);
-      if (clockInInstruction) clockInInstruction.textContent = 'You are on break.';
-    } else {
-      // RESUME UI
-      timeDisplay.textContent = formatTime(currentActiveTime);
-      if (clockInInstruction) clockInInstruction.textContent = isActive ? 'You are working.' : 'Click Clock In to start.';
-    }
+    // Main Timer always shows the work/active time
+timeDisplay.textContent = formatTime(currentActiveTime);
+
+// Sub-Timer logic: Show total accumulated break time
+if (isOnBreak) {
+  breakTimerContainer.style.display = 'block';
+  breakTimeDisplay.textContent = formatTime(currentBreakTime);
+} else {
+  breakTimerContainer.style.display = 'none';
+}
+
+// Update instruction text
+if (clockInInstruction) {
+  clockInInstruction.textContent = isOnBreak ? 'You are on break.' : (isActive ? 'You are working.' : 'Click Clock In to start.');
+}
   }
 
   /** Persist computed session state so that if the app is killed, recovery has the latest durations. */
@@ -843,6 +849,7 @@ document.addEventListener('DOMContentLoaded', () => {
       clockInBtn.textContent = 'Clock Out';
       clockInBtn.classList.remove('start-project-btn-primary');
       clockInBtn.classList.add('start-project-btn-danger-transparent');
+      breakTimerContainer.style.display = 'block';
 
       if (idleTracker) {
         idleTracker.stopTracking();
@@ -869,6 +876,8 @@ document.addEventListener('DOMContentLoaded', () => {
       // Hide Resume button, show Take Break button
       resumeBtn.style.display = 'none';
       takeBreakBtn.style.display = 'inline-flex';
+      // Ensure sub-timer stays visible to show total break taken
+      breakTimerContainer.style.display = 'none';
       takeBreakBtn.textContent = 'Take Break';
       takeBreakBtn.classList.remove('start-project-btn-success');
       takeBreakBtn.classList.add('start-project-btn-secondary');
@@ -882,6 +891,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Resume background screenshot capture after break ends
       startScreenshotCapture();
+    }
+    // Instantly force the UI to reflect the state change without waiting for the interval tick
+    updateTimer();
+
+    //Resync the background interval to exactly onclick
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = setInterval(updateTimer, 1000);
     }
   }
 
@@ -920,9 +937,11 @@ document.addEventListener('DOMContentLoaded', () => {
       takeBreakBtn.style.display = 'none';
       resumeBtn.textContent = 'End Break';
       resumeBtn.classList.add('start-project-btn-success');
+      breakTimerContainer.style.display = 'block'; // Show sub-timer on restore
     } else {
       resumeBtn.style.display = 'none';
       takeBreakBtn.style.display = 'inline-flex';
+      breakTimerContainer.style.display = 'none';
     }
     if (clockInInstruction) clockInInstruction.style.display = 'none';
     updateTimer();
