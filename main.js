@@ -47,30 +47,30 @@ function canProcessPowerEvent(eventName) {
   return true;
 }
 
-// Update your powerMonitor listeners to use the check:
-powerMonitor.on('suspend', () => {
-  if (!canProcessPowerEvent('suspend')) return;
-  logInfo('PowerMonitor', 'System suspended');
-  if (mainWindow) mainWindow.webContents.send('lock-suspend-clock-out');
-});
+// // Update your powerMonitor listeners to use the check:
+// powerMonitor.on('suspend', () => {
+//   if (!canProcessPowerEvent('suspend')) return;
+//   logInfo('PowerMonitor', 'System suspended');
+//   if (mainWindow) mainWindow.webContents.send('lock-suspend-clock-out');
+// });
 
-powerMonitor.on('lock-screen', () => {
-  if (!canProcessPowerEvent('lock-screen')) return;
-  logInfo('PowerMonitor', 'Screen locked');
-  if (mainWindow) mainWindow.webContents.send('lock-suspend-clock-out');
-});
+// powerMonitor.on('lock-screen', () => {
+//   if (!canProcessPowerEvent('lock-screen')) return;
+//   logInfo('PowerMonitor', 'Screen locked');
+//   if (mainWindow) mainWindow.webContents.send('lock-suspend-clock-out');
+// });
 
-powerMonitor.on('resume', () => {
-  if (!canProcessPowerEvent('resume')) return;
-  logInfo('PowerMonitor', 'System resumed');
-  if (mainWindow) mainWindow.webContents.send('unlock-resume-clock-in');
-});
+// powerMonitor.on('resume', () => {
+//   if (!canProcessPowerEvent('resume')) return;
+//   logInfo('PowerMonitor', 'System resumed');
+//   if (mainWindow) mainWindow.webContents.send('unlock-resume-clock-in');
+// });
 
-powerMonitor.on('unlock-screen', () => {
-  if (!canProcessPowerEvent('unlock-screen')) return;
-  logInfo('PowerMonitor', 'Screen unlocked');
-  if (mainWindow) mainWindow.webContents.send('unlock-resume-clock-in');
-});
+// powerMonitor.on('unlock-screen', () => {
+//   if (!canProcessPowerEvent('unlock-screen')) return;
+//   logInfo('PowerMonitor', 'Screen unlocked');
+//   if (mainWindow) mainWindow.webContents.send('unlock-resume-clock-in');
+// });
 
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
@@ -5684,7 +5684,7 @@ autoUpdater.on('before-quit-for-update', () => {
 app.on('before-quit', (event) => {
     if (isTimerActive && updateInfoCache) {
       logWarn('Updater', 'Blocked quit — timer still running');
-      e.preventDefault();
+      event.preventDefault();
     }
   
 

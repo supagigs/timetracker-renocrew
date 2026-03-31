@@ -212,9 +212,9 @@ document.addEventListener('DOMContentLoaded', () => {
 timeDisplay.textContent = formatTime(currentActiveTime);
 
 // Sub-Timer logic: Show total accumulated break time
-if (isOnBreak) {
+if (isOnBreak || totalBreakDuration > 0) {
   breakTimerContainer.style.display = 'block';
-  breakTimeDisplay.textContent = formatTime(currentBreakTime);
+  breakTimeDisplay.textContent = formatTime(isOnBreak ? currentBreakTime : totalBreakDuration);
 } else {
   breakTimerContainer.style.display = 'none';
 }
@@ -876,8 +876,6 @@ if (clockInInstruction) {
       // Hide Resume button, show Take Break button
       resumeBtn.style.display = 'none';
       takeBreakBtn.style.display = 'inline-flex';
-      // Ensure sub-timer stays visible to show total break taken
-      breakTimerContainer.style.display = 'none';
       takeBreakBtn.textContent = 'Take Break';
       takeBreakBtn.classList.remove('start-project-btn-success');
       takeBreakBtn.classList.add('start-project-btn-secondary');
@@ -941,7 +939,7 @@ if (clockInInstruction) {
     } else {
       resumeBtn.style.display = 'none';
       takeBreakBtn.style.display = 'inline-flex';
-      breakTimerContainer.style.display = 'none';
+      breakTimerContainer.style.display = totalBreakDuration > 0 ? 'block':'none';
     }
     if (clockInInstruction) clockInInstruction.style.display = 'none';
     updateTimer();
