@@ -167,13 +167,13 @@ function handleCategoryChange() {
   
   if (category === 'Client') {
     projectsGroup.style.display = 'block';
-    console.log('Client selected, showing projects section');
+    //console.log('Client selected, showing projects section');
   } else {
     projectsGroup.style.display = 'none';
     // Clear projects when switching away from Client
     window.userProjects = [];
     updateProjectsDisplay();
-    console.log('Not Client, hiding projects section');
+    //console.log('Not Client, hiding projects section');
   }
 }
 
@@ -207,7 +207,7 @@ window.addProject = function() {
   newProjectInput.value = '';
   updateProjectsDisplay();
   
-  console.log('Project added:', projectName, 'Total projects:', window.userProjects.length);
+  //console.log('Project added:', projectName, 'Total projects:', window.userProjects.length);
 };
 
 // Remove project from the list
@@ -221,7 +221,7 @@ window.removeProject = function(projectName) {
   if (index > -1) {
     window.userProjects.splice(index, 1);
     updateProjectsDisplay();
-    console.log('Project removed:', projectName);
+    //console.log('Project removed:', projectName);
   }
 };
 
@@ -411,7 +411,7 @@ if (!ValidationService.validateEmail(email)) {
       return;
     }
 
-    console.log('Frappe login successful for:', email);
+    //console.log('Frappe login successful for:', email);
     setSuccessState();
     // Save email for auto-population on next login (password is never stored)
     // Store normalized email so all future logic uses a consistent key
@@ -477,7 +477,7 @@ if (!ValidationService.validateEmail(email)) {
               // Try to extract string value from object
               company = Object.values(companyValue).find(v => typeof v === 'string') || null;
             }
-            console.log('Fetched company from Frappe:', company);
+            //console.log('Fetched company from Frappe:', company);
           }
         } catch (companyError) {
           console.error('Error fetching company from Frappe:', companyError);
@@ -490,7 +490,7 @@ if (!ValidationService.validateEmail(email)) {
           const roleProfileResult = await window.auth.getUserRoleProfile(normalizedEmail);
           if (roleProfileResult && roleProfileResult.success) {
             roleProfile = roleProfileResult.roleProfile || null;
-            console.log('Fetched role profile from Frappe:', roleProfile);
+            //console.log('Fetched role profile from Frappe:', roleProfile);
           }
         } catch (roleProfileError) {
           console.error('Error fetching role profile from Frappe:', roleProfileError);
@@ -507,7 +507,7 @@ if (!ValidationService.validateEmail(email)) {
               displayNameFromFrappe = fullName;
               displayName = fullName;
               StorageService.setItem('displayName', fullName);
-              console.log('Fetched full name from Frappe:', fullName);
+              //console.log('Fetched full name from Frappe:', fullName);
             }
           }
         } catch (fullNameError) {

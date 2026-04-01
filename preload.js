@@ -231,8 +231,8 @@ ipcRenderer.on('main-console-log', (_event, argsArray) => {
   // argsArray is an array of arguments sent from main process
   // Spread them to console.log so they appear in DevTools
   if (Array.isArray(argsArray)) {
-    console.log(...argsArray);
+    //console.log(...argsArray);
   } else {
-    console.log(argsArray);
+    //console.log(argsArray);
   }
 });

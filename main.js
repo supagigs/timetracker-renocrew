@@ -37,15 +37,15 @@ autoUpdater.on('error', (err) => {
 
 
 // Helper function to prevent OS event spam
-function canProcessPowerEvent(eventName) {
-  const now = Date.now();
-  if (now - lastPowerEventTime < POWER_EVENT_COOLDOWN_MS) {
-    logInfo('PowerMonitor', `Ignored ${eventName} - too close to previous event.`);
-    return false;
-  }
-  lastPowerEventTime = now;
-  return true;
-}
+// function canProcessPowerEvent(eventName) {
+//   const now = Date.now();
+//   if (now - lastPowerEventTime < POWER_EVENT_COOLDOWN_MS) {
+//     logInfo('PowerMonitor', `Ignored ${eventName} - too close to previous event.`);
+//     return false;
+//   }
+//   lastPowerEventTime = now;
+//   return true;
+// }
 
 // // Update your powerMonitor listeners to use the check:
 // powerMonitor.on('suspend', () => {
@@ -105,7 +105,7 @@ async function backgroundCaptureScreenshots() {
         thumbnailSize: { width: maxDimension, height: maxDimension }
       });
       const captureDuration = Date.now() - captureStartTime;
-      logInfo('BG-UPLOAD', `desktopCapturer.getSources() completed in ${captureDuration}ms, returned ${sources?.length || 0} source(s)`);
+      //logInfo('BG-UPLOAD', `desktopCapturer.getSources() completed in ${captureDuration}ms, returned ${sources?.length || 0} source(s)`);
     } catch (e) {
       logError('BG-UPLOAD', 'desktopCapturer.getSources failed:', e);
       return;
@@ -367,7 +367,7 @@ function sendToRendererConsole(...args) {
     }
   });
   // Also log to main process console
-  console.log(...args);
+  // console.log(...args);
 }
 
 function log(level, context, message, ...args) {
@@ -375,7 +375,7 @@ function log(level, context, message, ...args) {
   const lvl = level.toUpperCase();
   const logMessage = `[${ts}] [${lvl}] [${context}] ${message}`;
   // Log to main process console
-  console.log(logMessage, ...args);
+  // console.log(logMessage, ...args);
   // Also send to renderer console (DevTools)
   sendToRendererConsole(logMessage, ...args);
 }
@@ -4042,7 +4042,7 @@ ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
     const result = await callWithTimeout(getOrCreateTimesheet(payload));
     const duration = Date.now() - startTime;
     console.log('[IPC] frappe:get-or-create-timesheet SUCCESS in', duration, 'ms');
-    console.log('[IPC] Result:', JSON.stringify(result, null, 2));
+    // console.log('[IPC] Result:', JSON.stringify(result, null, 2));
     return result;
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -4053,7 +4053,7 @@ ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
     
     if (error?.response) {
       console.error('[IPC] Error response status:', error.response.status);
-      console.error('[IPC] Error response data:', JSON.stringify(error.response.data, null, 2));
+      // console.error('[IPC] Error response data:', JSON.stringify(error.response.data, null, 2));
     }
     
     if (error?.config) {
@@ -4064,7 +4064,7 @@ ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
       });
     }
     
-    console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    //console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
     throw error;
   }
 });
@@ -4072,13 +4072,13 @@ ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
 ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
   const startTime = Date.now();
   console.log('[IPC] frappe:start-timesheet-session called at', new Date().toISOString());
-  console.log('[IPC] Payload received:', JSON.stringify(payload, null, 2));
+  // console.log('[IPC] Payload received:', JSON.stringify(payload, null, 2));
   
   try {
     const result = await callWithTimeout(startTimesheetSession(payload));
     const duration = Date.now() - startTime;
     console.log('[IPC] frappe:start-timesheet-session SUCCESS in', duration, 'ms');
-    console.log('[IPC] Result:', JSON.stringify(result, null, 2));
+    // console.log('[IPC] Result:', JSON.stringify(result, null, 2));
     return result;
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -4100,7 +4100,7 @@ ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
       });
     }
     
-    console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    // console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
     throw error;
   }
 });
