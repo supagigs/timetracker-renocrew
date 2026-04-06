@@ -617,7 +617,7 @@ async function getMyTasks() {
       });
     }
 
-    // 🔥 IMPORTANT: let UI decide how to show the error
+    //IMPORTANT: let UI decide how to show the error
     throw err;
   }
 }
@@ -1105,12 +1105,12 @@ async function resolveRowForStart({ timesheet, project, task }) {
 
   // Resume existing
   if (runningRows.length === 1) {
-    return runningRows[0].name;
+    return { rowId: runningRows[0].name, isAlreadyRunning: true };
   }
 
   // Otherwise create new
   const newRow = await createNewRowInTimesheet(timesheet, project, task);
-  return newRow.name;
+  return { rowId: newRow.name, isAlreadyRunning: false };
 }
 
 
@@ -1586,8 +1586,6 @@ async function getMyTasksForProject(project) {
         }
       );
     }
-
-    // 🔥 IMPORTANT: bubble error to UI
     throw err;
   }
 }
@@ -2053,6 +2051,13 @@ async function saveTimesheetWithSavedocs(timesheetDoc) {
     }
 
     const res = await frappe.post('/api/method/frappe.desk.form.save.savedocs', payload);
+
+    if (logInfo) {
+      logInfo('Frappe', `savedocs response status: ${res.status}`);
+      if (res.data?._server_messages) {
+        logInfo('Frappe', `Server messages: ${res.data._server_messages}`);
+      }
+    }
 
     // Validate savedocs response correctly
     // savedocs returns: { status: 200, data: { docs: [...], _server_messages: "..." } }

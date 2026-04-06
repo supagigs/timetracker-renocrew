@@ -1,38 +1,36 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Login - Time Tracker</title>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-    rel="stylesheet"
-  >
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../styles/common.css">
-  <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self';
-               connect-src 'self' 
-                  https://*.supabase.co 
-                  wss://*.supabase.co 
-                  https://cdn.jsdelivr.net 
-                  https://sauceless-aerobiological-sara.ngrok-free.dev 
-                  https://*.ngrok-free.dev;
-               script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-               style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-               font-src 'self' https://fonts.gstatic.com;
-               img-src 'self' data: blob:;
-               media-src 'self' data: blob:;">
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self'; 
+    connect-src 'self' 
+                http://127.0.0.1:* http://localhost:* https://*.supabase.co 
+                wss://*.supabase.co 
+                https://*.ngrok-free.dev
+                https://cdn.jsdelivr.net; 
+    script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; 
+    font-src 'self' https://fonts.gstatic.com; 
+    img-src 'self' data: blob: https://*.supabase.co;
+">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="../scripts/supabaseClient.js"></script>
   <script src="../scripts/utils.js"></script>
   <script src="../scripts/sessionSync.js"></script>
   <script src="../scripts/login.js" defer></script>
   <style>
-    html, body {
+    html,
+    body {
       -webkit-text-size-adjust: 100%;
       text-size-adjust: 100%;
     }
-  </style>  
+  </style>
 </head>
 <!-- <script>
   document.addEventListener('DOMContentLoaded', () => {
@@ -46,6 +44,7 @@
     }
   });
 </script> -->
+
 <body class="auth-body">
   <div class="window">
     <header class="common-page-header"></header>
@@ -62,12 +61,13 @@
           <div class="auth-card__visual" style="padding-bottom: 5px;">
             <img src="../../assets/Overview2.png" class="auth-card__image auth-card__image-2" />
             <img src="../../assets/Overview1.png" class="auth-card__image auth-card__image-1" />
-            <img src="../../assets/Ellipse 32.svg" class="auth-card__shadow auth-card__shadow-2"/>
-            <img src="../../assets/Ellipse 33.svg" class="auth-card__shadow auth-card__shadow-1"/>
+            <img src="../../assets/Ellipse 32.svg" class="auth-card__shadow auth-card__shadow-2" />
+            <img src="../../assets/Ellipse 33.svg" class="auth-card__shadow auth-card__shadow-1" />
           </div>
-          
+
           <h1 class="auth-card__title" style="font-size: 22px; padding-top: 10px;">Track Your Time</h1>
-          <p id="appVersion" class="auth-card__description" style="margin-top: 2px; font-size: 12px; color: #384959;"></p>
+          <p id="appVersion" class="auth-card__description" style="margin-top: 2px; font-size: 12px; color: #384959;">
+          </p>
           <p class="auth-card__description" style=" font-size: 12px; color:black;">
             Boost productivity with precise time tracking and clear work insights.
           </p>
@@ -78,22 +78,12 @@
             <label for="email" class="auth-input-label" style="font-size: 14px;">Email</label>
             <div class="auth-input-wrapper">
               <div class="auth-input-icon">
-                  <img
-                    id="emailIcon"
-                    src="../../assets/mail_original.svg"
-                    alt="email icon"
-                    width="20" height="20" viewBox="0 0 20 20" fill="none"
-                  />
+                <img id="emailIcon" src="../../assets/mail_original.svg" alt="email icon" width="20" height="20"
+                  viewBox="0 0 20 20" fill="none" />
               </div>
-              <input
-                type="email"
-                id="email"
-                placeholder="yourname@email.com"
-                required
-                class="auth-input auth-input-focus"
-                autocomplete="username"
-                style="overflow: hidden; padding-left: 40px;outline: none; box-shadow: 0 0 0 2px rgba(0, 81, 233, 0.1);"
-              >
+              <input type="email" id="email" placeholder="yourname@email.com" required
+                class="auth-input auth-input-focus" autocomplete="username"
+                style="overflow: hidden; padding-left: 40px;outline: none; box-shadow: 0 0 0 2px rgba(0, 81, 233, 0.1);">
             </div>
           </div>
 
@@ -101,22 +91,12 @@
             <label for="password" class="auth-input-label" style="font-size: 14px;">Password</label>
             <div class="auth-input-wrapper">
               <div class="auth-input-icon">
-                  <img
-                  id="passwordIcon"
-                  src="../../assets/lock_original.svg"
-                  alt="password icon"
-                  width="20" height="20" viewBox="0 0 20 20" fill="none"
-                />
+                <img id="passwordIcon" src="../../assets/lock_original.svg" alt="password icon" width="20" height="20"
+                  viewBox="0 0 20 20" fill="none" />
                 </svg>
               </div>
-              <input
-                type="password"
-                id="password"
-                placeholder="Enter Your Password"
-                required
-                class="auth-input auth-input-focus"
-                autocomplete="current-password"
-              >
+              <input type="password" id="password" placeholder="Enter Your Password" required
+                class="auth-input auth-input-focus" autocomplete="current-password">
             </div>
           </div>
 
@@ -128,4 +108,5 @@
     </div>
   </div>
 </body>
+
 </html>

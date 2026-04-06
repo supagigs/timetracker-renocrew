@@ -10,6 +10,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const projectSubtitle = document.getElementById('projectSubtitle');
   const clockInInstruction = document.getElementById('clockInInstruction');
   const FRAPPE_REQUEST_TIMEOUT_MS = 15000; // 15 seconds
+  const breakTimerContainer = document.getElementById('breakTimerContainer');
+  const breakTimeDisplay = document.getElementById('breakTimeDisplay');
 
 
   // Get project info from storage
@@ -111,7 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
         StorageService.removeItem('idleStartTime');
 
         if (idleDuration >= IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS && isActive && !isOnBreak) {
-          //console.log(`Auto clocking out: ${idleDuration}s idle (>= ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold)`);
+          console.log(`Auto clocking out: ${idleDuration}s idle (>= ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold)`);
           clockOut({ auto: true, reason: 'idle_2m' }).catch(err => {
             console.error('Failed to auto clock out after idle:', err);
           });
@@ -204,25 +206,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const currentIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
-    
+
     if (runIdleAutoClockOutCheck()) return;
     if (runBreakAutoClockOutCheck()) return;
 
     // Main Timer always shows the work/active time
-timeDisplay.textContent = formatTime(currentActiveTime);
+    timeDisplay.textContent = formatTime(currentActiveTime);
 
-// Sub-Timer logic: Show total accumulated break time
-if (isOnBreak || totalBreakDuration > 0) {
-  breakTimerContainer.style.display = 'block';
-  breakTimeDisplay.textContent = formatTime(isOnBreak ? currentBreakTime : totalBreakDuration);
-} else {
-  breakTimerContainer.style.display = 'none';
-}
+    // Sub-Timer logic: Show total accumulated break time
+    if (isOnBreak || totalBreakDuration > 0) {
+      breakTimerContainer.style.display = 'block';
+      breakTimeDisplay.textContent = formatTime(isOnBreak ? currentBreakTime : totalBreakDuration);
+    } else {
+      breakTimerContainer.style.display = 'none';
+    }
 
-// Update instruction text
-if (clockInInstruction) {
-  clockInInstruction.textContent = isOnBreak ? 'You are on break.' : (isActive ? 'You are working.' : 'Click Clock In to start.');
-}
+    // Update instruction text
+    if (clockInInstruction) {
+      clockInInstruction.textContent = isOnBreak ? 'You are on break.' : (isActive ? 'You are working.' : 'Click Clock In to start.');
+    }
   }
 
   /** Persist computed session state so that if the app is killed, recovery has the latest durations. */
@@ -384,7 +386,7 @@ if (clockInInstruction) {
   // Start timer (Clock In) — transactional: only show running after Frappe + DB succeed
   async function startTimer() {
     if (isActive) return;
-    
+
     // Prevent starting if we are currently clocking out or already starting
     if (clockOutInProgress || isTimerTransitioning) {
       if (typeof NotificationService !== 'undefined' && NotificationService.showWarning) {
@@ -399,28 +401,35 @@ if (clockInInstruction) {
       NotificationService?.showError?.('Project is required to start tracking.');
       return;
     }
-    
-    isTimerTransitioning = true; //locking the process
+
+    isTimerTransitioning = true;
     const originalLabel = clockInBtn.textContent;
     clockInBtn.disabled = true;
-    clockInBtn.textContent = 'Starting...';
-  
+    clockInBtn.textContent = 'Syncing...';
+
+    if (typeof NotificationService !== 'undefined') {
+      NotificationService.showInfo('Starting session, please wait...', 3000);
+    }
+
     try {
+      // Reset power guards for new session
+      lockSuspendClockOutTriggered = false;
+
       // Clear cached session
       StorageService.removeItem('frappeSession');
       StorageService.removeItem('frappeTimesheetId');
       StorageService.removeItem('frappeTimesheetRowId');
-  
+
       const userEmail = StorageService.getItem('userEmail');
       const projectId = StorageService.getItem('selectedProjectId');
       let taskId = StorageService.getItem('selectedTaskId') || null;
-  
+
       // 0️⃣ Get frappe_employee_id from employees table (required for timesheet)
       const employeeData = await fetchEmployeeForUser(userEmail);
       if (!employeeData || !employeeData.frappeEmployeeId) {
         throw new Error('Employee record not found. Please ensure your user is linked to an employee in the system.');
       }
-  
+
       // 1️⃣ Ensure timesheet container exists (check/create draft timesheet for project + employee)
       const { timesheet } = await callWithTimeout(
         window.frappe.getOrCreateTimesheet({
@@ -430,13 +439,13 @@ if (clockInInstruction) {
         }),
         FRAPPE_REQUEST_TIMEOUT_MS
       );
-  
+
       if (!timesheet) {
         throw new Error('Failed to get or create timesheet');
       }
-  
+
       // 2️⃣ Resolve correct row (resume running OR create new)
-      const row = await callWithTimeout(
+      const rowResult = await callWithTimeout(
         window.frappe.resolveRowForStart({
           timesheet,
           project: projectId,
@@ -444,26 +453,32 @@ if (clockInInstruction) {
         }),
         FRAPPE_REQUEST_TIMEOUT_MS
       );
-  
-      if (!row) {
+
+      if (!rowResult || !rowResult.rowId) {
         throw new Error('Failed to resolve timesheet row');
       }
-  
-      // 3️⃣ Start session in Frappe
-      await callWithTimeout(
-        window.frappe.startTimesheetSession({ timesheet, row }),
-        FRAPPE_REQUEST_TIMEOUT_MS
-      );
-  
+
+      const row = rowResult.rowId;
+
+      // 3️⃣ Start session in Frappe ONLY if it is not already running
+      if (!rowResult.isAlreadyRunning) {
+        await callWithTimeout(
+          window.frappe.startTimesheetSession({ timesheet, row }),
+          FRAPPE_REQUEST_TIMEOUT_MS
+        );
+      } else {
+        console.log('[TRACKER] Recovered an already running session from Frappe. Skipping start endpoint.');
+      }
+
       const session = {
         frappeTimesheetId: timesheet,
         frappeTimesheetRowId: row
       };
-  
+
       StorageService.setItem('frappeSession', JSON.stringify(session));
       StorageService.setItem('frappeTimesheetId', timesheet);
       StorageService.setItem('frappeTimesheetRowId', row);
-  
+
       // 3b️⃣ Create time_sessions entry in time tracker DB and store its id
       const email = userEmail || StorageService.getItem('userEmail');
       const today = new Date().toISOString().split('T')[0];
@@ -507,50 +522,50 @@ if (clockInInstruction) {
           }
         }
       }
-  
+
       // 4️⃣ Only after Frappe confirms → activate UI
       sessionStartTime = new Date();
       workStartTime = new Date();
-  
+
       StorageService.setItem('sessionStartTime', sessionStartTime.toISOString());
       StorageService.setItem('workStartTime', workStartTime.toISOString());
       StorageService.setItem('isActive', 'true');
-  
+
       isActive = true;
       clockInBtn.textContent = 'Clock Out';
       clockInBtn.classList.remove('start-project-btn-primary');
       clockInBtn.classList.add('start-project-btn-danger');
       clockInBtn.disabled = false;
       takeBreakBtn.disabled = false;
-  
+
       updateTimerStateInMainProcess(true);
-  
+
       if (idleTracker) idleTracker.startTracking();
       timerInterval = setInterval(updateTimer, 1000);
       sessionPersistInterval = setInterval(persistSessionSnapshotForRecovery, 15000);
       sessionDbUpdateInterval = setInterval(updateTimeTrackerSessionInDb, 30000); // Update DB every 30s
       updateTimer();
       startScreenshotCapture();
-  
+
     } catch (error) {
       console.error('Error starting timer:', error);
       clockInBtn.disabled = false;
       clockInBtn.textContent = originalLabel || 'Clock In';
-  
+
       const msg = error?.message || 'Failed to start timer';
       NotificationService?.showError?.(msg);
-    }finally{
+    } finally {
       isTimerTransitioning = false;
     }
   }
-  
+
   // Stop timer (Clock Out)
   async function clockOut({ auto = false, reason = null, skipRedirect = false } = {}) {
     if (clockOutInProgress) {
       console.warn('[TRACKER] clockOut ignored — already in progress');
       return;
     }
-    
+
     // // 2. QUEUE IF STARTING: If the app is currently clocking IN, wait and try clocking OUT again
     // if (isTimerTransitioning) {
     //   console.warn('[TRACKER] clockOut delayed — timer is currently starting');
@@ -562,7 +577,7 @@ if (clockInInstruction) {
     const wasActive = isActive;
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
     const clockOutTime = new Date();
-  
+
     let finalBreakDuration = totalBreakDuration;
     if (isOnBreak && breakStartTime) {
       const breakElapsed = Math.floor((clockOutTime - new Date(breakStartTime)) / 1000);
@@ -571,7 +586,7 @@ if (clockInInstruction) {
         breakCount++;
       }
     }
-  
+
     let finalActiveDuration = totalActiveDuration;
     if (wasActive && !isOnBreak && !isIdle && previousWorkStartTime) {
       const workElapsed = Math.floor((clockOutTime - previousWorkStartTime) / 1000);
@@ -579,11 +594,17 @@ if (clockInInstruction) {
         finalActiveDuration += workElapsed;
       }
     }
-  
+
+    // Stop screenshots IMMEDIATELY
+    stopScreenshotCapture();
+    if (typeof NotificationService !== 'undefined' && !auto) {
+      NotificationService.showInfo('Syncing session with server...', 0);
+    }
+
     // Stop UI intervals ONLY (do not change state yet)
     clearInterval(timerInterval);
     timerInterval = null;
-  
+
     if (sessionPersistInterval) {
       clearInterval(sessionPersistInterval);
       sessionPersistInterval = null;
@@ -592,15 +613,14 @@ if (clockInInstruction) {
       clearInterval(sessionDbUpdateInterval);
       sessionDbUpdateInterval = null;
     }
-  
-    stopScreenshotCapture();
+
     if (idleTracker) idleTracker.stopTracking();
-  
+
     try {
       const finalIdleTime = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
       const totalSessionDurationSeconds =
         finalActiveDuration + finalBreakDuration + finalIdleTime;
-  
+
       await saveSession(
         totalSessionDurationSeconds,
         finalBreakDuration,
@@ -608,23 +628,28 @@ if (clockInInstruction) {
         finalIdleTime,
         breakCount
       );
-      
-      //console.log("Session saved. Applying 2-second server sync buffer...");
-      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // Clear any "Syncing" notifications
+      if (typeof NotificationService !== 'undefined') {
+        NotificationService.removeExistingNotifications('info');
+      }
+
+      // Session saved. Applying a short server sync buffer to ensure all IPC calls complete
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       // ✅ ONLY NOW mark as stopped
       isActive = false;
       isIdle = false;
       workStartTime = null;
       idleStartTime = null;
-  
+
       StorageService.setItem('isActive', 'false');
       StorageService.setItem('isIdle', 'false');
       StorageService.removeItem('workStartTime');
       StorageService.removeItem('idleStartTime');
-  
+
       updateTimerStateInMainProcess(false);
-  
+
       // Clear session storage
       StorageService.removeItem('sessionStartTime');
       StorageService.removeItem('currentSessionId');
@@ -637,53 +662,53 @@ if (clockInInstruction) {
       StorageService.removeItem('breakCount');
       StorageService.removeItem('totalIdleTime');
       StorageService.removeItem('isOnBreak');
-  
+
       if (idleTracker) {
         idleTracker.destroy();
         idleTracker = null;
       }
-  
+
       clockInBtn.textContent = 'Clock In';
       clockInBtn.classList.remove('start-project-btn-danger');
       clockInBtn.classList.add('start-project-btn-primary');
-  
+
       // Show Windows notification when timer stops (manual or auto)
       if (window.electronAPI?.showTimerStoppedNotification) {
         window.electronAPI.showTimerStoppedNotification();
       }
 
-    // Only navigate if we aren't skipping project switch
-    if (!skipRedirect && reason !== 'project_switch') {
-      window.location.href = 'projects.html';
-    }
-  
+      // Only navigate if we aren't skipping project switch
+      if (!skipRedirect && reason !== 'project_switch') {
+        window.location.href = 'projects.html';
+      }
+
       // Navigate to projects screen after any clock out (manual or auto)
       window.location.href = 'projects.html';
-  
+
     } catch (error) {
       console.error('Clock out failed — restoring state:', error);
-  
+
       // 🔁 ROLLBACK
       isActive = true;
       StorageService.setItem('isActive', 'true');
       updateTimerStateInMainProcess(true);
-  
+
       timerInterval = setInterval(updateTimer, 1000);
       sessionPersistInterval = setInterval(persistSessionSnapshotForRecovery, 15000);
       sessionDbUpdateInterval = setInterval(updateTimeTrackerSessionInDb, 30000);
-  
+
       if (idleTracker) idleTracker.startTracking();
       startScreenshotCapture();
-  
+
       NotificationService?.showError?.(
         error.message || 'Failed to stop timer. Please try again.'
       );
-    }finally{
+    } finally {
       clockOutInProgress = false;
       isTimerTransitioning = false;
     }
   }
-  
+
 
   // Save session to database
   async function saveSession(totalDuration, breakDuration, activeDuration, idleDuration = 0, breakCountVal = 0) {
@@ -698,13 +723,13 @@ if (clockInInstruction) {
           const session = JSON.parse(frappeSessionStr);
           if (session.frappeTimesheetId && session.frappeTimesheetRowId) {
             const timesheet = await window.frappe.getTimesheetById(session.frappeTimesheetId);
-            
+
             if (!timesheet || !timesheet.time_logs || !Array.isArray(timesheet.time_logs)) {
               throw new Error('Invalid timesheet structure');
             }
 
             const activeRow = timesheet.time_logs.find(row => {
-              return row && row.from_time != null && row.to_time == null ;
+              return row && row.from_time != null && row.to_time == null;
             });
 
             if (!activeRow) {
@@ -712,11 +737,11 @@ if (clockInInstruction) {
             }
 
             const serverNow = await window.frappe.getFrappeServerTime();
-            
+
             if (activeRow.hasOwnProperty('hours')) {
               delete activeRow.hours;
             }
-            
+
             activeRow.to_time = serverNow;
             activeRow.completed = 1;
 
@@ -737,7 +762,7 @@ if (clockInInstruction) {
       // Update Supabase session
       const supabaseSessionId = StorageService.getItem('supabaseSessionId');
       const frappeTimesheetId = StorageService.getItem('frappeTimesheetId');
-      
+
       if (supabaseSessionId) {
         let company = null;
         try {
@@ -786,41 +811,41 @@ if (clockInInstruction) {
 
   async function handleProjectSwitch(newProjectData) {
     try {
-        // 'isActive' is your global variable in startproject.js tracking if a timer is on
-        if (typeof isActive !== 'undefined' && isActive) {
-          //console.log("!! Rapid Switch Detected: Stopping previous project in Frappe first...");
-            
-            //Await clock out, but prevent it from navigating away
-            await clockOut({ auto: true, reason: 'project_switch', skipRedirect: true });
-            
-            //console.log("Previous project closed. Enforcing strict 2-second cooldown...");
-            
-            // The "Cooldown" - prevents the 417 error for overlapping logs
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
+      // 'isActive' is your global variable in startproject.js tracking if a timer is on
+      if (typeof isActive !== 'undefined' && isActive) {
+        //console.log("!! Rapid Switch Detected: Stopping previous project in Frappe first...");
 
-        //console.log("Starting new project:", newProjectData.project);
-        
-        // Update the global variables and storage for the new project BEFORE starting
-        selectedProjectId = newProjectData.project;
-        StorageService.setItem('selectedProjectId', newProjectData.project);
-        
-        if (newProjectData.task) {
-          StorageService.setItem('selectedTaskId', newProjectData.task);
-        } else {
-          StorageService.removeItem('selectedTaskId');
-        }
+        //Await clock out, but prevent it from navigating away
+        await clockOut({ auto: true, reason: 'project_switch', skipRedirect: true });
 
-        //STart new timer safely
-        await startTimer(); 
+        //console.log("Previous project closed. Enforcing strict 2-second cooldown...");
+
+        // The "Cooldown" - prevents the 417 error for overlapping logs
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      //console.log("Starting new project:", newProjectData.project);
+
+      // Update the global variables and storage for the new project BEFORE starting
+      selectedProjectId = newProjectData.project;
+      StorageService.setItem('selectedProjectId', newProjectData.project);
+
+      if (newProjectData.task) {
+        StorageService.setItem('selectedTaskId', newProjectData.task);
+      } else {
+        StorageService.removeItem('selectedTaskId');
+      }
+
+      //STart new timer safely
+      await startTimer();
 
     } catch (error) {
-        console.error("Critical Error during project switch:", error);
-        if (typeof NotificationService !== 'undefined') {
-          NotificationService.showError("Project switch failed. Please clock out manually.");
-        }
+      console.error("Critical Error during project switch:", error);
+      if (typeof NotificationService !== 'undefined') {
+        NotificationService.showError("Project switch failed. Please clock out manually.");
+      }
     }
-}
+  }
 
   // Take break
   function takeBreak() {
@@ -836,12 +861,12 @@ if (clockInInstruction) {
         StorageService.setItem('isIdle', 'false');
         StorageService.removeItem('idleStartTime');
       }
-      
+
       isOnBreak = true;
       breakStartTime = new Date();
       StorageService.setItem('isOnBreak', 'true');
       StorageService.setItem('breakStartTime', breakStartTime.toISOString());
-      
+
       // Show Resume button on left, Clock Out on right
       resumeBtn.style.display = 'inline-flex';
       resumeBtn.textContent = 'Resume Work';
@@ -865,24 +890,24 @@ if (clockInInstruction) {
         StorageService.setItem('breakDuration', totalBreakDuration.toString());
         StorageService.setItem('breakCount', breakCount.toString());
       }
-      
+
       isOnBreak = false;
       StorageService.setItem('isOnBreak', 'false');
       StorageService.removeItem('breakStartTime');
       isIdle = false;
       StorageService.setItem('isIdle', 'false');
       StorageService.removeItem('idleStartTime');
-      
+
       // Hide Resume button, show Take Break button
       resumeBtn.style.display = 'none';
       takeBreakBtn.style.display = 'inline-flex';
       takeBreakBtn.textContent = 'Take Break';
       takeBreakBtn.classList.remove('start-project-btn-success');
       takeBreakBtn.classList.add('start-project-btn-secondary');
-      
+
       workStartTime = new Date();
       StorageService.setItem('workStartTime', workStartTime.toISOString());
-      
+
       if (idleTracker) {
         idleTracker.startTracking();
       }
@@ -939,7 +964,7 @@ if (clockInInstruction) {
     } else {
       resumeBtn.style.display = 'none';
       takeBreakBtn.style.display = 'inline-flex';
-      breakTimerContainer.style.display = totalBreakDuration > 0 ? 'block':'none';
+      breakTimerContainer.style.display = totalBreakDuration > 0 ? 'block' : 'none';
     }
     if (clockInInstruction) clockInInstruction.style.display = 'none';
     updateTimer();
@@ -1016,28 +1041,28 @@ if (clockInInstruction) {
     window.location.href = 'projects.html';
   });
 
-clockInBtn.addEventListener('click', async () => {
-  try {
-    // Disable button to prevent double-clicks during the network call
-    clockInBtn.disabled = true;
+  clockInBtn.addEventListener('click', async () => {
+    try {
+      // Disable button to prevent double-clicks during the network call
+      clockInBtn.disabled = true;
 
-    if (isActive) {
-      //console.log("Stopping timer in Frappe Desk...");
-      
-      // Await ensures we don't proceed until Frappe confirms the 'Stop'
-      await clockOut(); 
-      
-      //console.log("✓ Timer successfully stopped in Frappe.");
-    } else {
-      //console.log("Starting new timer...");
-      await startTimer();
+      if (isActive) {
+        //console.log("Stopping timer in Frappe Desk...");
+
+        // Await ensures we don't proceed until Frappe confirms the 'Stop'
+        await clockOut();
+
+        //console.log("✓ Timer successfully stopped in Frappe.");
+      } else {
+        //console.log("Starting new timer...");
+        await startTimer();
+      }
+    } catch (err) {
+      console.error("Operation failed:", err);
+    } finally {
+      clockInBtn.disabled = false;
     }
-  } catch (err) {
-    console.error("Operation failed:", err);
-  } finally {
-    clockInBtn.disabled = false;
-  }
-});
+  });
 
   takeBreakBtn.addEventListener('click', () => {
     if (isActive) {
@@ -1110,12 +1135,12 @@ clockInBtn.addEventListener('click', async () => {
     if (!isActive || !sessionStartTime) {
       return { saved: false, error: 'No active session' };
     }
-    
+
     try {
       // Call the full clockOut function to save session and clear all state
       // Use auto flag to skip navigation and confirmation
       await clockOut({ auto: true, reason: 'window_close' });
-      
+
       return { saved: true };
     } catch (error) {
       console.error('Error clocking out on window close:', error);
@@ -1175,7 +1200,7 @@ clockInBtn.addEventListener('click', async () => {
         // As a safety net, still navigate back to projects so user is not left on a stale timer page
         window.location.href = 'projects.html';
       });
-    }).catch(() => {});
+    }).catch(() => { });
   }
 
   document.addEventListener('visibilitychange', () => {
@@ -1218,7 +1243,7 @@ clockInBtn.addEventListener('click', async () => {
   // Works for all session states: active working, idle, or on break.
   if (window.electronAPI && window.electronAPI.onLockOrSuspendClockOut) {
     //console.log('[PowerEvents] Renderer startProject: registering onLockOrSuspendClockOut listener');
-    window.electronAPI.onLockOrSuspendClockOut(async(data) => {
+    window.electronAPI.onLockOrSuspendClockOut(async (data) => {
       const reason = data?.reason || 'lock_screen';
       const ts = new Date().toISOString();
       const notifyDone = window.electronAPI?.notifyLidCloseClockOutDone;
@@ -1238,25 +1263,25 @@ clockInBtn.addEventListener('click', async () => {
         return;
       }
       // Clock out whenever we have an active session, regardless of active/idle/on break
-      if (!sessionStartTime || !isActive ) {
+      if (!sessionStartTime || !isActive) {
         //console.log('[PowerEvents] Renderer startProject: lock/suspend clock-out skipped due to guard');
         if (notifyDone) notifyDone();
         return;
       }
-      
+
       try {
         isTimerTransitioning = true; // Set the lock
         lockSuspendClockOutTriggered = true;
-        
+
         //console.log(`[PowerEvents] Clocking out due to: ${reason}`);
 
         // Perform the clock out
         await clockOut({ auto: true, reason });
         //console.log('[PowerEvents] Clock out successful. Syncing with server clock...');
-      }catch (err) {
+      } catch (err) {
         console.error('[PowerEvents] Clock out failed:', err);
         // Reset guard on failure so user can try again manually
-        lockSuspendClockOutTriggered = false; 
+        lockSuspendClockOutTriggered = false;
       } finally {
         isTimerTransitioning = false; // Release the lock
         if (notifyDone) notifyDone();
@@ -1267,18 +1292,18 @@ clockInBtn.addEventListener('click', async () => {
   if (window.electronAPI && window.electronAPI.onUnlockResumeClockIn) {
     window.electronAPI.onUnlockResumeClockIn(() => {
       //console.log('[PowerEvents] System resumed. Checking if we can auto-start...');
-  
+
       // CRITICAL: If the clock-out from the 'suspend' event is still 
       // waiting in its 2-second buffer, this lock will be TRUE.
       if (isTimerTransitioning || clockOutInProgress) {
         console.warn('[PowerEvents] Auto-start blocked: Previous session is still syncing.');
         // Optionally, retry once after 3 seconds
         setTimeout(() => {
-           if (!isActive && selectedProjectId && !isTimerTransitioning) startTimer();
+          if (!isActive && selectedProjectId && !isTimerTransitioning) startTimer();
         }, 3000);
         return;
       }
-  
+
       if (!isActive && selectedProjectId) {
         startTimer();
       }

@@ -7,8 +7,8 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --publish=never",
-    "release": "electron-builder --publish=always", 
-    "dev": "electron . --dev",  
+    "release": "electron-builder --publish=always",
+    "dev": "electron . --dev",
     "build:publish": "electron-builder --publish=always",
     "build:skip-rebuild": "electron-builder --config.npmRebuild=false",
     "dist": "electron-builder --publish=always",
@@ -67,7 +67,8 @@
     "jpeg-js": "^0.4.4",
     "minimist": "^1.2.8",
     "tough-cookie": "^4.1.4",
-    "url-regex": "^5.0.0"
+    "url-regex": "^5.0.0",
+    "qs": "^6.14.3"
   },
   "build": {
     "appId": "com.supagigs.timetracker",

@@ -490,11 +490,14 @@ if (!ValidationService.validateEmail(email)) {
           const roleProfileResult = await window.auth.getUserRoleProfile(normalizedEmail);
           if (roleProfileResult && roleProfileResult.success) {
             roleProfile = roleProfileResult.roleProfile || null;
-            //console.log('Fetched role profile from Frappe:', roleProfile);
+            // PERSIST ROLE FOR ROLE-BASED ACCESS
+            if (roleProfile) {
+              StorageService.setItem('userRole', roleProfile);
+              StorageService.setItem('userCategory', roleProfile); 
+            }
           }
         } catch (roleProfileError) {
           console.error('Error fetching role profile from Frappe:', roleProfileError);
-          // Non-fatal - continue without role profile
         }
       }
 

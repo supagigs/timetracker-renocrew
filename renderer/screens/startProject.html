@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,21 +9,18 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../styles/common.css">
-  <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self';
-               connect-src 'self' 
-                  https://*.supabase.co 
-                  wss://*.supabase.co 
-                  https://cdn.jsdelivr.net 
-                  https://fonts.googleapis.com 
-                  https://fonts.gstatic.com 
-                  https://sauceless-aerobiological-sara.ngrok-free.dev 
-                  https://*.ngrok-free.dev;
-               script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-               style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-               font-src 'self' https://fonts.gstatic.com;
-               img-src 'self' data: blob:;
-               media-src 'self' data: blob:;">
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self'; 
+    connect-src 'self' 
+                http://127.0.0.1:* http://localhost:* https://*.supabase.co 
+                wss://*.supabase.co 
+                https://*.ngrok-free.dev
+                https://cdn.jsdelivr.net; 
+    script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; 
+    font-src 'self' https://fonts.gstatic.com; 
+    img-src 'self' data: blob: https://*.supabase.co;
+">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="../scripts/supabaseClient.js"></script>
   <script src="../scripts/utils.js"></script>
@@ -30,6 +28,7 @@
   <script src="../scripts/idleTracker.js"></script>
   <script src="../scripts/startProject.js" defer></script>
 </head>
+
 <body class="start-project-body">
   <div class="start-project-container">
     <!-- Header -->
@@ -41,7 +40,10 @@
       <div class="start-project-title-wrapper">
         <button id="backBtn" class="start-project-back-arrow">
           <svg xmlns="http://www.w3.org/2000/svg" width="17" height="10" viewBox="0 0 17 10" fill="none">
-            <path d="M4.33579 8.75L1.04289 5.45711C0.652369 5.06658 0.652369 4.43342 1.04289 4.04289L4.33579 0.75M1.33579 4.74999L15.3358 4.74999" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5" stroke-linecap="round"/>
+            <path
+              d="M4.33579 8.75L1.04289 5.45711C0.652369 5.06658 0.652369 4.43342 1.04289 4.04289L4.33579 0.75M1.33579 4.74999L15.3358 4.74999"
+              stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;"
+              stroke-width="1.5" stroke-linecap="round" />
           </svg>
         </button>
         <h1 id="projectTitle" class="start-project-title">Project Name</h1>
@@ -64,23 +66,27 @@
         <span id="timeDisplay">00:00:00</span>
       </div>
 
-      <div id="breakTimerContainer" style="display: none; font-size: 16px; margin-top: 8px; margin-bottom: 10px; text-align: center; width: 100%;">
-        <span style="font-weight: 600; color: #4b5563;">Break Time:</span> 
-        <span id="breakTimeDisplay" style="font-size: 18px; color: #dc2626; font-weight: 700; margin-left: 8px;">00:00:00</span>
+      <div id="breakTimerContainer"
+        style="display: none; font-size: 16px; margin-top: 8px; margin-bottom: 10px; text-align: center; width: 100%;">
+        <span style="font-weight: 600; color: #4b5563;">Break Time:</span>
+        <span id="breakTimeDisplay"
+          style="font-size: 18px; color: #dc2626; font-weight: 700; margin-left: 8px;">00:00:00</span>
       </div>
 
       <!-- Action buttons -->
       <div class="start-project-actions">
-        <button id="resumeBtn" class="start-project-btn start-project-btn-success" style="display: none;">Resume</button>
+        <button id="resumeBtn" class="start-project-btn start-project-btn-success"
+          style="display: none;">Resume</button>
         <button id="clockInBtn" class="start-project-btn start-project-btn-primary">Clock In</button>
         <button id="takeBreakBtn" class="start-project-btn start-project-btn-secondary">Take Break</button>
       </div>
     </main>
 
     <footer class="projects-footer">
-    <button id="viewReportsBtn" class="projects-view-reports-btn">View Reports</button>
-    <span class="projects-help-text">Need Help?</span> 
+      <button id="viewReportsBtn" class="projects-view-reports-btn">View Reports</button>
+      <span class="projects-help-text">Need Help?</span>
     </footer>
   </div>
 </body>
+
 </html>
