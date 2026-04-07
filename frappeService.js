@@ -1207,6 +1207,19 @@ async function stopTimesheetSession({ timesheet, row }) {
   const activeRow = tsDetail.time_logs?.find(r => r.name === row);
   if (!activeRow) throw new Error('Row not found');
 
+  // Check if already stopped to avoid duplicate updates and discrepancies
+  if (activeRow.to_time) {
+    if (logInfo) logInfo('Frappe', `stopTimesheetSession: Row ${row} is already stopped (to_time: ${activeRow.to_time}). Skipping update.`);
+    return {
+      timesheetId: timesheet,
+      rowId: row,
+      hours: activeRow.hours,
+      fromTime: activeRow.from_time,
+      toTime: activeRow.to_time,
+      elapsedSeconds: Math.floor((new Date(activeRow.to_time) - new Date(activeRow.from_time)) / 1000)
+    };
+  }
+
   const serverNow = await getFrappeServerTime();
   activeRow.to_time = serverNow;
 
