@@ -845,7 +845,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const { error: updateError } = await window.supabase
           .from('time_sessions')
           .update(updateData)
-          .eq('id', supabaseSessionId);
+          .eq('id', parseInt(supabaseSessionId, 10));
 
         if (updateError) {
           console.error('Error updating Supabase session:', updateError);
