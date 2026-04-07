@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, powerSaveBlocker, Notification, screen, dialog, shell, systemPreferences, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -5560,6 +5561,15 @@ function safeQuitAndInstall() {
   }
 }
 
+ipcMain.handle('frappe:cleanup-and-start', async (_event, { timesheet, project, task, userEmail }) => {
+  try {
+    const rowId = await resolveRowForStart({ timesheet, project, task, userEmail });
+    return { success: true, rowId };
+  } catch (error) {
+    logError('App', `Cleanup/Start failed: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+});
 
 // ============ APP LIFECYCLE ============
 app.whenReady().then(() => {

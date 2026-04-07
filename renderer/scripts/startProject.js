@@ -210,10 +210,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (runIdleAutoClockOutCheck()) return;
     if (runBreakAutoClockOutCheck()) return;
 
-    // Main Timer always shows the work/active time
     timeDisplay.textContent = formatTime(currentActiveTime);
 
-    // Sub-Timer logic: Show total accumulated break time
+    // Show total accumulated break time
     if (isOnBreak || totalBreakDuration > 0) {
       breakTimerContainer.style.display = 'block';
       breakTimeDisplay.textContent = formatTime(isOnBreak ? currentBreakTime : totalBreakDuration);
@@ -221,13 +220,11 @@ document.addEventListener('DOMContentLoaded', () => {
       breakTimerContainer.style.display = 'none';
     }
 
-    // Update instruction text
     if (clockInInstruction) {
       clockInInstruction.textContent = isOnBreak ? 'You are on break.' : (isActive ? 'You are working.' : 'Click Clock In to start.');
     }
   }
 
-  /** Persist computed session state so that if the app is killed, recovery has the latest durations. */
   function persistSessionSnapshotForRecovery() {
     if (!sessionStartTime || !isActive) return;
     const now = new Date();
@@ -299,7 +296,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const sessionId = currentSessionId || 'temp-session';
 
-      // Get numeric Supabase session ID separately - needed for time_session_id column
       const supabaseSessionId = StorageService.getItem('supabaseSessionId');
       let numericSupabaseSessionId = null;
       if (supabaseSessionId) {
@@ -309,7 +305,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      // Frappe project/task IDs – for this screen we only have project
       const frappeProjectId = selectedProjectId || StorageService.getItem('selectedProjectId') || null;
       const frappeTaskId = null;
 
@@ -352,7 +347,6 @@ document.addEventListener('DOMContentLoaded', () => {
       });
   }
 
-  // Timeout for Frappe calls so we don't hang (e.g. 417 / network)
   const FRAPPE_TIMEOUT_MS = 15000;
   function callWithTimeout(promise, ms) {
     const t = new Promise((_, reject) => setTimeout(() => reject(new Error('Request timeout')), ms || FRAPPE_TIMEOUT_MS));
@@ -383,7 +377,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Start timer (Clock In) — transactional: only show running after Frappe + DB succeed
+  // Start timer (Clock In)
   async function startTimer() {
     if (isActive) return;
 
@@ -406,6 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const originalLabel = clockInBtn.textContent;
     clockInBtn.disabled = true;
     clockInBtn.textContent = 'Syncing...';
+    clockInBtn.textContent = 'Cleaning sessions...';
 
     if (typeof NotificationService !== 'undefined') {
       NotificationService.showInfo('Starting session, please wait...', 3000);
@@ -424,14 +419,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const projectId = StorageService.getItem('selectedProjectId');
       let taskId = StorageService.getItem('selectedTaskId') || null;
 
-      // 0️⃣ Get frappe_employee_id from employees table (required for timesheet)
+      // Get frappe_employee_id from employees table (required for timesheet)
       const employeeData = await fetchEmployeeForUser(userEmail);
       if (!employeeData || !employeeData.frappeEmployeeId) {
         throw new Error('Employee record not found. Please ensure your user is linked to an employee in the system.');
       }
 
-      // 1️⃣ Ensure timesheet container exists (check/create draft timesheet for project + employee)
-      const { timesheet } = await callWithTimeout(
+      let { timesheet } = await callWithTimeout(
         window.frappe.getOrCreateTimesheet({
           project: projectId,
           task: taskId,
@@ -444,12 +438,13 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error('Failed to get or create timesheet');
       }
 
-      // 2️⃣ Resolve correct row (resume running OR create new)
+      //Resolve correct row (resume running OR create new)
       const rowResult = await callWithTimeout(
         window.frappe.resolveRowForStart({
           timesheet,
           project: projectId,
-          task: taskId
+          task: taskId,
+          userEmail: userEmail
         }),
         FRAPPE_REQUEST_TIMEOUT_MS
       );
@@ -458,9 +453,48 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error('Failed to resolve timesheet row');
       }
 
-      const row = rowResult.rowId;
+      const email = userEmail || StorageService.getItem('userEmail');
+      if (rowResult.stoppedRows && rowResult.stoppedRows.length > 0 && window.supabase && email) {
+        try {
+          for (const stoppedRow of rowResult.stoppedRows) {
+            // Find open Supabase session matching this Frappe timesheet
+            const { data: openSessions, error: findErr } = await window.supabase
+              .from('time_sessions')
+              .select('id, start_time, total_duration, active_duration')
+              .eq('user_email', email)
+              .eq('frappe_timesheet_id', stoppedRow.timesheetId)
+              .is('end_time', null);
 
-      // 3️⃣ Start session in Frappe ONLY if it is not already running
+            if (!findErr && openSessions && openSessions.length > 0) {
+              const sessionToClose = openSessions[0];
+              const safeElapsed = stoppedRow.elapsedSeconds || 0;
+
+              const finalTotal = Math.max(sessionToClose.total_duration || 0, safeElapsed);
+              const finalActive = Math.max(sessionToClose.active_duration || 0, safeElapsed);
+
+              await window.supabase
+                .from('time_sessions')
+                .update({
+                  end_time: stoppedRow.toTime || new Date().toISOString(),
+                  total_duration: finalTotal,
+                  active_duration: finalActive
+                })
+                .eq('id', sessionToClose.id);
+
+              console.log(`[TRACKER] Cleaned up orphaned Supabase session ${sessionToClose.id} matched to Frappe Timesheet ${stoppedRow.timesheetId}`);
+            }
+          }
+        } catch (cleanupErr) {
+          console.warn('[TRACKER] Failed to cleanup orphaned Supabase sessions:', cleanupErr);
+        }
+      }
+
+      const row = rowResult.rowId;
+      if (rowResult.timesheet) {
+        timesheet = rowResult.timesheet;
+      }
+
+      // Start session in Frappe ONLY if it is not already running
       if (!rowResult.isAlreadyRunning) {
         await callWithTimeout(
           window.frappe.startTimesheetSession({ timesheet, row }),
@@ -479,8 +513,7 @@ document.addEventListener('DOMContentLoaded', () => {
       StorageService.setItem('frappeTimesheetId', timesheet);
       StorageService.setItem('frappeTimesheetRowId', row);
 
-      // 3b️⃣ Create time_sessions entry in time tracker DB and store its id
-      const email = userEmail || StorageService.getItem('userEmail');
+      // Create time_sessions entry in time tracker DB and store its id
       const today = new Date().toISOString().split('T')[0];
       const startTimeIso = new Date().toISOString();
       if (window.supabase && email) {
@@ -738,11 +771,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const serverNow = await window.frappe.getFrappeServerTime();
 
-            if (activeRow.hasOwnProperty('hours')) {
-              delete activeRow.hours;
-            }
-
             activeRow.to_time = serverNow;
+
+            // Compute correct hours
+            const fromTime = new Date(activeRow.from_time).getTime();
+            const toTime = new Date(serverNow).getTime();
+            let computedHours = 0;
+            if (!isNaN(fromTime) && !isNaN(toTime)) {
+              computedHours = Math.max(0, (toTime - fromTime) / (1000 * 60 * 60));
+            }
+            activeRow.hours = computedHours;
+
             activeRow.completed = 1;
 
             if (!activeRow.doctype) {

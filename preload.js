@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('auth', {
 contextBridge.exposeInMainWorld('frappe', {
   resolveRowForStart: (data) =>
     ipcRenderer.invoke('frappe:resolve-row-for-start', data),
-  
+
   getUserProjects: () =>
     ipcRenderer.invoke('frappe:get-user-projects'),
 

@@ -1,12 +1,14 @@
 {
   "name": "time-tracker-new",
-  "version": "1.1.1",
+  "version": "1.2.1",
   "description": "Time tracking application to enable users to record work hours, monitor productivity, and analyze performance with accuracy.",
   "main": "main.js",
   "productName": "Time-Tracker",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --publish=never",
+    "build:test": "copy .env.test .env && electron-builder --publish=never",
+    "build:prod": "copy .env.production .env && electron-builder --publish=always",
     "release": "electron-builder --publish=always",
     "dev": "electron . --dev",
     "build:publish": "electron-builder --publish=always",
