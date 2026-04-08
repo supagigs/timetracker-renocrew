@@ -24,7 +24,7 @@ async function getEmployeeForUser(userEmail) {
     return null;
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     // Method 1: Exact match on user_id
@@ -522,7 +522,7 @@ async function getEmployeeDetailsForUser(userEmail) {
     return null;
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     const res = await frappe.get(`/api/resource/Employee/${employeeId}`, {
@@ -632,7 +632,7 @@ async function verifyTimesheetBelongsToUser(timesheet, userEmail) {
     return false;
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     // Fetch the employee record from the timesheet
@@ -690,7 +690,7 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
     throw new Error('Project is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     // Use frappe_employee_id from employees table (Supabase) when provided
@@ -993,7 +993,7 @@ async function addTimeLogToTimesheet(timesheetId, { project, task, hours = 0, ro
     throw new Error('Project is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     // Prepare payload for the method endpoint
@@ -1062,7 +1062,7 @@ async function addTimeLogToTimesheet(timesheetId, { project, task, hours = 0, ro
  */
 
 async function getOrCreateTimesheet({ project, task, frappeEmployeeId }) {
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   if (!project) throw new Error("Project is required");
 
@@ -1231,7 +1231,7 @@ async function resolveRowForStart({ timesheet, project, task, userEmail }) {
  * Uses Frappe method endpoint: POST /api/method/start_timesheet_session
  */
 async function startTimesheetSession({ timesheet, row }) {
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   if (!timesheet || !row) {
     throw new Error('Timesheet and row are required');
@@ -1292,7 +1292,7 @@ async function stopTimesheetSession({ timesheet, row, endTime }) {
   activeRow.completed = 1;
   if (!activeRow.doctype) activeRow.doctype = 'Timesheet Detail';
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
   const tryUpdate = async (methodName) => {
     try {
       if (methodName === 'PUT') {
@@ -1425,7 +1425,7 @@ async function stopTimesheetSession({ timesheet, row, endTime }) {
 
 
 async function createNewRowInTimesheet(timesheetId, project, task, userEmail) {
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   if (!timesheetId) {
     throw new Error('Timesheet ID required');
@@ -1611,7 +1611,7 @@ async function updateTimesheetRow({ timesheetId, timesheetRowId, hours }) {
     throw new Error('Hours is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     const payload = {
@@ -1665,7 +1665,7 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
     throw new Error('Project is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   let employeeId = frappeEmployeeId && String(frappeEmployeeId).trim()
     ? String(frappeEmployeeId).trim()
@@ -1676,7 +1676,7 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
     if (logError) {
       logError('Frappe', errorMsg);
       try {
-        const frappe = createFrappeClient();
+        const frappe = createFrappeClient(true);
         const debugRes = await frappe.get('/api/resource/Employee', {
           params: {
             fields: JSON.stringify(['name', 'user_id', 'employee_name']),
@@ -1909,7 +1909,7 @@ async function getMyTasksForProject(project) {
   }
 
   try {
-    const frappe = createFrappeClient();
+    const frappe = createFrappeClient(true);
 
     const res = await frappe.get('/api/resource/Task', {
       params: {
@@ -1983,7 +1983,7 @@ async function getUserProjects() {
       logInfo('Frappe', `Fetching projects for user via tasks: ${userEmail}`);
     }
 
-    const frappe = createFrappeClient();
+    const frappe = createFrappeClient(true);
 
     const taskRes = await frappe.get('/api/resource/Task', {
       params: {
@@ -2183,7 +2183,7 @@ async function getUserProjectsDirect() {
 
     if (logInfo) logInfo('Frappe', `Fetching projects directly for user: ${userEmail}`);
 
-    const frappe = createFrappeClient();
+    const frappe = createFrappeClient(true);
 
     // Try method 1: Check if Project User doctype exists and has assignments
     try {
@@ -2265,7 +2265,7 @@ async function getFrappeServerTime() {
     throw new Error('User not logged in');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     if (logInfo) {
@@ -2329,7 +2329,7 @@ async function getTimesheetById(timesheetId) {
     throw new Error('Timesheet ID is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     if (logInfo) {
@@ -2383,7 +2383,7 @@ async function saveTimesheetWithSavedocs(timesheetDoc) {
     throw new Error('Timesheet document is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     if (logInfo) {
@@ -2586,7 +2586,7 @@ async function getUsersAssignedToProject(projectId) {
       logInfo('Frappe', `Fetching users assigned to project: ${projectId}`);
     }
 
-    const frappe = createFrappeClient();
+    const frappe = createFrappeClient(true);
     const assignedUsers = new Set();
 
     // Method 1: Get users from tasks assigned to this project
