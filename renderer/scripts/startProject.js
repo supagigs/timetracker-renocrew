@@ -9,10 +9,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const projectTitle = document.getElementById('projectTitle');
   const projectSubtitle = document.getElementById('projectSubtitle');
   const clockInInstruction = document.getElementById('clockInInstruction');
-  const FRAPPE_REQUEST_TIMEOUT_MS = 15000; // 15 seconds
+  const FRAPPE_REQUEST_TIMEOUT_MS = 30000; // 30 seconds for intelligent reconciliation
   const breakTimerContainer = document.getElementById('breakTimerContainer');
   const breakTimeDisplay = document.getElementById('breakTimeDisplay');
-
 
   // Get project info from storage
   let selectedProjectId = StorageService.getItem('selectedProjectId');
@@ -210,7 +209,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (runIdleAutoClockOutCheck()) return;
     if (runBreakAutoClockOutCheck()) return;
 
-    timeDisplay.textContent = formatTime(currentActiveTime);
+    timeDisplay.textContent = formatTime(currentActiveTime + currentIdleTime);
 
     // Show total accumulated break time
     if (isOnBreak || totalBreakDuration > 0) {
@@ -396,15 +395,26 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    // 1️⃣ Strict stop-before-start check
+    const storedIsActive = StorageService.getItem('isActive') === 'true';
+    if (storedIsActive) {
+      console.log('[TRACKER] Existing active session detected in storage. Cleaning up first...');
+      clockInBtn.textContent = 'Cleaning up (30s)...';
+
+      try {
+        // This will now enforce a 5-second cooldown internally
+        await clockOut({ auto: true, reason: 'project_switch', skipRedirect: true });
+        console.log('[TRACKER] Previous session closed successfully.');
+      } catch (err) {
+        console.warn('[TRACKER] Failed to close previous session via UI action, relying on server cleanup.', err);
+      }
+    }
+
     isTimerTransitioning = true;
     const originalLabel = clockInBtn.textContent;
     clockInBtn.disabled = true;
-    clockInBtn.textContent = 'Syncing...';
-    clockInBtn.textContent = 'Cleaning sessions...';
+    clockInBtn.textContent = 'Syncing (30s)...';
 
-    if (typeof NotificationService !== 'undefined') {
-      NotificationService.showInfo('Starting session, please wait...', 3000);
-    }
 
     try {
       // Reset power guards for new session
@@ -415,6 +425,7 @@ document.addEventListener('DOMContentLoaded', () => {
       StorageService.removeItem('frappeTimesheetId');
       StorageService.removeItem('frappeTimesheetRowId');
 
+
       const userEmail = StorageService.getItem('userEmail');
       const projectId = StorageService.getItem('selectedProjectId');
       let taskId = StorageService.getItem('selectedTaskId') || null;
@@ -424,6 +435,36 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!employeeData || !employeeData.frappeEmployeeId) {
         throw new Error('Employee record not found. Please ensure your user is linked to an employee in the system.');
       }
+
+      // ---- [PRE-FLIGHT SUPABASE CLEANUP] ----
+      // Bypasses Frappe 403 "get list" permission restrictions by manually finding all active sessions from Supabase
+      if (window.supabase) {
+        console.log('[CLEANUP-FRONTEND] Checking Supabase for any lingering open sessions before contacting Frappe...');
+        const { data: openSupa, error: supaErr } = await window.supabase
+          .from('time_sessions')
+          .select('frappe_timesheet_id')
+          .eq('user_email', userEmail)
+          .is('end_time', null);
+
+        if (!supaErr && openSupa && openSupa.length > 0) {
+          console.log(`[CLEANUP-FRONTEND] Found ${openSupa.length} open session(s) in Supabase. Forcing closure...`);
+          for (const s of openSupa) {
+            if (s.frappe_timesheet_id) {
+              try {
+                console.log(`[CLEANUP-FRONTEND] Pre-flight stopping ${s.frappe_timesheet_id}...`);
+                await window.frappe.stopTimesheetSession({ timesheet: s.frappe_timesheet_id });
+              } catch (err) {
+                console.error(`[CLEANUP-FRONTEND] Failed to auto-stop ${s.frappe_timesheet_id}:`, err);
+              }
+            }
+          }
+        } else if (!supaErr) {
+          console.log('[CLEANUP-FRONTEND] No open sessions found in Supabase. Proceeding to Frappe.');
+        } else {
+          console.error('[CLEANUP-FRONTEND] Supabase error during pre-flight check:', supaErr);
+        }
+      }
+      // ---------------------------------------
 
       let { timesheet } = await callWithTimeout(
         window.frappe.getOrCreateTimesheet({
@@ -494,6 +535,7 @@ document.addEventListener('DOMContentLoaded', () => {
         timesheet = rowResult.timesheet;
       }
 
+
       // Start session in Frappe ONLY if it is not already running
       if (!rowResult.isAlreadyRunning) {
         await callWithTimeout(
@@ -503,6 +545,11 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         console.log('[TRACKER] Recovered an already running session from Frappe. Skipping start endpoint.');
       }
+
+      console.log(`[TRACKER] Session Started:`);
+      console.log(` - Timesheet: ${timesheet}`);
+      console.log(` - Row: ${row}`);
+      console.log(` - Project: ${projectId}`);
 
       const session = {
         frappeTimesheetId: timesheet,
@@ -579,10 +626,10 @@ document.addEventListener('DOMContentLoaded', () => {
       sessionDbUpdateInterval = setInterval(updateTimeTrackerSessionInDb, 30000); // Update DB every 30s
       updateTimer();
       startScreenshotCapture();
-
     } catch (error) {
       console.error('Error starting timer:', error);
       clockInBtn.disabled = false;
+
       clockInBtn.textContent = originalLabel || 'Clock In';
 
       const msg = error?.message || 'Failed to start timer';
@@ -611,7 +658,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // NEW: Update UI immediately to prevent multiple clicks and show status
     const originalBtnText = clockInBtn.textContent;
     clockInBtn.disabled = true;
-    clockInBtn.textContent = 'Syncing...';
+    clockInBtn.textContent = 'Syncing (30s)...';
     if (takeBreakBtn) takeBreakBtn.disabled = true;
 
     const wasActive = isActive;
@@ -661,6 +708,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const totalSessionDurationSeconds =
         finalActiveDuration + finalBreakDuration + finalIdleTime;
 
+      console.log(`[TRACKER] Clocking out. Session Summary:`);
+      console.log(` - Total Active: ${finalActiveDuration}s`);
+      console.log(` - Total Break: ${finalBreakDuration}s`);
+      console.log(` - Total Idle: ${finalIdleTime}s`);
+      console.log(` - Total Duration: ${totalSessionDurationSeconds}s`);
+      console.log(` - Reason: ${reason || 'manual'}`);
+
       await saveSession(
         totalSessionDurationSeconds,
         finalBreakDuration,
@@ -674,8 +728,13 @@ document.addEventListener('DOMContentLoaded', () => {
         NotificationService.removeExistingNotifications('info');
       }
 
+      console.log(`[TRACKER] Session successfully saved to Frappe and Supabase.`);
+
       // Session saved. Applying a short server sync buffer to ensure all IPC calls complete
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const cooldownMs = skipRedirect ? 10000 : 1000; // 10s cooldown for project switch/atomic cleaning
+      console.log(`[TRACKER] Session saved. Waiting ${cooldownMs / 1000}s for server synchronization...`);
+      await new Promise(resolve => setTimeout(resolve, cooldownMs));
+
 
       // ✅ ONLY NOW mark as stopped
       isActive = false;
@@ -718,12 +777,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       // Only navigate if we aren't skipping project switch
-      if (!skipRedirect && reason !== 'project_switch') {
+      if (!skipRedirect) {
         window.location.href = 'projects.html';
       }
 
-      // Navigate to projects screen after any clock out (manual or auto)
-      window.location.href = 'projects.html';
 
     } catch (error) {
       console.error('Clock out failed — restoring state:', error);

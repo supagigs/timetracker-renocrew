@@ -57,6 +57,9 @@ contextBridge.exposeInMainWorld('frappe', {
   startTimesheetSession: (payload) =>
     ipcRenderer.invoke('frappe:start-timesheet-session', payload),
 
+  stopTimesheetSession: (payload) =>
+    ipcRenderer.invoke('frappe:stop-timesheet-session', payload),
+
   updateTimesheetRow: (payload) =>
     ipcRenderer.invoke('frappe:update-timesheet-row', payload),
 
