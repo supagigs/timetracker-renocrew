@@ -81,10 +81,7 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
         detectSessionInUrl: false
       },
       global: {
-        headers: { 
-          'x-my-custom-header': 'my-app-name',
-          'ngrok-skip-browser-warning': 'true'
-        },
+        headers: { 'x-my-custom-header': 'my-app-name' },
       },
     });
     console.log('Supabase client initialized successfully');

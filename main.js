@@ -272,7 +272,6 @@ const {
   addTimeLogToTimesheet,
   getOrCreateTimesheet,
   startTimesheetSession,
-  stopTimesheetSession,
   updateTimesheetRow,
   getTimesheetById,
   saveTimesheetWithSavedocs,
@@ -4106,23 +4105,6 @@ ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
     }
 
     // console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-    throw error;
-  }
-});
-
-ipcMain.handle('frappe:stop-timesheet-session', async (_e, payload) => {
-  const startTime = Date.now();
-  console.log('[IPC] frappe:stop-timesheet-session called at', new Date().toISOString());
-
-  try {
-    const result = await callWithTimeout(stopTimesheetSession(payload));
-    const duration = Date.now() - startTime;
-    console.log('[IPC] frappe:stop-timesheet-session SUCCESS in', duration, 'ms');
-    return result;
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    console.error('[IPC] frappe:stop-timesheet-session FAILED after', duration, 'ms');
-    console.error('[IPC] Error message:', error?.message);
     throw error;
   }
 });

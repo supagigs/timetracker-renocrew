@@ -57,9 +57,6 @@ contextBridge.exposeInMainWorld('frappe', {
   startTimesheetSession: (payload) =>
     ipcRenderer.invoke('frappe:start-timesheet-session', payload),
 
-  stopTimesheetSession: (payload) =>
-    ipcRenderer.invoke('frappe:stop-timesheet-session', payload),
-
   updateTimesheetRow: (payload) =>
     ipcRenderer.invoke('frappe:update-timesheet-row', payload),
 
@@ -228,9 +225,6 @@ contextBridge.exposeInMainWorld('ipc', {
   }
 });
 
-contextBridge.exposeInMainWorld('electronAPI', {
-  getAppVersion: () => ipcRenderer.invoke('get-app-version')
-});
 // Listen for main process console logs and forward them to renderer console
 // This allows main process console.log to appear in DevTools (Ctrl+Shift+I)
 ipcRenderer.on('main-console-log', (_event, argsArray) => {
