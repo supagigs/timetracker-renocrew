@@ -1224,7 +1224,7 @@ function createWindow() {
 
   // Stop timer and clock out when lid is closed (lock-screen) or system suspends.
   // Use powerSaveBlocker to delay suspend so the renderer has time to save the session.
-  const LID_CLOSE_CLOCKOUT_TIMEOUT_MS = 15000;
+  const LID_CLOSE_CLOCKOUT_TIMEOUT_MS = 30000;
   let lidCloseBlockerId = null;
   let lidCloseBlockerTimeout = null;
 
