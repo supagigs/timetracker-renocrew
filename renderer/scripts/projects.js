@@ -139,16 +139,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         allProjects.map(async (project) => {
           try {
             // Get time sessions for this project
-            const { data: sessions, error } = await window.supabase
-              .from('time_sessions')
-              .select('active_duration, break_duration, idle_duration, total_duration, session_date, start_time')
-              .eq('frappe_project_id', project.id)
-              .eq('user_email', userEmail);
+            // const { data: sessions, error } = await window.supabase
+            //   .from('time_sessions')
+            //   .select('active_duration, break_duration, idle_duration, total_duration, session_date, start_time')
+            //   .eq('frappe_project_id', project.id)
+            //   .eq('user_email', userEmail);
 
-            if (error) {
-              console.error('Error fetching sessions for project:', project.id, error);
-              return { ...project, totalTime: 0, lastWorked: null, lastWorkedDaySeconds: 0, todaySeconds: 0 };
-            }
+            // if (error) {
+            //   console.error('Error fetching sessions for project:', project.id, error);
+            //   return { ...project, totalTime: 0, lastWorked: null, lastWorkedDaySeconds: 0, todaySeconds: 0 };
+            // }
+
+            // If you commented out the supabase call, add this line:
+            const sessions = []; // new for now, will be replaced with the supabase call
 
             const {
               totalTime,

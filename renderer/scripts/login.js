@@ -521,6 +521,7 @@ if (!ValidationService.validateEmail(email)) {
 
       // Store role_profile_name directly from Frappe (not converted)
       // Supabase profile sync is temporarily disabled due to connectivity issues.
+      /*
       if (window.supabase) {
         // Look up existing user by email (case-insensitive: do not create duplicate if same email exists in different case)
         const { data: existingUser, error } = await SupabaseService.handleRequest(() =>
@@ -609,6 +610,7 @@ if (!ValidationService.validateEmail(email)) {
           StorageService.setItem('displayName', displayName);
         }
       }
+      */
     } catch (profileError) {
       console.error('Error syncing display name with Supabase:', profileError);
       // Non-fatal – we still fallback to local storage check below
