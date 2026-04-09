@@ -1101,7 +1101,7 @@ async function stopAllRunningRowsForUser(userEmail) {
 
   try {
     if (logInfo) logInfo('Frappe', `[CLEANUP] Searching for all active sessions for employee: ${employeeId}`);
-    
+
     // 1. Get all draft timesheets for this employee
     // We handle potential 403 errors here specifically
     let timesheetsRes;
@@ -1136,7 +1136,7 @@ async function stopAllRunningRowsForUser(userEmail) {
       try {
         const tsDetail = await frappe.get(`/api/resource/Timesheet/${ts.name}`);
         const logs = tsDetail.data?.data?.time_logs || [];
-        
+
         const activeLogs = logs.filter(row => row.from_time && !row.to_time);
         if (activeLogs.length > 0 && logInfo) {
           logInfo('Frappe', `[CLEANUP] Timesheet ${ts.name} has ${activeLogs.length} active row(s). Stopping them now...`);
@@ -1163,7 +1163,7 @@ async function stopAllRunningRowsForUser(userEmail) {
     if (runningRows.length > 0) {
       if (logInfo) logInfo('Frappe', `[CLEANUP] SUCCESS: Force-stopped ${runningRows.length} active session(s) across ${draftCount} timesheets.`);
     } else if (logInfo) {
-       logInfo('Frappe', `[CLEANUP] Clean: No active sessions found.`);
+      logInfo('Frappe', `[CLEANUP] Clean: No active sessions found.`);
     }
 
     return runningRows;
@@ -1191,7 +1191,7 @@ async function resolveRowForStart({ timesheet, project, task, userEmail }) {
   try {
     if (logInfo) logInfo('Frappe', `[RESOLVE-ROW] Creating new row in target timesheet ${timesheet}...`);
     const { insertedRow, atomicStoppedRows } = await createNewRowInTimesheet(timesheet, project, task, userEmail);
-    
+
     // Merge results to ensure Supabase is updated for both global and local cleanups
     const allStoppedRows = [...globalStoppedRows];
     if (atomicStoppedRows && atomicStoppedRows.length > 0) {
@@ -1254,32 +1254,12 @@ async function startTimesheetSession({ timesheet, row }) {
  */
 async function stopTimesheetSession({ timesheet, row, endTime }) {
   const tsDetail = await getTimesheetById(timesheet);
-  let activeRow;
-  if (row) {
-    activeRow = tsDetail.time_logs?.find(r => r.name === row);
-  } else {
-    activeRow = tsDetail.time_logs?.find(r => r.from_time && !r.to_time);
-    if (activeRow) {
-      row = activeRow.name;
-    }
-  }
-  if (!activeRow) throw new Error(`Active running row not found for timesheet ${timesheet}`);
-  // Check if already stopped to avoid duplicate updates
-  if (activeRow.to_time) {
-    if (logInfo) logInfo('Frappe', `[STOP-SESSION] Row ${row} is already stopped. Returning existing data.`);
-    return {
-      timesheetId: timesheet,
-      rowId: row,
-      hours: activeRow.hours,
-      fromTime: activeRow.from_time,
-      toTime: activeRow.to_time,
-      elapsedSeconds: Math.floor((new Date(activeRow.to_time) - new Date(activeRow.from_time)) / 1000)
-    };
-  }
+  const activeRow = tsDetail.time_logs?.find(r => r.name === row);
+  if (!activeRow) throw new Error('Row not found');
 
   const serverNow = endTime ? endTime : await getFrappeServerTime();
   activeRow.to_time = serverNow;
-  
+
   const fromTime = new Date(activeRow.from_time).getTime();
   const toTime = new Date(serverNow).getTime();
   let computedHours = 0;
@@ -1296,9 +1276,9 @@ async function stopTimesheetSession({ timesheet, row, endTime }) {
   const tryUpdate = async (methodName) => {
     try {
       if (methodName === 'PUT') {
-         await frappe.put(`/api/resource/Timesheet/${timesheet}`, { time_logs: tsDetail.time_logs });
+        await frappe.put(`/api/resource/Timesheet/${timesheet}`, { time_logs: tsDetail.time_logs });
       } else {
-         await saveTimesheetWithSavedocs(tsDetail);
+        await saveTimesheetWithSavedocs(tsDetail);
       }
       return true;
     } catch (err) {
@@ -1306,14 +1286,14 @@ async function stopTimesheetSession({ timesheet, row, endTime }) {
       const errorMsg = err.response?.data?.exception || err.response?.data?.message || err.message || '';
       if (errorMsg.includes('OverlapError')) {
         if (logWarn) logWarn('Frappe', `[STOP-SESSION] OverlapError detected during ${methodName} for ${timesheet}. Resolving deadlock...`);
-        
+
         // 1. Identify the overlapping timesheet ID
         const match = errorMsg.match(/TS-\d{4}-\d+/g);
         const otherTsId = match ? match.find(id => id !== timesheet) : null;
-        
+
         if (otherTsId) {
           if (logInfo) logInfo('Frappe', `[STOP-SESSION] Conflict detected with ${otherTsId}. Fetching exact logs for reconciliation.`);
-          
+
           let earliestConflictTime = null;
 
           // 2. Fetch start time from conflicting Frappe timesheet
@@ -1352,7 +1332,7 @@ async function stopTimesheetSession({ timesheet, row, endTime }) {
               }
               if (logInfo) logInfo('Frappe', ` - Supabase conflict lookup took ${Date.now() - sStart}ms`);
             } catch (supaErr) {
-               if (logError) logError('Frappe', ` - Failed to fetch fallback logs from Supabase: ${supaErr.message}`);
+              if (logError) logError('Frappe', ` - Failed to fetch fallback logs from Supabase: ${supaErr.message}`);
             }
           }
 
@@ -1361,10 +1341,10 @@ async function stopTimesheetSession({ timesheet, row, endTime }) {
             // 4. Adjust and Retry: Set to_time to 1 second before conflict
             const adjustedToTime = new Date(earliestConflictTime.getTime() - 1000);
             const frappeFormatted = adjustedToTime.toISOString().slice(0, 19).replace('T', ' ');
-            
+
             if (logWarn) logWarn('Frappe', `[STOP-SESSION] ADJUSTING: Setting ${row} end time to ${frappeFormatted} to break overlap deadlock.`);
             console.log(`[STOP-SESSION-MAIN] ADJUSTING: Setting ${row} end time to ${frappeFormatted} to break overlap deadlock.`);
-            
+
             activeRow.to_time = frappeFormatted;
             const fromTimeMs = new Date(activeRow.from_time).getTime();
             const toTimeMs = adjustedToTime.getTime();
@@ -1384,17 +1364,17 @@ async function stopTimesheetSession({ timesheet, row, endTime }) {
             // Otherwise, this timesheet is permanently deadlocked and cannot be closed or managed.
             if (logWarn) logWarn('Frappe', `[STOP-SESSION] Could not find timing for ${otherTsId}. Force-deleting overlapping row ${row} to allow Timesheet closure.`);
             console.warn(`[STOP-SESSION-MAIN] Force-deleting stuck row ${row} due to 417 Overlap deadlock.`);
-            
+
             // Remove the active row from the timesheet's time_logs
             tsDetail.time_logs = tsDetail.time_logs.filter(r => r.name !== row);
-            
+
             // Re-save without the row
             if (methodName === 'PUT') {
               await frappe.put(`/api/resource/Timesheet/${timesheet}`, { time_logs: tsDetail.time_logs });
             } else {
               await saveTimesheetWithSavedocs(tsDetail);
             }
-            
+
             if (logInfo) logInfo('Frappe', `[STOP-SESSION] Force-Delete successful. Timesheet ${timesheet} is now free.`);
             return true;
           }
@@ -1457,7 +1437,7 @@ async function createNewRowInTimesheet(timesheetId, project, task, userEmail) {
           logInfo('Frappe', ` - Previous Project: ${log.project}`);
           logInfo('Frappe', ` - Start Time: ${log.from_time}`);
         }
-        
+
         const fromTime = new Date(log.from_time).getTime();
         const toTime = new Date(serverNow).getTime();
         let computedHours = 0;
@@ -1485,7 +1465,7 @@ async function createNewRowInTimesheet(timesheetId, project, task, userEmail) {
           doctype: 'Timesheet Detail'
         };
       }
-      
+
       // Return unchanged log but ensure normalized format
       return {
         name: log.name,

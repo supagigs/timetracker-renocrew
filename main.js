@@ -1369,7 +1369,7 @@ function createWindow() {
           })
         `);
 
-        const SAVE_ON_CLOSE_TIMEOUT_MS = 30000; // Increased to 30s for slow networks
+        const SAVE_ON_CLOSE_TIMEOUT_MS = 12000;
         const saveResult = await Promise.race([
           savePromise,
           new Promise((resolve) => setTimeout(() => resolve({ saved: false, error: 'Timeout' }), SAVE_ON_CLOSE_TIMEOUT_MS))
@@ -1384,25 +1384,12 @@ function createWindow() {
           // fallback: navigate to startProject to save (your existing behaviour)
           logInfo('WindowClose', 'Navigating to startProject to save session before close');
           const startProjectPath = path.join(__dirname, 'renderer', 'screens', 'startProject.html');
-          const closeTimeout = setTimeout(async () => {
-             logWarn('WindowClose', 'Close-after-save timeout, showing failure dialog');
-             const retryResp = await dialog.showMessageBox(mainWindow, {
-               type: 'error',
-               title: 'Sync Failed',
-               message: 'Failed to sync with ERPNext within 30 seconds.',
-               detail: 'Your timesheet might still be running. What would you like to do?',
-               buttons: ['Try Again', 'Force Close'],
-               defaultId: 0,
-               cancelId: 1
-             });
-             if (retryResp.response === 1) {
-               isForceClosing = true;
-               mainWindow.close();
-             } else {
-               // User wants to try again - we just let the logic continue or re-trigger
-               // For now, we'll just return and let them click X again if they want
-             }
-          }, 35000);
+          const closeTimeout = setTimeout(() => {
+            logWarn('WindowClose', 'Close-after-save timeout, closing window');
+            isForceClosing = true;
+            mainWindow.close();
+            console.log("Window close attempted. Timer active:", isTimerActive)
+          }, 15000);
           ipcMain.once('session-saved-please-close', () => {
             clearTimeout(closeTimeout);
             logInfo('WindowClose', 'Renderer confirmed session saved, closing window');
@@ -1418,27 +1405,19 @@ function createWindow() {
           return;
         } else {
           logWarn('WindowClose', `Failed to save session: ${saveResult?.error || 'Unknown error'}`);
-          
-          const errorResp = await dialog.showMessageBox(mainWindow, {
-            type: 'error',
-            title: 'Sync Error',
-            message: `Failed to save session: ${saveResult?.error || 'Unknown error'}`,
-            detail: 'Do you want to try again or force close?',
-            buttons: ['Try Again', 'Force Close'],
-            defaultId: 0,
-            cancelId: 1
-          });
-
-          if (errorResp.response === 1) {
+          // if save failed or timed out, fall through to force-close after a short delay
+          setTimeout(() => {
             isForceClosing = true;
             mainWindow.close();
-          }
+          }, 500);
           return;
         }
       } catch (error) {
         logError('WindowClose', `Error saving session on window close: ${error.message}`);
-        isForceClosing = true;
-        mainWindow.close();
+        setTimeout(() => {
+          isForceClosing = true;
+          mainWindow.close();
+        }, 500);
         return;
       }
     }

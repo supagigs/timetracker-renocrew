@@ -653,14 +653,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // }
 
     clockOutInProgress = true;
-    isTimerTransitioning = true; // Use common flag to block other transitions
-
-    // NEW: Update UI immediately to prevent multiple clicks and show status
-    const originalBtnText = clockInBtn.textContent;
-    clockInBtn.disabled = true;
-    clockInBtn.textContent = 'Syncing (30s)...';
-    if (takeBreakBtn) takeBreakBtn.disabled = true;
-
+    isTimerTransitioning = true;
     const wasActive = isActive;
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
     const clockOutTime = new Date();
@@ -784,11 +777,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     } catch (error) {
       console.error('Clock out failed — restoring state:', error);
-
-      // Restore button state on failure so user can retry
-      clockInBtn.disabled = false;
-      clockInBtn.textContent = 'Clock Out';
-      if (takeBreakBtn) takeBreakBtn.disabled = false;
 
       // 🔁 ROLLBACK
       isActive = true;
