@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,27 +9,25 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../styles/common.css">
-  <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self';
-               connect-src 'self' 
-                           https://*.supabase.co 
-                           wss://*.supabase.co 
-                           https://cdn.jsdelivr.net 
-                           https://fonts.googleapis.com 
-                           https://fonts.gstatic.com 
-                           https://sauceless-aerobiological-sara.ngrok-free.dev 
-                           https://*.ngrok-free.dev;
-               script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-               style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-               font-src 'self' https://fonts.gstatic.com;
-               img-src 'self' data: blob:;
-               media-src 'self' data: blob:;">
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self'; 
+    connect-src 'self' 
+                http://127.0.0.1:* http://localhost:* https://*.supabase.co 
+                wss://*.supabase.co 
+                https://*.ngrok-free.dev
+                https://cdn.jsdelivr.net; 
+    script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; 
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; 
+    font-src 'self' https://fonts.gstatic.com; 
+    img-src 'self' data: blob: https://*.supabase.co;
+">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="../scripts/supabaseClient.js"></script>
   <script src="../scripts/utils.js"></script>
   <script src="../scripts/sessionSync.js"></script>
   <script src="../scripts/projects.js" defer></script>
 </head>
+
 <body class="projects-page-body">
   <div class="projects-main-container">
     <header class="common-page-header projects-header-bar">
@@ -38,20 +37,28 @@
         </div>
         <div class="projects-search-base">
           <div class="projects-search-icon-wrap">
-            <svg class="projects-search-icon" xmlns="http://www.w3.org/2000/svg" width="17" height="18" viewBox="0 0 17 18" fill="none">
-              <circle cx="7.41667" cy="7.41667" r="6.66667" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M12 12.3816L16.1667 16.5483" stroke="#334155" style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <svg class="projects-search-icon" xmlns="http://www.w3.org/2000/svg" width="17" height="18"
+              viewBox="0 0 17 18" fill="none">
+              <circle cx="7.41667" cy="7.41667" r="6.66667" stroke="#334155"
+                style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M12 12.3816L16.1667 16.5483" stroke="#334155"
+                style="stroke:#334155;stroke:color(display-p3 0.2000 0.2549 0.3333);stroke-opacity:1;"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </div>
           <input type="text" id="searchInput" class="projects-search-input" placeholder="Search">
         </div>
         <div class="projects-menu-container" id="projectsMenuContainer">
-          <button type="button" class="projects-menu-trigger" id="projectsMenuTrigger" aria-haspopup="true" aria-expanded="false" aria-label="Menu">
+          <button type="button" class="projects-menu-trigger" id="projectsMenuTrigger" aria-haspopup="true"
+            aria-expanded="false" aria-label="Menu">
             <img src="../../assets/menu.svg" alt="" class="projects-menu-icon" width="20" height="20">
           </button>
           <div class="projects-menu-dropdown" id="projectsMenuDropdown" role="menu" hidden>
-            <button type="button" class="projects-menu-item projects-menu-item--apply" id="projectsMenuApplyLeave" role="menuitem">Apply Leave</button>
-            <button type="button" class="projects-menu-item projects-menu-item--logout" id="projectsMenuLogout" role="menuitem">Logout</button>
+            <button type="button" class="projects-menu-item projects-menu-item--apply" id="projectsMenuApplyLeave"
+              role="menuitem">Apply Leave</button>
+            <button type="button" class="projects-menu-item projects-menu-item--logout" id="projectsMenuLogout"
+              role="menuitem">Logout</button>
           </div>
         </div>
       </div>
@@ -68,11 +75,12 @@
       </div>
 
 
-    <footer class="projects-footer">
-    <button id="viewReportsBtn" class="projects-view-reports-btn">View Reports</button>
-    <span class="projects-help-text">Need Help?</span> 
-    </footer>
+      <footer class="projects-footer">
+        <button id="viewReportsBtn" class="projects-view-reports-btn">View Reports</button>
+        <span class="projects-help-text">Need Help?</span>
+      </footer>
     </div>
   </div>
 </body>
+
 </html>

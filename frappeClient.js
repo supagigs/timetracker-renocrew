@@ -47,6 +47,11 @@ function createFrappeClient(useApiKey = false) {
     instance.interceptors.response.use(
       (response) => response,
       (error) => {
+        if (error.response?.status === 417) {
+          console.error('!!! 417 ERROR DETECTED !!!');
+          console.error('URL:', error.config.url);
+          console.error('Check if this row is already active in ERPNext.');
+        }
         console.log('[Frappe] Status:', error.response?.status);
         console.log('[Frappe] Data:', error.response?.data);
         return Promise.reject(error);
