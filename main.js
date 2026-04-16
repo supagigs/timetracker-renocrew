@@ -4577,6 +4577,28 @@ ipcMain.handle('stop-background-screenshots', async () => {
   return true;
 });
 
+ipcMain.handle('capture-background-screenshot-now', async () => {
+  try {
+    if (!currentUserEmail || !currentSessionId) {
+      logWarn('IPC', 'Skipping manual background screenshot: missing session context');
+      return { ok: false, skipped: true, reason: 'missing_session_context' };
+    }
+    if (isBackgroundTickRunning) {
+      logWarn('IPC', 'Skipping manual background screenshot: capture already in progress');
+      return { ok: false, skipped: true, reason: 'capture_in_progress' };
+    }
+
+    isBackgroundTickRunning = true;
+    await backgroundCaptureScreenshots();
+    return { ok: true };
+  } catch (error) {
+    logError('IPC', 'Manual background screenshot capture failed:', error);
+    return { ok: false, error: error?.message || 'unknown_error' };
+  } finally {
+    isBackgroundTickRunning = false;
+  }
+});
+
 ipcMain.handle('update-background-screenshot-session-id', async (event, supabaseSessionId) => {
   // Update the numeric Supabase session ID for background screenshots
   // This is called after the session is created in the database
