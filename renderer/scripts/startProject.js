@@ -72,7 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let idle2hClockOutTriggered = false;
   let break2mClockOutTriggered = false;
   let lockSuspendClockOutTriggered = false;
-  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 1800; // currently 5 minutes change it to "1800" for30 mins — auto clock out while continuously idle
+  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 1800; //  30 mins — auto clock out while continuously idle
   const BREAK_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours — auto clock out when continuously on break
 
   // Initialize idle tracker
@@ -114,7 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (idleDuration >= IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS && isActive && !isOnBreak) {
           console.log(`Auto clocking out: ${idleDuration}s idle (>= ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold)`);
-          clockOut({ auto: true, reason: 'idle_2m' }).catch(err => {
+          clockOut({ auto: true, reason: 'idle_30m' }).catch(err => {
             console.error('Failed to auto clock out after idle:', err);
           });
           return;
@@ -151,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
       timerInterval = null;
     }
     //console.log(`Auto clocking out: ${currentIdleDuration}s (${(currentIdleDuration / 60).toFixed(1)}m) continuous idle — ending session now`);
-    clockOut({ auto: true, reason: 'idle_2m' }).catch(err => {
+    clockOut({ auto: true, reason: 'idle_30m' }).catch(err => {
       console.error('Failed to auto clock out:', err);
     });
     return true;
@@ -178,7 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
       sessionDbUpdateInterval = null;
     }
     //console.log(`Auto clocking out: ${currentBreakDuration}s (${(currentBreakDuration / 60).toFixed(1)}m) continuous break — ending session now`);
-    clockOut({ auto: true, reason: 'break_2m' }).catch(err => {
+    clockOut({ auto: true, reason: 'break_2h' }).catch(err => {
       console.error('Failed to auto clock out after break:', err);
     });
     return true;
@@ -636,7 +636,16 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Stop screenshots IMMEDIATELY
+    // Capture one final screenshot at clock-out, then stop background capture.
+    if (window.electronAPI && typeof window.electronAPI.captureBackgroundScreenshotNow === 'function') {
+      try {
+        await window.electronAPI.captureBackgroundScreenshotNow();
+      } catch (captureErr) {
+        console.warn('Final clock-out screenshot capture failed:', captureErr);
+      }
+    }
+
+    // Stop screenshots after final clock-out capture attempt
     stopScreenshotCapture();
     if (typeof NotificationService !== 'undefined' && !auto) {
       NotificationService.showInfo('Syncing session with server...', 0);
@@ -667,7 +676,8 @@ document.addEventListener('DOMContentLoaded', () => {
         finalBreakDuration,
         finalActiveDuration,
         finalIdleTime,
-        breakCount
+        breakCount,
+        reason
       );
 
       // Clear any "Syncing" notifications
@@ -752,7 +762,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   // Save session to database
-  async function saveSession(totalDuration, breakDuration, activeDuration, idleDuration = 0, breakCountVal = 0) {
+  async function saveSession(
+    totalDuration,
+    breakDuration,
+    activeDuration,
+    idleDuration = 0,
+    breakCountVal = 0,
+    clockOutReason = null
+  ) {
     const email = StorageService.getItem('userEmail');
     const today = new Date().toISOString().split('T')[0];
 
@@ -845,7 +862,8 @@ document.addEventListener('DOMContentLoaded', () => {
           active_duration: activeDuration,
           idle_duration: idleDuration,
           break_count: breakCountVal,
-          total_duration: totalDuration
+          total_duration: totalDuration,
+          clock_out_reason: clockOutReason || 'manual'
         };
 
         if (company) {
@@ -1257,6 +1275,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (ts == null || typeof ts !== 'number') return;
       if (Date.now() - ts > RESUME_WINDOW_MS) return;
       if (lockSuspendClockOutTriggered || !sessionStartTime || !isActive) return;
+      if (sessionStartTime instanceof Date && !Number.isNaN(sessionStartTime.getTime()) && sessionStartTime.getTime() >= ts) return;
 
       lockSuspendClockOutTriggered = true;
       //console.log('[PowerEvents] Renderer startProject: clocking out on visibility/focus after recent system resume');
