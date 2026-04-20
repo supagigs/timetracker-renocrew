@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('auth', {
 contextBridge.exposeInMainWorld('frappe', {
   resolveRowForStart: (data) =>
     ipcRenderer.invoke('frappe:resolve-row-for-start', data),
-  
+
   getUserProjects: () =>
     ipcRenderer.invoke('frappe:get-user-projects'),
 
@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('start-background-screenshots', userEmail, sessionId, supabaseSessionId, frappeProjectId, frappeTaskId),
   updateBackgroundScreenshotSessionId: (supabaseSessionId) =>
     ipcRenderer.invoke('update-background-screenshot-session-id', supabaseSessionId),
+  captureBackgroundScreenshotNow: () =>
+    ipcRenderer.invoke('capture-background-screenshot-now'),
   stopBackgroundScreenshots: () =>
     ipcRenderer.invoke('stop-background-screenshots'),
   isBackgroundScreenshotsActive: () =>
@@ -228,8 +230,8 @@ ipcRenderer.on('main-console-log', (_event, argsArray) => {
   // argsArray is an array of arguments sent from main process
   // Spread them to console.log so they appear in DevTools
   if (Array.isArray(argsArray)) {
-    console.log(...argsArray);
+    //console.log(...argsArray);
   } else {
-    console.log(argsArray);
+    //console.log(argsArray);
   }
 });

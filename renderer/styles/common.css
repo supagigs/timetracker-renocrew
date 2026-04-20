@@ -2935,6 +2935,7 @@ label {
 .start-project-time-display {
   align-self: stretch;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 8px 0;

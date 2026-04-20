@@ -1,8 +1,27 @@
 require('dotenv').config();
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, powerSaveBlocker, Notification, screen, dialog, shell, systemPreferences, session } = require('electron');
-const {autoUpdater} = require('electron-updater');
+const path = require('path');
+const fs = require('fs');
 
 const log1 = require('electron-log');
+
+// Load environment variables as soon as app is ready to check its packaged status
+const envPath = app.isPackaged
+  ? path.join(process.resourcesPath, '.env')
+  : path.join(__dirname, '.env');
+
+// CRITICAL: Use override: true to ensure the .env file values are actually used!
+// Without this, if you have system-wide environment variables, the app will ignore your .env
+const result = require('dotenv').config({ path: envPath, override: true });
+
+if (result.error) {
+  log1.error(`[App] Failed to load .env from ${envPath}: ${result.error.message}`);
+} else {
+  log1.info(`[App] Loaded environment from: ${envPath}`);
+  log1.info(`[App] Verified FRAPPE_URL: ${process.env.FRAPPE_URL}`);
+}
+
+const { autoUpdater } = require('electron-updater');
 
 if (!app.requestSingleInstanceLock()) app.quit();
 
@@ -77,7 +96,7 @@ async function backgroundCaptureScreenshots() {
   try {
     logInfo('BG-UPLOAD', '===========================================================');
     logInfo('BG-UPLOAD', 'Starting background screenshot capture');
-    
+
     const allDisplays = screen.getAllDisplays();
     if (!allDisplays || allDisplays.length === 0) {
       logWarn('BG-UPLOAD', 'No displays detected for background capture');
@@ -105,7 +124,7 @@ async function backgroundCaptureScreenshots() {
         thumbnailSize: { width: maxDimension, height: maxDimension }
       });
       const captureDuration = Date.now() - captureStartTime;
-      logInfo('BG-UPLOAD', `desktopCapturer.getSources() completed in ${captureDuration}ms, returned ${sources?.length || 0} source(s)`);
+      //logInfo('BG-UPLOAD', `desktopCapturer.getSources() completed in ${captureDuration}ms, returned ${sources?.length || 0} source(s)`);
     } catch (e) {
       logError('BG-UPLOAD', 'desktopCapturer.getSources failed:', e);
       return;
@@ -136,7 +155,7 @@ async function backgroundCaptureScreenshots() {
         nameKey,
       });
     });
-    
+
     logInfo('BG-UPLOAD', `Created display lookup map with ${displayLookup.size} entries`);
 
     const resolveSourceScreenMeta = (source, fallbackIndex) => {
@@ -150,7 +169,7 @@ async function backgroundCaptureScreenshots() {
       const sourceDisplayId =
         (typeof source?.display_id === 'string' && source.display_id) ||
         (typeof source?.id === 'string' && source.id.includes(':') ? source.id.split(':')[1] : null);
-      
+
       if (sourceDisplayId && displayLookup.has(sourceDisplayId)) {
         const { index, name } = displayLookup.get(sourceDisplayId);
         displayId = sourceDisplayId;
@@ -196,10 +215,10 @@ async function backgroundCaptureScreenshots() {
 
     const uploadPromises = sources.map(async (source, index) => {
       const screenIndex = index + 1;
-    
+
       try {
         const dataUrl = source.thumbnail.toDataURL();
-    
+
         // Resolve display info
         const displays = screen.getAllDisplays();
         const display = displays[index];
@@ -207,10 +226,10 @@ async function backgroundCaptureScreenshots() {
         const screenName = display
           ? `Display ${index + 1} (${display.bounds.width}x${display.bounds.height})`
           : `Screen ${screenIndex}`;
-    
-        // 🔥 IMPORTANT: resolve app name PER SCREEN
+
+        // IMPORTANT: resolve app name PER SCREEN
         let appNameForScreen = null;
-    
+
         // Windows / Linux → true per-display resolution
         if (process.platform !== 'darwin') {
           try {
@@ -219,19 +238,19 @@ async function backgroundCaptureScreenshots() {
             logWarn('BG-UPLOAD', `Per-display app detection failed for screen ${screenIndex}: ${e.message}`);
           }
         }
-    
+
         // macOS OR fallback → global foreground app
         if (!appNameForScreen) {
           appNameForScreen = await getActiveAppName();
         }
-    
+
         appNameForScreen ||= 'Unknown';
-    
+
         logInfo(
           'BG-UPLOAD',
           `Screen ${screenIndex}: resolved app = "${appNameForScreen}"`
         );
-    
+
         const uploadData = {
           userEmail: currentUserEmail,
           sessionId: currentSessionId,
@@ -247,11 +266,11 @@ async function backgroundCaptureScreenshots() {
           frappeProjectId: currentFrappeProjectId,
           frappeTaskId: currentFrappeTaskId
         };
-        
+
         logInfo('BG-UPLOAD', `Screen ${screenIndex}: frappe_project_id=${currentFrappeProjectId}, frappe_task_id=${currentFrappeTaskId}`);
-    
+
         return addScreenshotToBatch(uploadData);
-    
+
       } catch (err) {
         logError(
           'BG-UPLOAD',
@@ -261,7 +280,7 @@ async function backgroundCaptureScreenshots() {
         return null;
       }
     });
-    
+
     await Promise.allSettled(uploadPromises);
     logInfo('BG-UPLOAD', `Completed processing ${sources.length} screen(s)`);
     logInfo('BG-UPLOAD', '===========================================================');
@@ -271,10 +290,19 @@ async function backgroundCaptureScreenshots() {
   }
 }
 
-const { login: frappeLogin, logout: frappeLogout, getCurrentUser: frappeGetCurrentUser, getUserCompany: frappeGetUserCompany, getUserRoleProfile: frappeGetUserRoleProfile, getUserFullName: frappeGetUserFullName, setLoggers: setFrappeAuthLoggers } = require('./frappeAuth');
-const { 
-  getUserProjects: frappeGetUserProjects, 
-  setLoggers: setFrappeServiceLoggers, 
+const {
+  login: frappeLogin,
+  logout: frappeLogout,
+  getCurrentUser: frappeGetCurrentUser,
+  getUserCompany: frappeGetUserCompany,
+  getUserRoleProfile: frappeGetUserRoleProfile,
+  getUserFullName: frappeGetUserFullName,
+  setLoggers: setFrappeAuthLoggers
+} = require('./frappeAuth');
+
+const {
+  getUserProjects: frappeGetUserProjects,
+  setLoggers: setFrappeServiceLoggers,
   createTimesheet,
   getTimesheetForProject,
   addTimeLogToTimesheet,
@@ -284,25 +312,22 @@ const {
   getTimesheetById,
   saveTimesheetWithSavedocs,
   getFrappeServerTime,
-  getUsersAssignedToProject, 
-  resolveRowForStart
+  getUsersAssignedToProject,
+  resolveRowForStart,
+  getMyTasksForProject,
+  getEmployeeDetailsForUser
 } = require('./frappeService');
-const path = require('path');
-const fs = require('fs');
+
 const { execSync, exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
-const { getMyTasksForProject } = require('./frappeService');
 
 
 if (process.platform === 'win32') {
   app.setAppUserModelId("Renocrew Time Tracker");
 }
 
-const envPath = app?.isPackaged
-  ? path.join(process.resourcesPath, '.env')
-  : path.join(__dirname, '.env');
-require('dotenv').config({ path: envPath });
+// Environment variables loaded at top level
 
 // Validate Frappe configuration on startup
 if (!process.env.FRAPPE_URL) {
@@ -333,19 +358,19 @@ function markFirstLaunchCompleted() {
   try {
     const firstLaunchFlagPath = path.join(app.getPath('userData'), '.first-launch-completed');
     const userDataDir = app.getPath('userData');
-    
+
     // Ensure userData directory exists
     if (!fs.existsSync(userDataDir)) {
       fs.mkdirSync(userDataDir, { recursive: true });
     }
-    
+
     // Create the flag file
     fs.writeFileSync(firstLaunchFlagPath, JSON.stringify({
       completed: true,
       timestamp: new Date().toISOString(),
       appVersion: app.getVersion()
     }), 'utf8');
-    
+
     logInfo('FirstLaunch', 'First launch flag file created');
   } catch (error) {
     logWarn('FirstLaunch', `Failed to mark first launch as completed: ${error?.message || error}`);
@@ -367,7 +392,7 @@ function sendToRendererConsole(...args) {
     }
   });
   // Also log to main process console
-  console.log(...args);
+  // console.log(...args);
 }
 
 function log(level, context, message, ...args) {
@@ -375,7 +400,7 @@ function log(level, context, message, ...args) {
   const lvl = level.toUpperCase();
   const logMessage = `[${ts}] [${lvl}] [${context}] ${message}`;
   // Log to main process console
-  console.log(logMessage, ...args);
+  // console.log(logMessage, ...args);
   // Also send to renderer console (DevTools)
   sendToRendererConsole(logMessage, ...args);
 }
@@ -393,11 +418,11 @@ function checkMacOSAccessibilityPermission() {
   if (process.platform !== 'darwin') {
     return 'not_applicable';
   }
-  
+
   const bundleId = getMacOSBundleId();
   let finalStatus = 'unknown';
   let methodUsed = 'none';
-  
+
   try {
     // METHOD 1: Try to use node-mac-permissions if available (doesn't trigger prompts)
     try {
@@ -410,12 +435,12 @@ function checkMacOSAccessibilityPermission() {
       // Module not available, fall back to other methods
       logInfo('Permissions', 'node-mac-permissions not available, using fallback method');
     }
-    
+
     // Normalize any earlier value
     if (finalStatus === 'granted') {
       finalStatus = 'authorized';
     }
-    
+
     // METHOD 2: Electron API that queries accessibility trust without prompting
     if (finalStatus === 'unknown' && typeof systemPreferences.isTrustedAccessibilityClient === 'function') {
       const trusted = systemPreferences.isTrustedAccessibilityClient(false);
@@ -423,7 +448,7 @@ function checkMacOSAccessibilityPermission() {
       methodUsed = 'systemPreferences.isTrustedAccessibilityClient';
       logInfo('Permissions', `Accessibility permission (via systemPreferences): ${finalStatus}`);
     }
-    
+
     // METHOD 3: Try TCC database query (most reliable fallback)
     if (finalStatus === 'unknown' && bundleId) {
       try {
@@ -437,14 +462,14 @@ function checkMacOSAccessibilityPermission() {
         logWarn('Permissions', `TCC database check failed: ${error?.message || error}`);
       }
     }
-    
+
     // METHOD 4: Fallback - Use a silent check that doesn't trigger permission prompts
     // We check if we can query System Events without actually triggering a prompt
     if (finalStatus === 'unknown') {
       try {
         // This command checks permission status without triggering a new prompt
         // It will only work if permission is already granted
-        execSync('osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true" 2>&1', { 
+        execSync('osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true" 2>&1', {
           encoding: 'utf8',
           timeout: 1000,
           stdio: 'pipe'
@@ -455,9 +480,9 @@ function checkMacOSAccessibilityPermission() {
       } catch (e) {
         const errorMsg = String(e.message || e.stdout || e.stderr || '');
         // Check if error is due to permission denial
-        if (errorMsg.includes('not allowed assistive') || 
-            errorMsg.includes('(-1719)') || 
-            errorMsg.includes('accessibility')) {
+        if (errorMsg.includes('not allowed assistive') ||
+          errorMsg.includes('(-1719)') ||
+          errorMsg.includes('accessibility')) {
           finalStatus = 'denied';
           methodUsed = 'AppleScript-test';
           logInfo('Permissions', `Accessibility permission (via AppleScript test): denied`);
@@ -465,7 +490,7 @@ function checkMacOSAccessibilityPermission() {
         // If it's a different error, we can't determine status
       }
     }
-    
+
     logInfo('Permissions', `Accessibility permission final status: ${finalStatus} (method: ${methodUsed})`);
     return finalStatus;
   } catch (error) {
@@ -566,15 +591,15 @@ function checkTCCDatabasePermission(bundleId, service) {
     };
 
     const tccService = serviceMap[service] || service;
-    
+
     // Query TCC database for permission status
     // auth_value: 0 = denied, 2 = authorized, 1 = not determined
     const query = `SELECT auth_value FROM access WHERE service = '${tccService}' AND client = '${bundleId}';`;
     const command = `sqlite3 "${tccPath}" "${query}"`;
-    
+
     try {
-      const result = execSync(command, { 
-        encoding: 'utf8', 
+      const result = execSync(command, {
+        encoding: 'utf8',
         timeout: 2000,
         stdio: 'pipe'
       }).trim();
@@ -623,37 +648,37 @@ function checkMacOSScreenRecordingPermission() {
   if (process.platform !== 'darwin') {
     return 'not_applicable';
   }
-  
+
   // Return cached value if still valid
   const now = Date.now();
   if (cachedScreenRecordingPermission !== null && (now - permissionCheckTimestamp) < PERMISSION_CACHE_DURATION) {
     logInfo('Permissions', `Screen recording permission status (cached): ${cachedScreenRecordingPermission}`);
     return cachedScreenRecordingPermission;
   }
-  
+
   // Log context for debugging
   const bundleId = getMacOSBundleId();
   const appName = app.getName();
   const isPackaged = app.isPackaged;
-  
+
   logInfo('Permissions', `Checking screen recording permission...`);
   logInfo('Permissions', `  App Name: ${appName}`);
   logInfo('Permissions', `  Bundle ID: ${bundleId || 'unknown'}`);
   logInfo('Permissions', `  Is Packaged: ${isPackaged}`);
   // logInfo('Permissions', `  App Path: ${app.getAppPath()}`);
-  
+
   let finalStatus = 'unknown';
   let methodUsed = 'none';
-  
+
   // METHOD 1: Try node-mac-permissions first (most reliable, checks TCC database directly)
   // This is the recommended method per instructions
   try {
     const permissions = require('node-mac-permissions');
-    
+
     // Use getStatus method (equivalent to hasScreenRecordingPermission)
     const status = permissions.getStatus('screenCapture');
     logInfo('Permissions', `Screen recording permission check (via node-mac-permissions.getStatus): ${status}`);
-    
+
     // Map node-mac-permissions status to Electron's format
     // Returns: 'authorized', 'denied', 'not-determined', or 'restricted'
     if (status === 'authorized') {
@@ -679,7 +704,7 @@ function checkMacOSScreenRecordingPermission() {
     logInfo('Permissions', `node-mac-permissions not available: ${moduleError?.message || moduleError}`);
     logInfo('Permissions', 'Falling back to alternative permission check methods...');
   }
-  
+
   // METHOD 2: Try systemPreferences.getMediaAccessStatus (Electron's native method)
   // Only use this if node-mac-permissions didn't work
   if (finalStatus === 'unknown') {
@@ -688,7 +713,7 @@ function checkMacOSScreenRecordingPermission() {
       if (typeof systemPreferences.getMediaAccessStatus === 'function') {
         const status = systemPreferences.getMediaAccessStatus('screen');
         logInfo('Permissions', `Screen recording permission (via systemPreferences.getMediaAccessStatus): ${status}`);
-        
+
         if (status && status !== 'unknown') {
           // Normalize 'authorized' to 'granted' for consistency
           // Some Electron versions return 'authorized' instead of 'granted'
@@ -709,7 +734,7 @@ function checkMacOSScreenRecordingPermission() {
       logWarn('Permissions', `Error checking permission via systemPreferences: ${error?.message || error}`);
     }
   }
-  
+
   // METHOD 3: Try TCC database query (most reliable fallback - directly queries macOS permission database)
   // Only use this if previous methods didn't work or returned 'unknown'
   if (finalStatus === 'unknown' && bundleId) {
@@ -724,7 +749,7 @@ function checkMacOSScreenRecordingPermission() {
       logWarn('Permissions', `TCC database check failed: ${error?.message || error}`);
     }
   }
-  
+
   // Normalize any remaining 'authorized' status to 'granted' for consistency
   if (finalStatus === 'authorized') {
     finalStatus = 'granted';
@@ -752,7 +777,7 @@ function checkMacOSScreenRecordingPermission() {
     logWarn('Permissions', '7. If still not working, try:');
     logWarn('Permissions', `   Terminal: tccutil reset ScreenCapture ${bundleId || 'com.supagigs.timetracker'}`);
     logWarn('Permissions', '===========================================================');
-    
+
     if (!isPackaged) {
       logWarn('Permissions', '⚠️  WARNING: Running in DEV mode');
       logWarn('Permissions', '   Dev builds use different bundle ID than packaged apps');
@@ -761,11 +786,11 @@ function checkMacOSScreenRecordingPermission() {
   } else if (finalStatus === 'granted') {
     logInfo('Permissions', `✅ Screen recording permission is GRANTED (checked via ${methodUsed})`);
   }
-  
+
   // Cache the status
   cachedScreenRecordingPermission = finalStatus;
   permissionCheckTimestamp = now;
-  
+
   return finalStatus;
 }
 
@@ -781,17 +806,17 @@ async function triggerScreenRecordingPermissionPrompt() {
     // METHOD 1: Try using node-mac-permissions library (recommended method)
     try {
       const permissions = require('node-mac-permissions');
-      
+
       // Check current status first
       const currentStatus = permissions.getStatus('screenCapture');
       logInfo('Permissions', `Current screen recording permission status (before prompt): ${currentStatus}`);
-      
+
       // If already authorized, return success
       if (currentStatus === 'authorized') {
         logInfo('Permissions', 'Screen recording permission already authorized');
         return { triggered: false, granted: true, reason: 'already_authorized', status: currentStatus };
       }
-      
+
       // Request permission using node-mac-permissions
       // Note: node-mac-permissions doesn't have askForScreenRecordingPermission in v2.5.0
       // So we'll use desktopCapturer as fallback to trigger the system prompt
@@ -886,17 +911,17 @@ function getActiveAppNameViaAppleScript() {
       if (stderr) {
         logWarn('ActiveWindow', `AppleScript stderr: ${stderr}`);
       }
-      
+
       // Parse the result: "AppName|WindowTitle"
       const result = stdout.trim();
-      
+
       if (result && result.length > 0) {
         const parts = result.split('|');
         const appName = parts[0] ? parts[0].trim() : null;
         const windowTitle = parts[1] ? parts[1].trim() : null;
-        
+
         logInfo('ActiveWindow', `AppleScript Success - App: ${appName || 'null'}, Title: ${windowTitle || 'null'}`);
-        
+
         // Return an object similar to active-win format for consistency
         resolve({
           owner: { name: appName },
@@ -913,7 +938,7 @@ function getActiveAppNameViaAppleScript() {
 // Resolve the active window using @paymoapp/active-window (preferred on macOS) or active-win
 async function getActiveWindowDetails(preferPaymoFirst = false) {
   const providers = [];
-  
+
   // Prefer the Paymo fork on macOS because it better handles permission edge cases
   if (process.platform === 'darwin') {
     if (preferPaymoFirst) {
@@ -926,7 +951,7 @@ async function getActiveWindowDetails(preferPaymoFirst = false) {
   } else {
     providers.push('active-win');
   }
-  
+
   for (const provider of providers) {
     try {
       let fn = null;
@@ -936,19 +961,19 @@ async function getActiveWindowDetails(preferPaymoFirst = false) {
           logInfo('ActiveWindow', '@paymoapp/active-window loaded');
         }
         fn = (paymoActiveWindowModule && paymoActiveWindowModule.getActiveWindow) ||
-             (paymoActiveWindowModule && paymoActiveWindowModule.activeWindow) ||
-             (paymoActiveWindowModule && paymoActiveWindowModule.default) ||
-             paymoActiveWindowModule;
+          (paymoActiveWindowModule && paymoActiveWindowModule.activeWindow) ||
+          (paymoActiveWindowModule && paymoActiveWindowModule.default) ||
+          paymoActiveWindowModule;
       } else {
         if (!activeWindowModule) {
           activeWindowModule = await import('active-win');
           logInfo('ActiveWindow', 'active-win loaded');
         }
         fn = (activeWindowModule && activeWindowModule.activeWindow) ||
-             (activeWindowModule && activeWindowModule.default) ||
-             activeWindowModule;
+          (activeWindowModule && activeWindowModule.default) ||
+          activeWindowModule;
       }
-      
+
       if (typeof fn === 'function') {
         const result = await fn();
         if (result) {
@@ -962,7 +987,7 @@ async function getActiveWindowDetails(preferPaymoFirst = false) {
       logWarn('ActiveWindow', `${provider === 'paymo' ? '@paymoapp/active-window' : 'active-win'} failed: ${error.message}`);
     }
   }
-  
+
   return { result: null, provider: null };
 }
 
@@ -1029,7 +1054,7 @@ function scheduleBatchFlush() {
     }
     return;
   }
-  
+
   if (screenshotBatchQueue.length === 0) {
     return; // Nothing to flush
   }
@@ -1037,11 +1062,11 @@ function scheduleBatchFlush() {
   isFlushTimerActive = true;
   const queueSizeAtSchedule = screenshotBatchQueue.length;
   logInfo('BATCH-UPLOAD', `Scheduling flush timer (${SCREENSHOT_BATCH_FLUSH_INTERVAL}ms) for ${queueSizeAtSchedule} screenshot(s) in queue`);
-  
+
   batchFlushInterval = setTimeout(async () => {
     const queueSizeAtFlush = screenshotBatchQueue.length;
     logInfo('BATCH-UPLOAD', `Flush timer fired. Queue size: ${queueSizeAtFlush} (was ${queueSizeAtSchedule} when scheduled)`);
-    
+
     if (screenshotBatchQueue.length > 0 && !isBatchUploading) {
       logInfo(
         'BATCH-UPLOAD',
@@ -1073,30 +1098,30 @@ function createWindow() {
   // Set icon based on platform
   let iconPath = null;
   //does not block window creation
-  try{
-  if (process.platform === 'darwin') {
-    // macOS prefers .icns, but .png also works, .ico as last resort
-    const icnsPath = path.join(__dirname, 'assets', 'SupagigsIcon.icns');
-    const pngPath = path.join(__dirname, 'assets', 'android-chrome-512x512.png');
-    const icoPath = path.join(__dirname, 'assets', 'favicon.ico');
-    if (fs.existsSync(icnsPath)) {
-      iconPath = icnsPath;
-    } else if (fs.existsSync(pngPath)) {
-      iconPath = pngPath;
-    } else if (fs.existsSync(icoPath)) {
-      iconPath = icoPath; // Fallback to .ico on macOS
+  try {
+    if (process.platform === 'darwin') {
+      // macOS prefers .icns, but .png also works, .ico as last resort
+      const icnsPath = path.join(__dirname, 'assets', 'SupagigsIcon.icns');
+      const pngPath = path.join(__dirname, 'assets', 'android-chrome-512x512.png');
+      const icoPath = path.join(__dirname, 'assets', 'favicon.ico');
+      if (fs.existsSync(icnsPath)) {
+        iconPath = icnsPath;
+      } else if (fs.existsSync(pngPath)) {
+        iconPath = pngPath;
+      } else if (fs.existsSync(icoPath)) {
+        iconPath = icoPath; // Fallback to .ico on macOS
+      }
+    } else {
+      // Windows and Linux use .ico
+      const icoPath = path.join(__dirname, 'assets', 'favicon.ico');
+      if (fs.existsSync(icoPath)) {
+        iconPath = icoPath;
+      }
     }
-  } else {
-    // Windows and Linux use .ico
-    const icoPath = path.join(__dirname, 'assets', 'favicon.ico');
-    if (fs.existsSync(icoPath)) {
-      iconPath = icoPath;
-    }
+  } catch (e) {
+    logWarn('Window', 'Error Checking icon:', e);
   }
-} catch (e) {
-  logWarn('Window', 'Error Checking icon:', e);
-}
-  
+
   // Phone-sized window (typical 6-inch phone display)
   const PHONE_WIDTH = 360;
   const PHONE_HEIGHT = 640;
@@ -1119,13 +1144,13 @@ function createWindow() {
       zoomFactor: 1.0,         // <--- ADD THIS: Forces 100% zoom regardless of user screen scaling
       visualZoomLevelLimits: [1, 1] // <--- ADD THIS: Prevents manual zooming
     }
-};
-  
+  };
+
   // Only set icon if file exists
   if (iconPath) {
     windowOptions.icon = iconPath;
   }
-  
+
   mainWindow = new BrowserWindow(windowOptions);
   mainWindow.loadFile('renderer/screens/login.html');
   mainWindow.on('closed', () => { mainWindow = null; });
@@ -1139,11 +1164,11 @@ function createWindow() {
       mainWindow.show();
       mainWindow.focus();
       logInfo('Window', 'Window shown and focused - ready for permission requests');
-      
+
       // Small delay to ensure window is fully visible and not considered "headless"
       // macOS needs to see the app as a foreground GUI app, not a background service
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       // NOW handle macOS permissions AFTER window is visible
       if (process.platform === 'darwin') {
         try {
@@ -1161,7 +1186,7 @@ function createWindow() {
       }
     }
   });
-  
+
 
   const broadcastIdleState = (isIdle) => {
     try {
@@ -1201,25 +1226,33 @@ function createWindow() {
   const broadcastSystemResumed = () => {
     try {
       global.__lastSystemResumeAt = Date.now();
-      BrowserWindow.getAllWindows().forEach((win) => {
-        if (!win.isDestroyed() && win.webContents && !win.webContents.isDestroyed()) {
-          win.webContents.send('system-resumed', {});
-        }
-      });
-      logInfo('PowerMonitor', 'Broadcast system-resumed');
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send('system-resumed', {});
+        logInfo('PowerMonitor', 'Broadcast system-resumed');
+      }
     } catch (e) {
       logWarn('PowerMonitor', `Failed to broadcast system-resumed: ${e?.message || e}`);
     }
   };
+
+  const startBroadcastSystemResumed = () => {
+    const now = Date.now();
+    if (now - lastPowerEventTime < POWER_EVENT_COOLDOWN_MS) {
+      logInfo('PowerMonitor', 'Ignored system-resumed - too close to previous event.');
+      return;
+    }
+    lastPowerEventTime = now;
+    broadcastSystemResumed();
+  };
   try {
-    powerMonitor.on('resume', () => broadcastSystemResumed());
+    powerMonitor.on('resume', () => startBroadcastSystemResumed());
   } catch (e) {
     logWarn('PowerMonitor', 'Unable to register resume broadcast', e);
   }
   // Windows: lid open often triggers unlock-screen, not resume
   if (powerMonitor.listenerCount('unlock-screen') === 0) {
     try {
-      powerMonitor.on('unlock-screen', () => broadcastSystemResumed());
+      powerMonitor.on('unlock-screen', () => startBroadcastSystemResumed());
     } catch (e) {
       logWarn('PowerMonitor', 'Unable to register unlock-screen broadcast', e);
     }
@@ -1227,7 +1260,7 @@ function createWindow() {
 
   // Stop timer and clock out when lid is closed (lock-screen) or system suspends.
   // Use powerSaveBlocker to delay suspend so the renderer has time to save the session.
-  const LID_CLOSE_CLOCKOUT_TIMEOUT_MS = 15000;
+  const LID_CLOSE_CLOCKOUT_TIMEOUT_MS = 30000;
   let lidCloseBlockerId = null;
   let lidCloseBlockerTimeout = null;
 
@@ -1253,6 +1286,13 @@ function createWindow() {
   });
 
   const broadcastLockOrSuspendClockOut = (reason) => {
+    const now = Date.now();
+    if (now - lastPowerEventTime < POWER_EVENT_COOLDOWN_MS) {
+      logInfo('PowerMonitor', `Ignored lock/suspend broadcast (${reason}) - too close to previous event.`);
+      return;
+    }
+    lastPowerEventTime = now;
+
     try {
       const ts = new Date().toISOString();
       logInfo('PowerMonitor', `[PowerEvents] Main: lock-or-suspend broadcast initiated`, { timestamp: ts, reason });
@@ -1459,45 +1499,45 @@ async function showFirstLaunchPermissionsDialog() {
   if (process.platform !== 'darwin') {
     return; // Only show on macOS
   }
-  
+
   if (!isFirstLaunch()) {
     logInfo('FirstLaunch', 'Not first launch - skipping permissions dialog');
     return; // Not first launch, skip dialog
   }
-  
+
   if (!mainWindow || mainWindow.isDestroyed()) {
     logWarn('FirstLaunch', 'Main window not available - cannot show first launch dialog');
     return;
   }
-  
+
   logInfo('FirstLaunch', 'Showing first launch permissions dialog');
-  
+
   // Check current permission status
   const screenRecordingStatus = checkMacOSScreenRecordingPermission();
   const accessibilityStatus = await checkMacOSAccessibilityPermission();
-  
+
   const screenRecordingGranted = screenRecordingStatus === 'granted';
   const accessibilityGranted = accessibilityStatus === 'authorized';
-  
+
   let permissionDetails = '';
-  
+
   if (!screenRecordingGranted || !accessibilityGranted) {
     permissionDetails = '\n\n📋 Permissions Needed:\n\n';
-    
+
     if (!screenRecordingGranted) {
       permissionDetails += '• Screen Recording:\n';
       permissionDetails += '  Status: ' + (screenRecordingStatus === 'not-determined' ? 'Not yet requested' : screenRecordingStatus) + '\n';
       permissionDetails += '  Purpose: Capture screenshots for time tracking\n';
       permissionDetails += '  Location: System Settings → Privacy & Security → Screen Recording\n\n';
     }
-    
+
     if (!accessibilityGranted) {
       permissionDetails += '• Accessibility:\n';
       permissionDetails += '  Status: ' + (accessibilityStatus === 'not-determined' ? 'Not yet requested' : accessibilityStatus) + '\n';
       permissionDetails += '  Purpose: Detect which application you are using\n';
       permissionDetails += '  Location: System Settings → Privacy & Security → Accessibility\n\n';
     }
-    
+
     permissionDetails += '📝 Instructions:\n';
     permissionDetails += '1. macOS will prompt you when you start tracking\n';
     permissionDetails += '2. Or manually enable permissions in System Settings\n';
@@ -1506,17 +1546,17 @@ async function showFirstLaunchPermissionsDialog() {
   } else {
     permissionDetails = '\n\n✅ All required permissions are already granted!';
   }
-  
-  const buttons = screenRecordingGranted && accessibilityGranted 
-    ? ['OK'] 
+
+  const buttons = screenRecordingGranted && accessibilityGranted
+    ? ['OK']
     : ['Open Screen Recording Settings', 'Open Accessibility Settings', 'OK'];
-  
+
   dialog.showMessageBox(mainWindow, {
     type: 'info',
     title: 'Welcome to Time Tracker',
     message: 'Permissions Required for Time Tracking',
     detail: 'This app needs the following permissions to function properly:' +
-            permissionDetails,
+      permissionDetails,
     buttons: buttons,
     defaultId: buttons.length - 1,
     cancelId: buttons.length - 1,
@@ -1529,7 +1569,7 @@ async function showFirstLaunchPermissionsDialog() {
       // Open System Settings to Accessibility
       shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
     }
-    
+
     // Mark first launch as completed
     markFirstLaunchCompleted();
   });
@@ -1558,12 +1598,12 @@ async function requestScreenRecordingPermission() {
     title: 'Screen Recording Permission Required',
     message: 'Screen Recording Permission Required',
     detail: 'This app needs screen recording permission to capture screenshots.\n\n' +
-            'Please grant permission:\n' +
-            '1. Open System Settings → Privacy & Security → Screen Recording\n' +
-            '2. Find "Time Tracker" in the list (NOT "Electron")\n' +
-            '3. Enable the toggle\n' +
-            '4. **QUIT the app completely (Cmd+Q)**\n' +
-            '5. **Restart the app**',
+      'Please grant permission:\n' +
+      '1. Open System Settings → Privacy & Security → Screen Recording\n' +
+      '2. Find "Time Tracker" in the list (NOT "Electron")\n' +
+      '3. Enable the toggle\n' +
+      '4. **QUIT the app completely (Cmd+Q)**\n' +
+      '5. **Restart the app**',
     buttons: ['Open System Settings', 'OK'],
     defaultId: 0,
     cancelId: 1
@@ -1587,7 +1627,7 @@ async function checkAccessibilityPermission() {
     const result = await new Promise((resolve) => {
       const { exec } = require('child_process');
       const command = 'osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true"';
-      
+
       exec(command, { timeout: 1000 }, (error) => {
         // If no error, accessibility permission is granted
         resolve(!error);
@@ -1626,11 +1666,11 @@ async function requestAccessibilityPermission() {
     title: 'Accessibility Permission Required',
     message: 'Accessibility Permission Required',
     detail: 'This app needs Accessibility permission to detect which application you are using.\n\n' +
-            'Please grant permission:\n' +
-            '1. Open System Settings → Privacy & Security → Accessibility\n' +
-            '2. Find "Time Tracker" in the list\n' +
-            '3. Enable the toggle\n' +
-            '4. Restart the app',
+      'Please grant permission:\n' +
+      '1. Open System Settings → Privacy & Security → Accessibility\n' +
+      '2. Find "Time Tracker" in the list\n' +
+      '3. Enable the toggle\n' +
+      '4. Restart the app',
     buttons: ['Open System Settings', 'OK'],
     defaultId: 1,
     cancelId: 1
@@ -1655,11 +1695,11 @@ async function ensureMacPermissionsOnStartup() {
   logInfo('Permissions', '===========================================================');
   logInfo('Permissions', 'Running macOS startup permission preflight');
   logInfo('Permissions', '===========================================================');
-  
+
   const bundleId = getMacOSBundleId();
   const appName = app.getName();
   const isPackaged = app.isPackaged;
-  
+
   logInfo('Permissions', `App Name: ${appName}`);
   logInfo('Permissions', `Bundle ID: ${bundleId || 'unknown'}`);
   logInfo('Permissions', `Is Packaged: ${isPackaged}`);
@@ -1697,9 +1737,9 @@ async function ensureMacPermissionsOnStartup() {
     logInfo('Permissions', `Screen recording permission is ${screenRecordingStatus} - requesting permission...`);
     const promptResult = await triggerScreenRecordingPermissionPrompt();
     screenPrompted = !!promptResult?.triggered;
-    
+
     logInfo('Permissions', `Permission prompt result: triggered=${promptResult?.triggered}, granted=${promptResult?.granted}, status=${promptResult?.status || 'unknown'}`);
-    
+
     if (promptResult?.granted) {
       screenRecordingStatus = 'granted';
       logInfo('Permissions', '✅ Screen recording permission granted!');
@@ -1708,9 +1748,9 @@ async function ensureMacPermissionsOnStartup() {
       if (promptResult.status === 'authorized') {
         screenRecordingStatus = 'granted';
       } else {
-        screenRecordingStatus = promptResult.status === 'denied' ? 'denied' : 
-                                promptResult.status === 'not-determined' ? 'not-determined' : 
-                                promptResult.status === 'restricted' ? 'restricted' : screenRecordingStatus;
+        screenRecordingStatus = promptResult.status === 'denied' ? 'denied' :
+          promptResult.status === 'not-determined' ? 'not-determined' :
+            promptResult.status === 'restricted' ? 'restricted' : screenRecordingStatus;
       }
       logInfo('Permissions', `Permission status after prompt: ${screenRecordingStatus}`);
     }
@@ -1737,7 +1777,7 @@ async function ensureMacPermissionsOnStartup() {
   logInfo('Permissions', `  Accessibility: ${accessibilityStatus} ${accessibilityStatus === 'authorized' ? '✅' : '❌'}`);
   logInfo('Permissions', `  Screen Prompted: ${screenPrompted ? 'Yes' : 'No'}`);
   logInfo('Permissions', `  Accessibility Prompted: ${accessibilityPrompted ? 'Yes' : 'No'}`);
-  
+
   if (screenRecordingStatus !== 'granted' || accessibilityStatus !== 'authorized') {
     logWarn('Permissions', '');
     logWarn('Permissions', '⚠️  Some permissions are missing. The app may not function correctly.');
@@ -1749,7 +1789,7 @@ async function ensureMacPermissionsOnStartup() {
       logWarn('Permissions', '  → System Settings → Privacy & Security → Accessibility');
     }
   }
-  
+
   logInfo('Permissions', '===========================================================');
 
   return { screenRecordingStatus, accessibilityStatus, screenPrompted, accessibilityPrompted };
@@ -1874,12 +1914,12 @@ async function getActiveAppNameForDisplayViaAppleScript(displayIndex, targetDisp
     if (process.platform !== 'darwin') {
       return resolve(null);
     }
-    
+
     // AppleScript to get the frontmost window on a specific display
     // We'll get all windows and find the one whose center is on the target display
     const displayCenterX = targetDisplay.bounds.x + (targetDisplay.bounds.width / 2);
     const displayCenterY = targetDisplay.bounds.y + (targetDisplay.bounds.height / 2);
-    
+
     const command = `osascript -e 'tell application "System Events"
       set targetX to ${displayCenterX}
       set targetY to ${displayCenterY}
@@ -1953,21 +1993,21 @@ async function getActiveAppNameForDisplayViaAppleScript(displayIndex, targetDisp
       if (stderr) {
         logWarn('ActiveWindow', `AppleScript stderr for display ${displayIndex + 1}: ${stderr}`);
       }
-      
+
       const result = stdout.trim();
       if (result && result.length > 0) {
         const parts = result.split('|');
         const appName = parts[0] ? parts[0].trim() : null;
         const windowTitle = parts[1] ? parts[1].trim() : null;
-        
+
         logInfo('ActiveWindow', `AppleScript for display ${displayIndex + 1} - App: ${appName || 'null'}, Title: ${windowTitle || 'null'}`);
-        
+
         // Process the result similar to getActiveAppName
         const processed = processActiveWindowResult({
           owner: { name: appName },
           title: windowTitle
         });
-        
+
         resolve(processed);
       } else {
         logWarn('ActiveWindow', `AppleScript returned empty result for display ${displayIndex + 1}`);
@@ -1980,22 +2020,22 @@ async function getActiveAppNameForDisplayViaAppleScript(displayIndex, targetDisp
 // Helper function to process active window result (extracted from getActiveAppName)
 function processActiveWindowResult(result) {
   if (!result) return null;
-  
+
   const appName = app.getName();
   const appNameLower = appName.toLowerCase();
-  
+
   let ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
   let windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
-  
-  const isOwnApp = (ownerName && ownerName.toLowerCase() === appNameLower) || 
-                   (windowTitle && windowTitle.toLowerCase() === appNameLower) ||
-                   (ownerName && ownerName.toLowerCase().includes('time tracker')) ||
-                   (ownerName && ownerName.toLowerCase().includes('electron') && ownerName.toLowerCase().includes('time'));
-  
+
+  const isOwnApp = (ownerName && ownerName.toLowerCase() === appNameLower) ||
+    (windowTitle && windowTitle.toLowerCase() === appNameLower) ||
+    (ownerName && ownerName.toLowerCase().includes('time tracker')) ||
+    (ownerName && ownerName.toLowerCase().includes('electron') && ownerName.toLowerCase().includes('time'));
+
   if (isOwnApp) {
     return appName;
   }
-  
+
   const genericNames = ['electron', 'node', 'nodejs'];
   if (ownerName) {
     const ownerNameLower = ownerName.toLowerCase();
@@ -2003,21 +2043,21 @@ function processActiveWindowResult(result) {
       ownerName = null;
     }
   }
-  
+
   if (windowTitle) {
     const windowTitleLower = windowTitle.toLowerCase();
     if (windowTitleLower === 'electron' || windowTitleLower === 'node') {
       windowTitle = null;
     }
   }
-  
+
   let finalAppName = null;
   if (process.platform === 'darwin') {
     if (ownerName) {
       if (windowTitle && windowTitle.length > 0) {
         const windowTitleLower = windowTitle.toLowerCase();
         const ownerNameLower = ownerName.toLowerCase();
-        
+
         if (windowTitleLower.includes(ownerNameLower) && windowTitleLower.length > ownerNameLower.length) {
           finalAppName = windowTitle;
         } else if (windowTitle !== ownerName) {
@@ -2042,7 +2082,7 @@ function processActiveWindowResult(result) {
       finalAppName = windowTitle;
     }
   }
-  
+
   return finalAppName;
 }
 
@@ -2052,7 +2092,7 @@ async function getActiveAppName() {
     let result = null;
     let useAppleScriptFallback = false;
     const preferPaymo = process.platform === 'darwin';
-    
+
     // On macOS, check for Accessibility permission first
     if (process.platform === 'darwin') {
       const accessibilityStatus = await checkMacOSAccessibilityPermission();
@@ -2063,7 +2103,7 @@ async function getActiveAppName() {
         logInfo('ActiveWindow', 'Accessibility permission is authorized, trying active-win first');
       }
     }
-    
+
     // Try active-win if we have permission or if not on macOS
     if (!useAppleScriptFallback) {
       try {
@@ -2089,7 +2129,7 @@ async function getActiveAppName() {
         useAppleScriptFallback = true;
       }
     }
-    
+
     // If active-win failed or we don't have permission, use AppleScript fallback (macOS only)
     if (useAppleScriptFallback && process.platform === 'darwin') {
       logInfo('ActiveWindow', 'Using AppleScript fallback to get app name and window title');
@@ -2101,41 +2141,41 @@ async function getActiveAppName() {
         logInfo('ActiveWindow', 'AppleScript fallback returned result, processing...');
       }
     }
-    
+
     // If we got a result from active-win, process it
     if (!result) {
       logWarn('ActiveWindow', 'Both active-win and AppleScript failed to get app name');
       return null;
     }
-    
+
     // Get the app's own name for reference (but don't filter it out - we want to track when user is using our app)
     const appName = app.getName();
     const appNameLower = appName.toLowerCase();
-    
+
     // Extract available information from result
     // active-win returns: { owner: { name, processId }, title, url, bounds, etc. }
     let ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
     let windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
-    
+
     // Log detected information for debugging on both platforms
     logInfo('ActiveWindow', `[${process.platform}] Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, app: ${appName}`);
-    
+
     // Check if this is our own app - if so, we still want to return it, but use a consistent name
-    const isOwnApp = (ownerName && ownerName.toLowerCase() === appNameLower) || 
-                     (windowTitle && windowTitle.toLowerCase() === appNameLower) ||
-                     (ownerName && ownerName.toLowerCase().includes('time tracker')) ||
-                     (ownerName && ownerName.toLowerCase().includes('electron') && ownerName.toLowerCase().includes('time'));
-    
+    const isOwnApp = (ownerName && ownerName.toLowerCase() === appNameLower) ||
+      (windowTitle && windowTitle.toLowerCase() === appNameLower) ||
+      (ownerName && ownerName.toLowerCase().includes('time tracker')) ||
+      (ownerName && ownerName.toLowerCase().includes('electron') && ownerName.toLowerCase().includes('time'));
+
     if (isOwnApp) {
       // Return the app name consistently when our app is active
       logInfo('ActiveWindow', `Detected own app - returning: ${appName}`);
       return appName;
     }
-    
+
     // Filter out only if it's clearly Electron or generic names that don't provide value
     // But keep the app name if it's detected
     const genericNames = ['electron', 'node', 'nodejs'];
-    
+
     if (ownerName) {
       const ownerNameLower = ownerName.toLowerCase();
       // Only filter out if it's a generic name AND not our app
@@ -2144,7 +2184,7 @@ async function getActiveAppName() {
         ownerName = null;
       }
     }
-    
+
     if (windowTitle) {
       const windowTitleLower = windowTitle.toLowerCase();
       // Only filter out generic Electron titles if they don't provide context
@@ -2153,10 +2193,10 @@ async function getActiveAppName() {
         windowTitle = null;
       }
     }
-    
+
     // Build the app name with better logic for both platforms
     let finalAppName = null;
-    
+
     if (process.platform === 'darwin') {
       // macOS: prefer owner.name (application name) as it's more reliable
       // Use window title as fallback or to add context (similar to Windows)
@@ -2170,7 +2210,7 @@ async function getActiveAppName() {
           // Check if window title already contains app name to avoid duplication
           const windowTitleLower = windowTitle.toLowerCase();
           const ownerNameLower = ownerName.toLowerCase();
-          
+
           if (windowTitleLower.includes(ownerNameLower) && windowTitleLower.length > ownerNameLower.length) {
             // Window title already contains app name with additional info (e.g., "Google Chrome - YouTube")
             // Use the full window title as it has more context
@@ -2202,12 +2242,12 @@ async function getActiveAppName() {
         finalAppName = windowTitle;
       }
     }
-    
+
     if (finalAppName) {
       logInfo('ActiveWindow', `Final app name: ${finalAppName}`);
       return finalAppName;
     }
-    
+
     logWarn('ActiveWindow', 'No valid app name found after filtering');
     return null;
   } catch (error) {
@@ -2222,17 +2262,17 @@ function getSupabaseClient() {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL;
       const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-      
+
       if (!supabaseUrl) {
         logError('Supabase', 'SUPABASE_URL environment variable is not set');
         return null;
       }
-      
+
       if (!serviceRoleKey) {
         logError('Supabase', 'Neither SUPABASE_SERVICE_ROLE_KEY nor SUPABASE_ANON_KEY is set');
         return null;
       }
-      
+
       supabaseClientInstance = createClient(supabaseUrl, serviceRoleKey);
       logInfo('Supabase', 'Supabase client initialized successfully');
     }
@@ -2362,50 +2402,50 @@ function processToastQueue() {
   if (isProcessingToastQueue || toastQueue.length === 0) {
     return;
   }
-  
+
   isProcessingToastQueue = true;
   logInfo('Toast', `Processing toast queue: ${toastQueue.length} item(s) pending`);
-  
+
   // Process all toasts in the queue (one per screen)
   // Group by displayId to handle multiple screens properly
   const toastsByDisplay = new Map();
   while (toastQueue.length > 0) {
     const toastItem = toastQueue.shift();
     if (!toastItem) continue;
-    
+
     const { filePath, base64Data, screenIndex, displayId } = toastItem;
-    
+
     // Skip toasts without valid base64Data (prevents null preview toasts)
     if (!base64Data) {
       logWarn('Toast', `  Skipping toast without base64Data: filePath=${filePath ? path.basename(filePath) : 'null'}, screenIndex=${screenIndex || 0}`);
       continue;
     }
-    
+
     // Use displayId as key if available, otherwise fall back to screenIndex
     const key = displayId || `screen-${screenIndex || 0}`;
-    
+
     logInfo('Toast', `  Queued toast: displayKey="${key}", screenIndex=${screenIndex || 0}, displayId=${displayId || 'N/A'}, filePath=${filePath ? path.basename(filePath) : 'null'}, hasBase64Data=${!!base64Data}`);
-    
+
     // Keep only the most recent toast per display (this ensures if multiple toasts are queued for same display, only the latest one is shown)
     toastsByDisplay.set(key, { filePath, base64Data, screenIndex: screenIndex || 0, displayId });
   }
-  
+
   logInfo('Toast', `Grouped into ${toastsByDisplay.size} unique display(s)`);
-  
+
   // Create/update toast for each display
   toastsByDisplay.forEach((toastItem, displayKey) => {
     const { filePath, base64Data, screenIndex, displayId } = toastItem;
-    
+
     logInfo('Toast', `Creating toast for displayKey="${displayKey}" (screenIndex=${screenIndex}, displayId=${displayId || 'N/A'})`);
-    
+
     // Check if there's an existing toast for this display
     const existingToast = toastWindows.get(displayKey);
-    
+
     if (existingToast && !existingToast.isDestroyed()) {
       const existingToastAge = Date.now() - (existingToast._createdAt || 0);
       const delay = existingToastAge < 1000 ? (process.platform === 'darwin' ? 600 : 500) : 0;
       logInfo('Toast', `  Existing toast found (age: ${existingToastAge}ms), will close and recreate after ${delay}ms delay`);
-      
+
       setTimeout(() => {
         if (existingToast && !existingToast.isDestroyed()) {
           existingToast.close();
@@ -2423,7 +2463,7 @@ function processToastQueue() {
       createToastWindow(filePath, base64Data, screenIndex, displayId);
     }
   });
-  
+
   isProcessingToastQueue = false;
   logInfo('Toast', `Toast queue processing completed`);
 }
@@ -2435,11 +2475,11 @@ function showToastNotification(filePath, base64Data, screenIndex = null, display
       logWarn('Toast', 'Invalid toast notification data - missing filePath or base64Data');
       return;
     }
-    
+
     // Add to queue with screenIndex and displayId to show on correct display
     // This allows multiple toasts to be shown simultaneously (one per screen)
     toastQueue.push({ filePath, base64Data, screenIndex: screenIndex || 0, displayId, timestamp: Date.now() });
-    
+
     // Process queue with a small delay to batch rapid captures
     // This ensures each screen gets its own toast with the correct preview
     setTimeout(() => {
@@ -2463,7 +2503,7 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
   try {
     logInfo('Toast', '===========================================================');
     logInfo('Toast', `Creating toast window: screenIndex=${screenIndex}, displayId=${displayId || 'N/A'}, filePath=${filePath ? path.basename(filePath) : 'null'}`);
-    
+
     // Use a consistent, sufficiently large size on all platforms so that
     // the preview image + side column (delete button + timer) are fully visible.
     // On macOS the previous smaller size (300x200) caused the side column
@@ -2486,23 +2526,23 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
         nodeIntegration: false,
       },
     };
-    
+
     // macOS-specific settings for better visibility and reliability
     if (process.platform === 'darwin') {
       windowOptions.acceptsFirstMouse = true;
       // Don't use 'panel' type as it can cause visibility issues
       // Instead rely on alwaysOnTop and setVisibleOnAllWorkspaces
     }
-    
+
     const newToastWin = new BrowserWindow(windowOptions);
 
     // Track when this toast was created
     newToastWin._createdAt = Date.now();
-    
+
     // Use displayId as key if available, otherwise use screenIndex
     const displayKey = displayId || `screen-${screenIndex}`;
     logInfo('Toast', `Using displayKey="${displayKey}" for toast window map`);
-    
+
     // Store in both the Map (for multi-screen) and the legacy variable (for backward compatibility)
     toastWindows.set(displayKey, newToastWin);
     toastWin = newToastWin; // Keep for backward compatibility
@@ -2514,10 +2554,10 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
     allDisplays.forEach((d, idx) => {
       logInfo('Toast', `  Display ${idx + 1}: ID=${d.id}, Bounds=(${d.bounds.x}, ${d.bounds.y}, ${d.bounds.width}, ${d.bounds.height})`);
     });
-    
+
     let targetDisplay = null;
     let displaySelectionMethod = 'unknown';
-    
+
     // First, try to find display by displayId (most reliable)
     if (displayId) {
       targetDisplay = allDisplays.find(d => String(d.id) === String(displayId));
@@ -2528,7 +2568,7 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
         logWarn('Toast', `  ⚠ displayId=${displayId} provided but no matching display found`);
       }
     }
-    
+
     // Fallback: try to find the display that matches the screenIndex
     if (!targetDisplay && screenIndex > 0 && screenIndex <= allDisplays.length) {
       // screenIndex from desktopCapturer is usually 1-based, so subtract 1
@@ -2536,32 +2576,32 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
       displaySelectionMethod = 'screenIndex';
       logInfo('Toast', `  ✓ Found display using screenIndex=${screenIndex}: Display ID=${targetDisplay.id}`);
     }
-    
+
     // Final fallback: use primary display
     if (!targetDisplay) {
       targetDisplay = screen.getPrimaryDisplay();
       displaySelectionMethod = 'primary-fallback';
       logWarn('Toast', `  ⚠ Using primary display as fallback: Display ID=${targetDisplay.id}`);
     }
-    
+
     if (!targetDisplay) {
       targetDisplay = allDisplays[0] || screen.getPrimaryDisplay();
       displaySelectionMethod = 'first-available';
       logWarn('Toast', `  ⚠ Using first available display: Display ID=${targetDisplay.id}`);
     }
-    
+
     // Use display bounds directly to position toast (not workArea, as suggested)
     // Position in bottom-right corner with 20px margin
     const x = targetDisplay.bounds.x + targetDisplay.bounds.width - TOAST_WIDTH - 5;
     const y = targetDisplay.bounds.y + targetDisplay.bounds.height - TOAST_HEIGHT - 52;
     newToastWin.setPosition(x, y);
-    
+
     sendToRendererConsole("Toast display bounds:", targetDisplay.bounds);
     sendToRendererConsole("Toast window position:", {
       x: x,
       y: y
     });
-    
+
     logInfo('Toast', `Toast positioning:`);
     logInfo('Toast', `  Selection method: ${displaySelectionMethod}`);
     logInfo('Toast', `  Target display: ID=${targetDisplay.id}, Name="${targetDisplay.name || 'Unknown'}"`);
@@ -2578,7 +2618,7 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
         toastWindows.delete(displayKey);
         return;
       }
-      
+
       try {
         // On Mac, use show() instead of showInactive() for better reliability
         // Add a small delay to ensure the window is properly initialized
@@ -2589,7 +2629,7 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
             toastWindows.delete(displayKey);
             return;
           }
-          
+
           // On Mac, ensure the window is properly shown and visible
           if (process.platform === 'darwin') {
             try {
@@ -2602,7 +2642,7 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
               // Move to top after showing
               newToastWin.moveTop();
               logInfo('Toast', `Toast window for screen ${screenIndex} shown on macOS with visibility settings applied`);
-              
+
               // Additional macOS-specific visibility fixes after a brief delay
               setTimeout(() => {
                 if (newToastWin && !newToastWin.isDestroyed()) {
@@ -2630,12 +2670,12 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
           } else {
             newToastWin.showInactive();
           }
-          
+
           logInfo('Toast', `✓ Toast window successfully shown for displayKey="${displayKey}" (screen ${screenIndex})`);
           logInfo('Toast', `  File: ${path.basename(filePath)}`);
           logInfo('Toast', `  Position: (${x}, ${y})`);
           logInfo('Toast', `  Display: ID=${targetDisplay.id}, Name="${targetDisplay.name || 'Unknown'}"`);
-          
+
           // Send init message after a brief delay to ensure window is ready
           // Validate base64Data before sending
           const initDelay = process.platform === 'darwin' ? 100 : 50;
@@ -2659,7 +2699,7 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
                 logWarn('Toast', 'base64Data is not a string, cannot display preview');
                 validBase64Data = null;
               }
-              
+
               newToastWin.webContents.send('toast-init', { filePath, base64Data: validBase64Data });
               logInfo('Toast', `Sent init message to screen ${screenIndex} toast with preview data (length: ${validBase64Data ? validBase64Data.length : 0})`);
             } else {
@@ -2678,14 +2718,14 @@ function createToastWindow(filePath, base64Data, screenIndex = 0, displayId = nu
     });
 
     // Auto-close after 9 seconds
-    setTimeout(() => { 
+    setTimeout(() => {
       if (newToastWin && !newToastWin.isDestroyed()) {
         logInfo('Toast', `Auto-closing toast window for displayKey="${displayKey}" after 9 seconds`);
-        newToastWin.close(); 
+        newToastWin.close();
       }
     }, 9000);
-    
-    newToastWin.on('closed', () => { 
+
+    newToastWin.on('closed', () => {
       logInfo('Toast', `Toast window closed for displayKey="${displayKey}"`);
       toastWindows.delete(displayKey);
       // Only clear toastWin if this was the last one
@@ -2757,7 +2797,7 @@ async function insertScreenshotToDatabase(
       normalizedTimesheetId = null;
     }
   }
-  
+
   // Normalize Frappe project and task IDs
   const normalizedProjectId = frappeProjectId && typeof frappeProjectId === 'string' ? frappeProjectId.trim() : (frappeProjectId || null);
   const normalizedTaskId = frappeTaskId && typeof frappeTaskId === 'string' ? frappeTaskId.trim() : (frappeTaskId || null);
@@ -2774,17 +2814,17 @@ async function insertScreenshotToDatabase(
       // Attempt to set captured_idle when the column exists; fallback logic below will retry without it if missing
       captured_idle: Boolean(isIdle)
     };
-    
+
     // Add time_session_id (time_sessions.id) if available
     if (timeTrackerSessionId && typeof timeTrackerSessionId === 'number') {
       insertData.time_session_id = timeTrackerSessionId;
     }
-    
+
     // Add company if available
     if (company) {
       insertData.company = company;
     }
-    
+
     // Add Frappe project and task IDs if provided
     if (normalizedProjectId) {
       insertData.frappe_project_id = normalizedProjectId;
@@ -2792,12 +2832,12 @@ async function insertScreenshotToDatabase(
     if (normalizedTaskId) {
       insertData.frappe_task_id = normalizedTaskId;
     }
-    
+
     // Add optional app_name if provided; fallback logic below handles column absence
     if (appName) {
       insertData.app_name = appName;
     }
-    
+
     const { error: legacyErr } = await supabase.from('screenshots').insert(insertData);
 
     if (legacyErr) {
@@ -2810,10 +2850,10 @@ async function insertScreenshotToDatabase(
         );
         throw legacyErr; // Will be caught and handled by fallback
       }
-      
+
       // If error is about captured_idle or app_name column, try again without them
-      if (errorMsg.includes('column "captured_idle"') || errorMsg.includes('column "app_name"') || 
-          errorMsg.includes('column captured_idle does not exist') || errorMsg.includes('column app_name does not exist')) {
+      if (errorMsg.includes('column "captured_idle"') || errorMsg.includes('column "app_name"') ||
+        errorMsg.includes('column captured_idle does not exist') || errorMsg.includes('column app_name does not exist')) {
         logWarn(
           'DB',
           `Optional column missing, retrying without it: ${errorMsg}`
@@ -2826,17 +2866,17 @@ async function insertScreenshotToDatabase(
           screenshot_data: publicUrl, // Storage bucket public URL
           captured_at: timestamp
         };
-        
+
         // Add time_session_id (time_sessions.id) if available
         if (timeTrackerSessionId && typeof timeTrackerSessionId === 'number') {
           minimalInsert.time_session_id = timeTrackerSessionId;
         }
-        
+
         // Add company if available
         if (company) {
           minimalInsert.company = company;
         }
-        
+
         // Add Frappe IDs if available
         if (normalizedProjectId) {
           minimalInsert.frappe_project_id = normalizedProjectId;
@@ -2844,7 +2884,7 @@ async function insertScreenshotToDatabase(
         if (normalizedTaskId) {
           minimalInsert.frappe_task_id = normalizedTaskId;
         }
-        
+
         // Note: captured_idle is omitted here because column doesn't exist yet
         // After running migration, it will be included in the main insert
         const { error: retryErr } = await supabase.from('screenshots').insert(minimalInsert);
@@ -2862,7 +2902,7 @@ async function insertScreenshotToDatabase(
         );
         return;
       }
-      
+
       logError(
         'DB',
         `Failed to insert screenshot row using user_email=${normalizedEmail}: ${legacyErr.message}`,
@@ -2928,17 +2968,17 @@ async function insertScreenshotToDatabase(
       screenshot_data: publicUrl, // Storage bucket public URL
       captured_at: timestamp
     };
-    
+
     // Add time_session_id (time_sessions.id) if available
     if (timeTrackerSessionId && typeof timeTrackerSessionId === 'number') {
       insertPayload.time_session_id = timeTrackerSessionId;
     }
-    
+
     // Add company if available
     if (company) {
       insertPayload.company = company;
     }
-    
+
     // Add Frappe project and task IDs if provided
     if (normalizedProjectId) {
       insertPayload.frappe_project_id = normalizedProjectId;
@@ -2946,21 +2986,21 @@ async function insertScreenshotToDatabase(
     if (normalizedTaskId) {
       insertPayload.frappe_task_id = normalizedTaskId;
     }
-    
+
     // Add optional fields if they exist
     if (appName) {
       insertPayload.app_name = appName;
     }
     insertPayload.captured_idle = Boolean(isIdle);
-    
+
     const { error: dbErr } = await supabase.from('screenshots').insert(insertPayload);
 
     if (dbErr) {
       const errorMsg = String(dbErr.message || '');
-      
+
       // If error is about optional columns, retry without them
-      if (errorMsg.includes('column "captured_idle"') || errorMsg.includes('column "app_name"') || 
-          errorMsg.includes('column captured_idle does not exist') || errorMsg.includes('column app_name does not exist')) {
+      if (errorMsg.includes('column "captured_idle"') || errorMsg.includes('column "app_name"') ||
+        errorMsg.includes('column captured_idle does not exist') || errorMsg.includes('column app_name does not exist')) {
         logWarn(
           'DB',
           `Optional column missing, retrying without it: ${errorMsg}`
@@ -2971,12 +3011,12 @@ async function insertScreenshotToDatabase(
           screenshot_data: publicUrl,
           captured_at: timestamp
         };
-        
+
         // Add company if available
         if (company) {
           minimalPayload.company = company;
         }
-        
+
         // Add Frappe IDs if available
         if (normalizedProjectId) {
           minimalPayload.frappe_project_id = normalizedProjectId;
@@ -2999,7 +3039,7 @@ async function insertScreenshotToDatabase(
         );
         return;
       }
-      
+
       logError(
         'DB',
         `Failed to insert screenshot for user_id ${userId}: ${dbErr.message}`,
@@ -3057,7 +3097,7 @@ async function addScreenshotToBatch(uploadData) {
     try {
       // Pass screenIndex and displayId to show toast on the correct display
       showToastNotification(filePath, screenshotData, screenIndex, displayId);
-    } catch {}
+    } catch { }
 
     // Use the provided appName if available (which should be screen-specific)
     // Otherwise fall back to getting the frontmost app
@@ -3093,7 +3133,7 @@ async function addScreenshotToBatch(uploadData) {
     if (!frappeTimesheetId && sessionId && typeof sessionId === 'string' && sessionId.startsWith('TS-')) {
       frappeTimesheetId = sessionId;
     }
-    
+
     const batchItem = {
       userEmail,
       sessionId, // Keep original for database insert (can be Supabase session ID or Frappe timesheet ID)
@@ -3116,7 +3156,7 @@ async function addScreenshotToBatch(uploadData) {
 
     screenshotBatchQueue.push(batchItem);
     pendingScreenshots.set(filePath, false);
-    
+
     logInfo(contextLabel || 'BATCH-UPLOAD', `Screenshot added to batch queue. Queue size: ${screenshotBatchQueue.length}/${SCREENSHOT_BATCH_SIZE}`);
 
     // Ensure a single flush timer exists while there are items queued.
@@ -3125,19 +3165,19 @@ async function addScreenshotToBatch(uploadData) {
     if (screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
       logInfo(contextLabel, `Batch full (${SCREENSHOT_BATCH_SIZE} screenshots), starting upload...`);
       const queueSizeBeforeProcessing = screenshotBatchQueue.length;
-      
+
       // Try to process the batch - if it returns early, retry after a short delay
       let retryCount = 0;
       const maxRetries = 3;
       let wasProcessed = false;
-      
+
       while (retryCount < maxRetries && screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE && !wasProcessed) {
         await processScreenshotBatch();
-        
+
         // Check if batch was actually processed
         const queueSizeAfterProcessing = screenshotBatchQueue.length;
         wasProcessed = queueSizeAfterProcessing < queueSizeBeforeProcessing;
-        
+
         if (!wasProcessed) {
           if (isBatchUploading) {
             // Another batch is processing, wait a bit and retry
@@ -3158,11 +3198,11 @@ async function addScreenshotToBatch(uploadData) {
           }
         }
       }
-      
+
       if (!wasProcessed && screenshotBatchQueue.length >= SCREENSHOT_BATCH_SIZE) {
         logError('BATCH-UPLOAD', `Failed to process batch after ${maxRetries} attempts. Queue size: ${screenshotBatchQueue.length}`);
       }
-      
+
       // If the queue is now empty, cancel any pending flush timer.
       // Note: We check batchFlushInterval here, but it might be null if a timer callback
       // is currently executing. That's okay - the timer callback will handle cleanup.
@@ -3180,7 +3220,7 @@ async function addScreenshotToBatch(uploadData) {
           logInfo('BATCH-UPLOAD', `Queue still full after batch (${screenshotBatchQueue.length} items), processing immediately...`);
           await processScreenshotBatch();
         }
-        
+
         // Ensure flush timer is scheduled for remaining items.
         // Clear any existing timer handle/flag first to avoid stale state,
         // then schedule a fresh timer for the remaining items.
@@ -3221,7 +3261,7 @@ async function processScreenshotBatch() {
   const validScreenshots = batchToUpload.filter(item => {
     const isCancelled = pendingScreenshots.get(item.filePath) === true;
     const exists = fs.existsSync(item.filePath);
-    
+
     if (isCancelled) {
       logInfo('BATCH-UPLOAD', `[FILTERED] CANCELLED: ${item.jpegFilename}`);
       pendingScreenshots.delete(item.filePath);
@@ -3232,7 +3272,7 @@ async function processScreenshotBatch() {
       pendingScreenshots.delete(item.filePath);
       return false;
     }
-    
+
     return true;
   });
 
@@ -3249,7 +3289,7 @@ async function processScreenshotBatch() {
     logWarn('BATCH-UPLOAD', `Re-queued batch. Queue size is now: ${screenshotBatchQueue.length}. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables.`);
     return;
   }
-  
+
   if (validScreenshots.length === 0) {
     logWarn('BATCH-UPLOAD', 'No valid screenshots to upload after filtering');
     isBatchUploading = false;
@@ -3279,7 +3319,7 @@ async function processScreenshotBatch() {
         // Prefer supabaseSessionId from batch item (passed directly), otherwise try to resolve from sessionId
         let timeTrackerSessionId = null; // Numeric time_sessions.id
         let frappeTimesheetId = item.frappeTimesheetId;
-        
+
         // First, check if we have the numeric Supabase session ID directly from the batch item
         if (item.supabaseSessionId && typeof item.supabaseSessionId === 'number') {
           timeTrackerSessionId = item.supabaseSessionId;
@@ -3298,7 +3338,7 @@ async function processScreenshotBatch() {
           // Fallback: Try to resolve from sessionId if supabaseSessionId wasn't provided
           const sessionIdStr = String(item.sessionId);
           const numericSessionId = parseInt(sessionIdStr, 10);
-          
+
           if (!isNaN(numericSessionId) && isFinite(numericSessionId)) {
             // sessionId is numeric - this is already the time_sessions.id
             timeTrackerSessionId = numericSessionId;
@@ -3326,15 +3366,15 @@ async function processScreenshotBatch() {
             }
           }
         }
-        
+
         // Build storage path: user_email/frappe_timesheet_id/time_tracker_session_id/screenshots/filename
         // If frappe_timesheet_id is not available, use time_tracker_session_id for that part
         const frappeFolder = frappeTimesheetId || (timeTrackerSessionId ? String(timeTrackerSessionId) : 'unknown');
         const sessionFolder = timeTrackerSessionId ? String(timeTrackerSessionId) : 'unknown';
         const storagePath = `${item.userEmail}/${frappeFolder}/${sessionFolder}/screenshots/${item.jpegFilename}`;
-        
+
         logInfo(item.contextLabel, `Uploading to storage: ${storagePath} (Frappe ID: ${frappeTimesheetId || 'none'}, Session ID: ${timeTrackerSessionId || 'none'}) (${(item.jpegBuffer.length / 1024).toFixed(2)} KB)`);
-        
+
         const { error: storageError } = await supabase.storage
           .from(STORAGE_BUCKET)
           .upload(storagePath, item.jpegBuffer, { contentType: 'image/jpeg', upsert: true });
@@ -3343,7 +3383,7 @@ async function processScreenshotBatch() {
           logError(item.contextLabel, `Storage upload failed for ${item.jpegFilename}: ${storageError.message}`, storageError);
           return { ok: false, error: storageError.message, filePath: item.filePath, item };
         }
-        
+
         logInfo(item.contextLabel, `Storage upload successful: ${storagePath}`);
 
         const publicUrlRes = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(storagePath);
@@ -3352,7 +3392,7 @@ async function processScreenshotBatch() {
 
         const appName = item.appName || 'Unknown';
         logInfo(item.contextLabel, `Inserting database record for ${item.jpegFilename}`);
-        
+
         // Insert database record BEFORE deleting local file
         // This ensures we can retry if database insert fails
         // Pass frappe_timesheet_id and time_tracker_session_id (numeric id) separately
@@ -3416,7 +3456,7 @@ async function processScreenshotBatch() {
               remoteUrl: publicUrl
             });
           }
-        } catch {}
+        } catch { }
 
         // Mark as processed (file already deleted above)
         pendingScreenshots.delete(item.filePath);
@@ -3434,7 +3474,7 @@ async function processScreenshotBatch() {
         };
         logError(item.contextLabel, `Upload error for ${item.jpegFilename}: ${error.message}`, error);
         logError(item.contextLabel, `Error details: ${JSON.stringify(errorDetails, null, 2)}`);
-        
+
         // If storage upload succeeded but database insert failed, we need to keep the file for retry
         // The file will be deleted only after both succeed
         return { ok: false, error: error.message, filePath: item.filePath, item, errorDetails };
@@ -3443,7 +3483,7 @@ async function processScreenshotBatch() {
 
     const results = await Promise.all(uploadPromises);
     uploadResults.push(...results);
-    
+
     logInfo('BATCH-UPLOAD', `All upload promises completed. Results: ${results.length} total, ${results.filter(r => r.ok).length} successful, ${results.filter(r => !r.ok && !r.skipped).length} failed`);
 
     // Files are now deleted immediately after successful storage upload (see above)
@@ -3525,7 +3565,7 @@ async function processScreenshotBatch() {
       'BATCH-UPLOAD',
       `Batch complete: ${successCount}/${validScreenshots.length} uploaded successfully, ${failedCount} failed, ${deletedCount} files deleted`
     );
-    
+
     if (successCount === 0 && validScreenshots.length > 0) {
       logError('BATCH-UPLOAD', `WARNING: All ${validScreenshots.length} screenshot(s) in batch failed to upload. Check Supabase connection and storage bucket configuration.`);
     }
@@ -3699,7 +3739,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
               // Anything that's not "Employee" is a manager
               return role && role.toLowerCase() !== 'employee';
             });
-            
+
             if (manager) {
               clientEmail = manager.email.trim().toLowerCase();
               logInfo('ScreenshotInterval', `Found manager email from company: ${clientEmail} (role: ${manager.role})`);
@@ -3732,7 +3772,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
             const role = (u.role || '').trim();
             return role && role.toLowerCase() !== 'employee';
           });
-          
+
           if (manager) {
             clientEmail = manager.email.trim().toLowerCase();
             logInfo('ScreenshotInterval', `Using fallback manager: ${clientEmail} (role: ${manager.role})`);
@@ -3756,26 +3796,26 @@ async function getScreenshotInterval(userEmail, sessionId) {
     // This is more reliable than trying to guess the manager's email
     let clientSettings = null;
     let settingsError = null;
-    
+
     // Try to find any client_settings entry that has this employee in their employee_intervals
     logInfo('ScreenshotInterval', `Searching for client_settings containing employee: ${normalizedFreelancer}`);
     const { data: allSettings, error: allSettingsError } = await supabase
       .from('client_settings')
       .select('client_email, employee_intervals')
       .limit(100); // Get all settings (should be manageable)
-    
+
     if (allSettingsError) {
       logWarn('ScreenshotInterval', `Error fetching all client_settings: ${allSettingsError.message}`);
     } else if (!allSettings || allSettings.length === 0) {
       logWarn('ScreenshotInterval', `No client_settings records found in database`);
     } else {
       logInfo('ScreenshotInterval', `Found ${allSettings.length} client_settings record(s) in database`);
-      
+
       // Look for a settings entry that has this employee in the map
       // Try both exact match and case-insensitive match
       const matchingSettings = allSettings.find(settings => {
         if (!settings.employee_intervals) return false;
-        
+
         // Handle both object and JSON string formats
         let intervals = settings.employee_intervals;
         if (typeof intervals === 'string') {
@@ -3786,7 +3826,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
             return false;
           }
         }
-        
+
         // Check exact match first
         if (intervals.hasOwnProperty(normalizedFreelancer)) {
           return true;
@@ -3795,7 +3835,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
         const mapKeys = Object.keys(intervals);
         return mapKeys.some(key => key.toLowerCase() === normalizedFreelancer);
       });
-      
+
       if (matchingSettings) {
         clientSettings = matchingSettings;
         clientEmail = matchingSettings.client_email.trim().toLowerCase();
@@ -3821,7 +3861,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
         });
       }
     }
-    
+
     // If not found by employee lookup, try the resolved client_email
     if (!clientSettings && clientEmail) {
       const result = await supabase
@@ -3851,7 +3891,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
 
     // 6) Get the interval from employee_intervals map using employee email as key
     let map = clientSettings.employee_intervals || {};
-    
+
     // Handle JSON string format if needed
     if (typeof map === 'string') {
       try {
@@ -3861,16 +3901,16 @@ async function getScreenshotInterval(userEmail, sessionId) {
         map = {};
       }
     }
-    
+
     // Log the map contents for debugging
     logInfo('ScreenshotInterval', `Looking up interval for employee: ${normalizedFreelancer}`);
     const mapKeys = Object.keys(map);
     logInfo('ScreenshotInterval', `Available employee emails in map: ${mapKeys.join(', ')}`);
     logInfo('ScreenshotInterval', `Full employee_intervals map: ${JSON.stringify(map)}`);
-    
+
     // Try to find the interval - check both exact match and case-insensitive match
     let perEmployeeSeconds = Number(map[normalizedFreelancer]);
-    
+
     // If not found, try case-insensitive lookup
     if (!Number.isFinite(perEmployeeSeconds) || perEmployeeSeconds <= 0) {
       const matchingKey = mapKeys.find(key => key.toLowerCase() === normalizedFreelancer);
@@ -3888,7 +3928,7 @@ async function getScreenshotInterval(userEmail, sessionId) {
       Number.isFinite(perEmployeeSeconds) && perEmployeeSeconds > 0
         ? perEmployeeSeconds
         : DEFAULT_INTERVAL_SECONDS;
-    
+
     if (intervalSeconds === DEFAULT_INTERVAL_SECONDS) {
       logWarn('ScreenshotInterval', `No interval found for ${normalizedFreelancer} in map, using default ${DEFAULT_INTERVAL_SECONDS} seconds`);
     }
@@ -4040,12 +4080,12 @@ ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
   const startTime = Date.now();
   console.log('[IPC] frappe:get-or-create-timesheet called at', new Date().toISOString());
   console.log('[IPC] Payload received:', JSON.stringify(payload, null, 2));
-  
+
   try {
     const result = await callWithTimeout(getOrCreateTimesheet(payload));
     const duration = Date.now() - startTime;
     console.log('[IPC] frappe:get-or-create-timesheet SUCCESS in', duration, 'ms');
-    console.log('[IPC] Result:', JSON.stringify(result, null, 2));
+    // console.log('[IPC] Result:', JSON.stringify(result, null, 2));
     return result;
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -4053,12 +4093,12 @@ ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
     console.error('[IPC] Error name:', error?.name);
     console.error('[IPC] Error message:', error?.message);
     console.error('[IPC] Error stack:', error?.stack);
-    
+
     if (error?.response) {
       console.error('[IPC] Error response status:', error.response.status);
-      console.error('[IPC] Error response data:', JSON.stringify(error.response.data, null, 2));
+      // console.error('[IPC] Error response data:', JSON.stringify(error.response.data, null, 2));
     }
-    
+
     if (error?.config) {
       console.error('[IPC] Request config:', {
         url: error.config?.url,
@@ -4066,8 +4106,8 @@ ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
         data: error.config?.data
       });
     }
-    
-    console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+
+    //console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
     throw error;
   }
 });
@@ -4075,13 +4115,13 @@ ipcMain.handle('frappe:get-or-create-timesheet', async (_e, payload) => {
 ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
   const startTime = Date.now();
   console.log('[IPC] frappe:start-timesheet-session called at', new Date().toISOString());
-  console.log('[IPC] Payload received:', JSON.stringify(payload, null, 2));
-  
+  // console.log('[IPC] Payload received:', JSON.stringify(payload, null, 2));
+
   try {
     const result = await callWithTimeout(startTimesheetSession(payload));
     const duration = Date.now() - startTime;
     console.log('[IPC] frappe:start-timesheet-session SUCCESS in', duration, 'ms');
-    console.log('[IPC] Result:', JSON.stringify(result, null, 2));
+    // console.log('[IPC] Result:', JSON.stringify(result, null, 2));
     return result;
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -4089,12 +4129,12 @@ ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
     console.error('[IPC] Error name:', error?.name);
     console.error('[IPC] Error message:', error?.message);
     console.error('[IPC] Error stack:', error?.stack);
-    
+
     if (error?.response) {
       console.error('[IPC] Error response status:', error.response.status);
       console.error('[IPC] Error response data:', JSON.stringify(error.response.data, null, 2));
     }
-    
+
     if (error?.config) {
       console.error('[IPC] Request config:', {
         url: error.config?.url,
@@ -4102,8 +4142,8 @@ ipcMain.handle('frappe:start-timesheet-session', async (_e, payload) => {
         data: error.config?.data
       });
     }
-    
-    console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+
+    // console.error('[IPC] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
     throw error;
   }
 });
@@ -4392,7 +4432,7 @@ ipcMain.handle('queue-screenshot-upload', async (event, { userEmail, sessionId, 
 ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionId, supabaseSessionId, frappeProjectId, frappeTaskId) => {
   const startTime = Date.now();
   global.timerStartTime = startTime; // Store globally for timing calculations
-  
+
   if (backgroundScreenshotInterval) {
     clearTimeout(backgroundScreenshotInterval);
     backgroundScreenshotInterval = null;
@@ -4402,12 +4442,12 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   // Store numeric Supabase session ID separately for time_session_id column
   // This will be used when adding screenshots to batch
   currentSupabaseSessionId = supabaseSessionId || null;
-  
+
   // Try to fetch frappe IDs from time_sessions table first (most reliable)
   // Fall back to passed values if not found in database
   let resolvedFrappeProjectId = frappeProjectId || null;
   let resolvedFrappeTaskId = frappeTaskId || null;
-  
+
   try {
     const supabase = getSupabaseClient();
     if (supabase && sessionId) {
@@ -4419,7 +4459,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           .select('frappe_project_id, frappe_task_id')
           .eq('id', numericSessionId)
           .maybeSingle();
-        
+
         if (!sessionError && sessionData) {
           if (sessionData.frappe_project_id) {
             resolvedFrappeProjectId = sessionData.frappe_project_id;
@@ -4438,7 +4478,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           .select('frappe_project_id, frappe_task_id')
           .eq('frappe_timesheet_id', sessionId)
           .maybeSingle();
-        
+
         if (!sessionError && sessionData) {
           if (sessionData.frappe_project_id) {
             resolvedFrappeProjectId = sessionData.frappe_project_id;
@@ -4455,10 +4495,10 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
     logWarn('IPC', `Failed to fetch frappe IDs from time_sessions: ${error.message}`);
     // Continue with passed values
   }
-  
+
   currentFrappeProjectId = resolvedFrappeProjectId;
   currentFrappeTaskId = resolvedFrappeTaskId;
-  
+
   logInfo('IPC', `Background screenshots starting with frappe_project_id: ${currentFrappeProjectId}, frappe_task_id: ${currentFrappeTaskId}`);
   isBackgroundCaptureActive = true;
 
@@ -4483,12 +4523,12 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
         scheduleNextScreenshot(); // Reschedule even if skipped
         return;
       }
-      
+
       isBackgroundTickRunning = true;
       const captureStartTime = Date.now();
       const timeSinceStart = global.timerStartTime ? captureStartTime - global.timerStartTime : 0;
       sendToRendererConsole("Capture triggered at:", timeSinceStart, "ms since timer start");
-      
+
       // Set a timeout to ensure we don't block indefinitely
       const captureTimeout = setTimeout(() => {
         if (isBackgroundTickRunning) {
@@ -4496,17 +4536,17 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
           isBackgroundTickRunning = false;
         }
       }, 30000); // 30 second timeout
-      
+
       try {
         await backgroundCaptureScreenshots();
       } catch (error) {
         const errorMessage = error?.message || String(error) || 'Unknown error';
         const errorStack = error?.stack || 'No stack trace available';
-        
+
         // Get permission status for context
         let permissionStatus = 'unknown';
         let permissionGranted = false;
-        
+
         if (process.platform === 'darwin') {
           try {
             permissionStatus = checkMacOSScreenRecordingPermission();
@@ -4515,15 +4555,15 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
             logWarn('BG-UPLOAD', `Failed to check permission in error handler: ${permError?.message}`);
           }
         }
-        
+
         const detailedError = 'BACKGROUND SCREENSHOT CAPTURE FAILED: Exception Occurred\n' +
-                             '═══════════════════════════════════════════════════════\n' +
-                             `Error: ${errorMessage}\n\n` +
-                             `Permission Status: ${permissionStatus}\n` +
-                             `Permission Granted: ${permissionGranted}\n\n` +
-                             `Stack Trace:\n${errorStack}\n\n` +
-                             'This error occurred during background screenshot capture. Check the logs above for more details.';
-        
+          '═══════════════════════════════════════════════════════\n' +
+          `Error: ${errorMessage}\n\n` +
+          `Permission Status: ${permissionStatus}\n` +
+          `Permission Granted: ${permissionGranted}\n\n` +
+          `Stack Trace:\n${errorStack}\n\n` +
+          'This error occurred during background screenshot capture. Check the logs above for more details.';
+
         logError('BG-UPLOAD', `[BACKGROUND CAPTURE] ${detailedError}`);
         logError('BG-UPLOAD', 'Error capturing screenshot:', error);
       } finally {
@@ -4544,14 +4584,14 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   logInfo('IPC', `First screenshot: immediate (at 0 seconds)`);
   logInfo('IPC', `Screenshot interval: ${intervalMs}ms`);
   logInfo('IPC', `Random interval range: ${Math.floor(intervalMs * 0.7)}ms - ${Math.floor(intervalMs * 1.2)}ms`);
-  
+
   const allDisplays = screen.getAllDisplays();
   logInfo('IPC', `Detected ${allDisplays.length} display(s) at startup:`);
   allDisplays.forEach((display, idx) => {
     logInfo('IPC', `  Display ${idx + 1}: ID=${display.id}, ${display.size.width}x${display.size.height}, bounds: (${display.bounds.x}, ${display.bounds.y})`);
   });
   logInfo('IPC', '===========================================================');
-  
+
   // Capture first screenshot immediately
   const captureTriggerTime = Date.now() - startTime;
   sendToRendererConsole("Capture triggered at:", captureTriggerTime, "ms since timer start");
@@ -4559,7 +4599,7 @@ ipcMain.handle('start-background-screenshots', async (event, userEmail, sessionI
   backgroundCaptureScreenshots();
   // Schedule subsequent screenshots with random intervals (70%-120% of interval)
   scheduleNextScreenshot();
-  
+
   logInfo('IPC', `Background screenshots started with random intervals between ${Math.floor(intervalMs * 0.7)}ms and ${Math.floor(intervalMs * 1.2)}ms`);
   return true;
 });
@@ -4576,6 +4616,28 @@ ipcMain.handle('stop-background-screenshots', async () => {
   return true;
 });
 
+ipcMain.handle('capture-background-screenshot-now', async () => {
+  try {
+    if (!currentUserEmail || !currentSessionId) {
+      logWarn('IPC', 'Skipping manual background screenshot: missing session context');
+      return { ok: false, skipped: true, reason: 'missing_session_context' };
+    }
+    if (isBackgroundTickRunning) {
+      logWarn('IPC', 'Skipping manual background screenshot: capture already in progress');
+      return { ok: false, skipped: true, reason: 'capture_in_progress' };
+    }
+
+    isBackgroundTickRunning = true;
+    await backgroundCaptureScreenshots();
+    return { ok: true };
+  } catch (error) {
+    logError('IPC', 'Manual background screenshot capture failed:', error);
+    return { ok: false, error: error?.message || 'unknown_error' };
+  } finally {
+    isBackgroundTickRunning = false;
+  }
+});
+
 ipcMain.handle('update-background-screenshot-session-id', async (event, supabaseSessionId) => {
   // Update the numeric Supabase session ID for background screenshots
   // This is called after the session is created in the database
@@ -4590,7 +4652,7 @@ ipcMain.handle('get-screenshot-batch-status', () => {
   const hasSupabase = !!supabase;
   const supabaseUrl = process.env.SUPABASE_URL || 'NOT SET';
   const hasServiceKey = !!(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY);
-  
+
   return {
     queueSize: screenshotBatchQueue.length,
     batchSize: SCREENSHOT_BATCH_SIZE,
@@ -4628,9 +4690,9 @@ ipcMain.handle('capture-screen', async () => {
   try {
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.size;
-    
+
     logInfo('IPC', `[capture-screen] Capturing primary screen: ${width}x${height}`);
-    
+
     let sources;
     try {
       sources = await desktopCapturer.getSources({
@@ -4639,11 +4701,11 @@ ipcMain.handle('capture-screen', async () => {
       });
     } catch (capturerError) {
       const errorMsg = capturerError?.message || capturerError?.toString() || String(capturerError) || 'Unknown error';
-      
+
       // Get detailed permission status for error analysis
       let permissionStatus = 'unknown';
       let permissionGranted = false;
-      
+
       if (process.platform === 'darwin') {
         try {
           permissionStatus = checkMacOSScreenRecordingPermission();
@@ -4652,51 +4714,51 @@ ipcMain.handle('capture-screen', async () => {
           logWarn('IPC', `[capture-screen] Failed to check permission: ${permError?.message}`);
         }
       }
-      
+
       const detailedError = 'SCREENSHOT CAPTURE FAILED: desktopCapturer Error (capture-screen)\n' +
-                           '═══════════════════════════════════════════════════════\n' +
-                           `Error: ${errorMsg}\n\n` +
-                           `Permission Status: ${permissionStatus}\n` +
-                           `Permission Granted: ${permissionGranted}\n` +
-                           `Primary Display: ${width}x${height}\n\n` +
-                           'Check System Settings → Privacy & Security → Screen Recording for permission status.';
-      
+        '═══════════════════════════════════════════════════════\n' +
+        `Error: ${errorMsg}\n\n` +
+        `Permission Status: ${permissionStatus}\n` +
+        `Permission Granted: ${permissionGranted}\n` +
+        `Primary Display: ${width}x${height}\n\n` +
+        'Check System Settings → Privacy & Security → Screen Recording for permission status.';
+
       logError('IPC', `[capture-screen] ${detailedError}`);
       logError('IPC', '[capture-screen] desktopCapturer.getSources() failed:', capturerError);
       return null;
     }
-    
+
     if (!sources || sources.length === 0) {
       // No sources returned - log detailed analysis
       let permissionStatus = 'unknown';
       let permissionGranted = false;
-      
+
       if (process.platform === 'darwin') {
         permissionStatus = checkMacOSScreenRecordingPermission();
         permissionGranted = permissionStatus === 'granted';
-        
+
         const detailedError = 'SCREENSHOT CAPTURE FAILED: No Sources Available (capture-screen)\n' +
-                             '═══════════════════════════════════════════════════════\n' +
-                             `Permission Status: ${permissionStatus}\n` +
-                             `Permission Granted: ${permissionGranted}\n` +
-                             `Primary Display: ${width}x${height}\n\n` +
-                             'Check System Settings → Privacy & Security → Screen Recording.';
-        
+          '═══════════════════════════════════════════════════════\n' +
+          `Permission Status: ${permissionStatus}\n` +
+          `Permission Granted: ${permissionGranted}\n` +
+          `Primary Display: ${width}x${height}\n\n` +
+          'Check System Settings → Privacy & Security → Screen Recording.';
+
         logError('IPC', `[capture-screen] ${detailedError}`);
       } else {
         logWarn('IPC', '[capture-screen] No screen sources returned');
       }
-      
+
       return null;
     }
-    
+
     const screenshotData = sources[0].thumbnail.toDataURL('image/png');
     logInfo('IPC', `[capture-screen] Successfully captured screenshot: ${screenshotData.length} bytes`);
     return screenshotData;
   } catch (e) {
     const errorMessage = e?.message || String(e) || 'Unknown error';
     const errorStack = e?.stack || 'No stack trace available';
-    
+
     // Get permission status for context
     let permissionStatus = 'unknown';
     if (process.platform === 'darwin') {
@@ -4706,13 +4768,13 @@ ipcMain.handle('capture-screen', async () => {
         logWarn('IPC', `[capture-screen] Failed to check permission in error handler: ${permError?.message}`);
       }
     }
-    
+
     const detailedError = 'SCREENSHOT CAPTURE FAILED: Exception (capture-screen)\n' +
-                         '═══════════════════════════════════════════════════════\n' +
-                         `Error: ${errorMessage}\n` +
-                         `Permission Status: ${permissionStatus}\n\n` +
-                         `Stack Trace:\n${errorStack}`;
-    
+      '═══════════════════════════════════════════════════════\n' +
+      `Error: ${errorMessage}\n` +
+      `Permission Status: ${permissionStatus}\n\n` +
+      `Stack Trace:\n${errorStack}`;
+
     logError('IPC', `[capture-screen] ${detailedError}`);
     logError('IPC', '[capture-screen] Failed with exception:', e);
     return null;
@@ -4761,12 +4823,12 @@ ipcMain.handle('capture-all-screens', async () => {
       // 3) Fallback to provided order
       return { screenIndex, screenName };
     };
-    
+
     logInfo('IPC', `[capture-all-screens] Detected ${displays.length} display(s)`);
     displays.forEach((display, idx) => {
       logInfo('IPC', `[capture-all-screens] Display ${idx + 1}: ${display.size.width}x${display.size.height} (scale: ${display.scaleFactor})`);
     });
-    
+
     // Get all screen sources using desktopCapturer.getSources()
     // Primary permission status is checked via systemPreferences.getMediaAccessStatus('screen')
     // This call gets the actual screen sources for capturing. If permission is granted, it will return sources.
@@ -4774,9 +4836,9 @@ ipcMain.handle('capture-all-screens', async () => {
     const allDisplays = screen.getAllDisplays();
     const maxWidth = Math.max(...allDisplays.map(d => d.size.width));
     const maxHeight = Math.max(...allDisplays.map(d => d.size.height));
-    
+
     logInfo('IPC', `[capture-all-screens] Requesting sources with thumbnailSize: ${maxWidth}x${maxHeight}`);
-    
+
     let sources;
     try {
       logInfo('IPC', '[capture-all-screens] Calling desktopCapturer.getSources() with types: ["screen"]...');
@@ -4787,7 +4849,7 @@ ipcMain.handle('capture-all-screens', async () => {
       });
       const duration = Date.now() - startTime;
       logInfo('IPC', `[capture-all-screens] desktopCapturer.getSources() completed in ${duration}ms, returned ${sources?.length || 0} source(s)`);
-      
+
       if (sources && Array.isArray(sources)) {
         logInfo('IPC', `[capture-all-screens] Sources array type: ${typeof sources}, isArray: ${Array.isArray(sources)}, length: ${sources.length}`);
       } else {
@@ -4802,7 +4864,7 @@ ipcMain.handle('capture-all-screens', async () => {
         permissionGranted: false
       };
     }
-    
+
     // Update permission cache based on actual result from desktopCapturer
     // This is a secondary check - primary status comes from systemPreferences
     if (process.platform === 'darwin') {
@@ -4824,7 +4886,7 @@ ipcMain.handle('capture-all-screens', async () => {
         }
       }
     }
-    
+
     if (sources && sources.length > 0) {
       sources.forEach((source, idx) => {
         logInfo('IPC', `[capture-all-screens] Source ${idx + 1}: id="${source.id}", name="${source.name}"`);
@@ -4832,120 +4894,120 @@ ipcMain.handle('capture-all-screens', async () => {
     } else {
       logWarn('IPC', '[capture-all-screens] ⚠️ No screen sources found! Check macOS screen recording permissions.');
     }
-    
+
     if (!sources || sources.length === 0) {
       logWarn('IPC', `[capture-all-screens] No screen sources found (sources=${sources}, length=${sources?.length}) - checking permission status...`);
-      
+
       // Get detailed permission status and error information
       let detailedError = '';
       let permissionGranted = false;
       let permissionStatus = 'unknown';
-      
+
       if (process.platform === 'darwin') {
         // Get detailed permission status
         permissionStatus = checkMacOSScreenRecordingPermission();
         permissionGranted = permissionStatus === 'granted';
-        
+
         logWarn('IPC', `[capture-all-screens] Detailed permission status check:`);
         logWarn('IPC', `  - Permission Status: ${permissionStatus}`);
         logWarn('IPC', `  - Permission Granted: ${permissionGranted}`);
         logWarn('IPC', `  - Cached Status: ${cachedScreenRecordingPermission}`);
         logWarn('IPC', `  - Display Count: ${displays.length}`);
         logWarn('IPC', `  - Requested Size: ${maxWidth}x${maxHeight}`);
-        
+
         // Build detailed error message
         if (permissionStatus === 'granted') {
           detailedError = 'SCREENSHOT CAPTURE FAILED: Permission Status Analysis\n' +
-                         '═══════════════════════════════════════════════════════\n' +
-                         'Status: Screen recording permission is GRANTED\n' +
-                         'Problem: desktopCapturer.getSources() returned 0 sources\n' +
-                         'Possible Causes:\n' +
-                         '  1. App needs to be restarted after permission was granted\n' +
-                         '  2. macOS TCC (Transparency, Consent, and Control) cache needs refresh\n' +
-                         '  3. Bundle ID mismatch between app and permission record\n' +
-                         '  4. System-level issue with screen capture API\n\n' +
-                         'Recommended Actions:\n' +
-                         '  1. Quit and restart the Time Tracker app completely\n' +
-                         '  2. If problem persists, check System Settings → Privacy & Security → Screen Recording\n' +
-                         '  3. Verify "Time Tracker" appears in the list with toggle enabled\n' +
-                         '  4. Try toggling the permission off and back on\n' +
-                         '  5. Restart your Mac if issue continues\n\n' +
-                         'Technical Details:\n' +
-                         `  - Permission Status: ${permissionStatus}\n` +
-                         `  - Displays Detected: ${displays.length}\n` +
-                         `  - Sources Returned: 0\n` +
-                         `  - Requested Thumbnail Size: ${maxWidth}x${maxHeight}\n`;
+            '═══════════════════════════════════════════════════════\n' +
+            'Status: Screen recording permission is GRANTED\n' +
+            'Problem: desktopCapturer.getSources() returned 0 sources\n' +
+            'Possible Causes:\n' +
+            '  1. App needs to be restarted after permission was granted\n' +
+            '  2. macOS TCC (Transparency, Consent, and Control) cache needs refresh\n' +
+            '  3. Bundle ID mismatch between app and permission record\n' +
+            '  4. System-level issue with screen capture API\n\n' +
+            'Recommended Actions:\n' +
+            '  1. Quit and restart the Time Tracker app completely\n' +
+            '  2. If problem persists, check System Settings → Privacy & Security → Screen Recording\n' +
+            '  3. Verify "Time Tracker" appears in the list with toggle enabled\n' +
+            '  4. Try toggling the permission off and back on\n' +
+            '  5. Restart your Mac if issue continues\n\n' +
+            'Technical Details:\n' +
+            `  - Permission Status: ${permissionStatus}\n` +
+            `  - Displays Detected: ${displays.length}\n` +
+            `  - Sources Returned: 0\n` +
+            `  - Requested Thumbnail Size: ${maxWidth}x${maxHeight}\n`;
         } else if (permissionStatus === 'denied') {
           detailedError = 'SCREENSHOT CAPTURE FAILED: Permission Denied\n' +
-                         '═══════════════════════════════════════════════════════\n' +
-                         'Status: Screen recording permission is DENIED\n' +
-                         'Problem: User has denied or not granted screen recording permission\n\n' +
-                         'Required Action:\n' +
-                         '  1. Open System Settings → Privacy & Security → Screen Recording\n' +
-                         '  2. Find "Time Tracker" in the list\n' +
-                         '  3. Enable the toggle next to "Time Tracker"\n' +
-                         '  4. You may be prompted to enter your password\n' +
-                         '  5. Quit and restart the Time Tracker app\n\n' +
-                         'Note: The app needs this permission to capture screenshots for time tracking.\n' +
-                         'Without it, screenshot capture will fail.\n\n' +
-                         'Technical Details:\n' +
-                         `  - Permission Status: ${permissionStatus}\n` +
-                         `  - Displays Detected: ${displays.length}\n` +
-                         `  - Sources Returned: 0\n`;
+            '═══════════════════════════════════════════════════════\n' +
+            'Status: Screen recording permission is DENIED\n' +
+            'Problem: User has denied or not granted screen recording permission\n\n' +
+            'Required Action:\n' +
+            '  1. Open System Settings → Privacy & Security → Screen Recording\n' +
+            '  2. Find "Time Tracker" in the list\n' +
+            '  3. Enable the toggle next to "Time Tracker"\n' +
+            '  4. You may be prompted to enter your password\n' +
+            '  5. Quit and restart the Time Tracker app\n\n' +
+            'Note: The app needs this permission to capture screenshots for time tracking.\n' +
+            'Without it, screenshot capture will fail.\n\n' +
+            'Technical Details:\n' +
+            `  - Permission Status: ${permissionStatus}\n` +
+            `  - Displays Detected: ${displays.length}\n` +
+            `  - Sources Returned: 0\n`;
         } else if (permissionStatus === 'not-determined') {
           detailedError = 'SCREENSHOT CAPTURE FAILED: Permission Not Determined\n' +
-                         '═══════════════════════════════════════════════════════\n' +
-                         'Status: Screen recording permission has NOT been requested yet\n' +
-                         'Problem: macOS has not shown the permission prompt to the user\n\n' +
-                         'What to Expect:\n' +
-                         '  - macOS will automatically show a permission prompt when you start tracking\n' +
-                         '  - Or you can manually enable it in System Settings\n\n' +
-                         'Required Action:\n' +
-                         '  1. Start time tracking - macOS will prompt you for permission\n' +
-                         '  2. Click "OK" when macOS asks for screen recording permission\n' +
-                         '  3. Alternatively, go to System Settings → Privacy & Security → Screen Recording\n' +
-                         '  4. Enable "Time Tracker" in the list\n' +
-                         '  5. Restart the app after granting permission\n\n' +
-                         'Technical Details:\n' +
-                         `  - Permission Status: ${permissionStatus}\n` +
-                         `  - Displays Detected: ${displays.length}\n` +
-                         `  - Sources Returned: 0\n`;
+            '═══════════════════════════════════════════════════════\n' +
+            'Status: Screen recording permission has NOT been requested yet\n' +
+            'Problem: macOS has not shown the permission prompt to the user\n\n' +
+            'What to Expect:\n' +
+            '  - macOS will automatically show a permission prompt when you start tracking\n' +
+            '  - Or you can manually enable it in System Settings\n\n' +
+            'Required Action:\n' +
+            '  1. Start time tracking - macOS will prompt you for permission\n' +
+            '  2. Click "OK" when macOS asks for screen recording permission\n' +
+            '  3. Alternatively, go to System Settings → Privacy & Security → Screen Recording\n' +
+            '  4. Enable "Time Tracker" in the list\n' +
+            '  5. Restart the app after granting permission\n\n' +
+            'Technical Details:\n' +
+            `  - Permission Status: ${permissionStatus}\n` +
+            `  - Displays Detected: ${displays.length}\n` +
+            `  - Sources Returned: 0\n`;
         } else if (permissionStatus === 'restricted') {
           detailedError = 'SCREENSHOT CAPTURE FAILED: Permission Restricted\n' +
-                         '═══════════════════════════════════════════════════════\n' +
-                         'Status: Screen recording permission is RESTRICTED\n' +
-                         'Problem: Permission is restricted by parental controls, MDM, or enterprise policy\n\n' +
-                         'Possible Causes:\n' +
-                         '  - Parental controls are enabled and blocking screen recording\n' +
-                         '  - MDM (Mobile Device Management) policy is restricting access\n' +
-                         '  - Enterprise/administrator restrictions\n\n' +
-                         'Required Action:\n' +
-                         '  - Contact your system administrator or remove restrictions\n' +
-                         '  - Check System Settings → Privacy & Security → Screen Recording\n\n' +
-                         'Technical Details:\n' +
-                         `  - Permission Status: ${permissionStatus}\n` +
-                         `  - Displays Detected: ${displays.length}\n` +
-                         `  - Sources Returned: 0\n`;
+            '═══════════════════════════════════════════════════════\n' +
+            'Status: Screen recording permission is RESTRICTED\n' +
+            'Problem: Permission is restricted by parental controls, MDM, or enterprise policy\n\n' +
+            'Possible Causes:\n' +
+            '  - Parental controls are enabled and blocking screen recording\n' +
+            '  - MDM (Mobile Device Management) policy is restricting access\n' +
+            '  - Enterprise/administrator restrictions\n\n' +
+            'Required Action:\n' +
+            '  - Contact your system administrator or remove restrictions\n' +
+            '  - Check System Settings → Privacy & Security → Screen Recording\n\n' +
+            'Technical Details:\n' +
+            `  - Permission Status: ${permissionStatus}\n` +
+            `  - Displays Detected: ${displays.length}\n` +
+            `  - Sources Returned: 0\n`;
         } else {
           detailedError = 'SCREENSHOT CAPTURE FAILED: Unknown Permission Status\n' +
-                         '═══════════════════════════════════════════════════════\n' +
-                         `Status: Permission status could not be determined (${permissionStatus})\n` +
-                         'Problem: Unable to check screen recording permission status\n\n' +
-                         'Recommended Actions:\n' +
-                         '  1. Check System Settings → Privacy & Security → Screen Recording\n' +
-                         '  2. Verify "Time Tracker" appears in the list\n' +
-                         '  3. Ensure the toggle is enabled\n' +
-                         '  4. Restart the app\n\n' +
-                         'Technical Details:\n' +
-                         `  - Permission Status: ${permissionStatus}\n` +
-                         `  - Displays Detected: ${displays.length}\n` +
-                         `  - Sources Returned: 0\n` +
-                         `  - Cached Status: ${cachedScreenRecordingPermission}\n`;
+            '═══════════════════════════════════════════════════════\n' +
+            `Status: Permission status could not be determined (${permissionStatus})\n` +
+            'Problem: Unable to check screen recording permission status\n\n' +
+            'Recommended Actions:\n' +
+            '  1. Check System Settings → Privacy & Security → Screen Recording\n' +
+            '  2. Verify "Time Tracker" appears in the list\n' +
+            '  3. Ensure the toggle is enabled\n' +
+            '  4. Restart the app\n\n' +
+            'Technical Details:\n' +
+            `  - Permission Status: ${permissionStatus}\n` +
+            `  - Displays Detected: ${displays.length}\n` +
+            `  - Sources Returned: 0\n` +
+            `  - Cached Status: ${cachedScreenRecordingPermission}\n`;
         }
-        
+
         // Log the detailed error
         logError('IPC', `[capture-all-screens] ${detailedError}`);
-        
+
         if (permissionGranted) {
           return {
             screenshots: [],
@@ -4957,19 +5019,19 @@ ipcMain.handle('capture-all-screens', async () => {
       } else {
         // Non-macOS platform
         detailedError = 'SCREENSHOT CAPTURE FAILED: No Sources Available\n' +
-                       '═══════════════════════════════════════════════════════\n' +
-                       'Problem: desktopCapturer.getSources() returned 0 sources\n\n' +
-                       'Possible Causes:\n' +
-                       '  1. No displays connected\n' +
-                       '  2. Platform-specific limitation\n' +
-                       '  3. Screen capture API error\n\n' +
-                       'Technical Details:\n' +
-                       `  - Platform: ${process.platform}\n` +
-                       `  - Displays Detected: ${displays.length}\n` +
-                       `  - Sources Returned: 0\n`;
+          '═══════════════════════════════════════════════════════\n' +
+          'Problem: desktopCapturer.getSources() returned 0 sources\n\n' +
+          'Possible Causes:\n' +
+          '  1. No displays connected\n' +
+          '  2. Platform-specific limitation\n' +
+          '  3. Screen capture API error\n\n' +
+          'Technical Details:\n' +
+          `  - Platform: ${process.platform}\n` +
+          `  - Displays Detected: ${displays.length}\n` +
+          `  - Sources Returned: 0\n`;
         logError('IPC', `[capture-all-screens] ${detailedError}`);
       }
-      
+
       return {
         screenshots: [],
         error: 'No screen sources available. Please check screen recording permissions in System Settings → Privacy & Security → Screen Recording.',
@@ -4978,7 +5040,7 @@ ipcMain.handle('capture-all-screens', async () => {
         permissionStatus: permissionStatus
       };
     }
-    
+
     // Map each source to a screenshot object with dataURL and name
     for (const source of sources) {
       try {
@@ -4993,7 +5055,7 @@ ipcMain.handle('capture-all-screens', async () => {
         logError('IPC', `[capture-all-screens] Failed to convert thumbnail to dataURL for source ${source.id}: ${thumbError.message}`);
       }
     }
-    
+
     logInfo('IPC', `[capture-all-screens] Captured ${screenshots.length} screen(s) successfully`);
     return {
       screenshots: screenshots,
@@ -5003,11 +5065,11 @@ ipcMain.handle('capture-all-screens', async () => {
   } catch (e) {
     const errorMessage = e?.message || String(e) || 'Unknown error';
     const errorStack = e?.stack || 'No stack trace available';
-    
+
     // Get permission status for context
     let permissionStatus = 'unknown';
     let permissionGranted = false;
-    
+
     if (process.platform === 'darwin') {
       try {
         permissionStatus = checkMacOSScreenRecordingPermission();
@@ -5016,23 +5078,23 @@ ipcMain.handle('capture-all-screens', async () => {
         logWarn('IPC', `[capture-all-screens] Failed to check permission in error handler: ${permError?.message}`);
       }
     }
-    
+
     const detailedError = 'SCREENSHOT CAPTURE FAILED: Exception Occurred\n' +
-                         '═══════════════════════════════════════════════════════\n' +
-                         `Error: ${errorMessage}\n\n` +
-                         `Permission Status: ${permissionStatus}\n` +
-                         `Permission Granted: ${permissionGranted}\n\n` +
-                         'Stack Trace:\n' +
-                         `${errorStack}\n\n` +
-                         'This error occurred during screenshot capture. Check the logs above for more details.';
-    
+      '═══════════════════════════════════════════════════════\n' +
+      `Error: ${errorMessage}\n\n` +
+      `Permission Status: ${permissionStatus}\n` +
+      `Permission Granted: ${permissionGranted}\n\n` +
+      'Stack Trace:\n' +
+      `${errorStack}\n\n` +
+      'This error occurred during screenshot capture. Check the logs above for more details.';
+
     logError('IPC', `[capture-all-screens] Failed with exception:`);
     logError('IPC', `  Error Message: ${errorMessage}`);
     logError('IPC', `  Permission Status: ${permissionStatus}`);
     logError('IPC', `  Permission Granted: ${permissionGranted}`);
     logError('IPC', `  Stack Trace: ${errorStack}`);
     logError('IPC', `[capture-all-screens] ${detailedError}`);
-    
+
     return {
       screenshots: [],
       error: `Screenshot capture failed: ${errorMessage}`,
@@ -5054,18 +5116,18 @@ ipcMain.handle('check-screen-permission', async () => {
         platform: process.platform
       };
     }
-    
+
     const hasPermission = await checkScreenRecordingPermission();
-    
-    return { 
+
+    return {
       ok: true,
       hasPermission: hasPermission,
       platform: process.platform
     };
   } catch (error) {
     logWarn('Permissions', `check-screen-permission error: ${error?.message}`);
-    return { 
-      ok: false, 
+    return {
+      ok: false,
       hasPermission: false,
       error: error?.message
     };
@@ -5157,12 +5219,12 @@ async function checkTCCDatabaseEntries(bundleId) {
         });
 
         // Check for specific services
-        const screenCaptureEntry = result.entries.find(e => 
-          e.service === 'kTCCServiceScreenCapture' || 
+        const screenCaptureEntry = result.entries.find(e =>
+          e.service === 'kTCCServiceScreenCapture' ||
           (e.service && e.service.includes('ScreenCapture'))
         );
-        const accessibilityEntry = result.entries.find(e => 
-          e.service === 'kTCCServiceAccessibility' || 
+        const accessibilityEntry = result.entries.find(e =>
+          e.service === 'kTCCServiceAccessibility' ||
           (e.service && e.service.includes('Accessibility'))
         );
 
@@ -5210,11 +5272,11 @@ ipcMain.handle('diagnose-screen-capture', async () => {
   // Clear cache for fresh diagnostic check
   cachedScreenRecordingPermission = null;
   permissionCheckTimestamp = 0;
-  
+
   const bundleId = process.platform === 'darwin' ? getMacOSBundleId() : null;
   const appName = app.getName();
   const isPackaged = app.isPackaged;
-  
+
   const diagnostics = {
     platform: process.platform,
     appName: appName,
@@ -5229,7 +5291,7 @@ ipcMain.handle('diagnose-screen-capture', async () => {
     timestamp: new Date().toISOString(),
     troubleshooting: []
   };
-  
+
   try {
     // Get all displays
     const displays = screen.getAllDisplays();
@@ -5240,12 +5302,12 @@ ipcMain.handle('diagnose-screen-capture', async () => {
       scaleFactor: display.scaleFactor,
       primary: display === screen.getPrimaryDisplay()
     }));
-    
+
     if (displays.length === 0) {
       diagnostics.troubleshooting.push('WARNING: No displays detected. This may indicate a system issue.');
       logWarn('DIAGNOSTIC', 'No displays detected - this is unusual');
     }
-    
+
     // Check permission status via systemPreferences (reliable method)
     if (process.platform === 'darwin') {
       try {
@@ -5254,19 +5316,19 @@ ipcMain.handle('diagnose-screen-capture', async () => {
         diagnostics.permissionStatus = status; // 'granted', 'denied', 'not-determined', etc.
         diagnostics.permissions = status; // For backward compatibility
         diagnostics.permissionCheck = status === 'granted'; // Boolean for backward compatibility
-        
+
         logInfo('DIAGNOSTIC', `Permission status (via systemPreferences): ${status}`);
         logInfo('DIAGNOSTIC', `Bundle ID: ${bundleId || 'unknown'}`);
         logInfo('DIAGNOSTIC', `App Name: ${appName}`);
         logInfo('DIAGNOSTIC', `Is Packaged: ${isPackaged}`);
-        
+
         // Add troubleshooting steps based on status
         if (status === 'denied') {
           diagnostics.troubleshooting.push('Permission status is DENIED in TCC database.');
           diagnostics.troubleshooting.push(`Make sure "Time Tracker" (not "Electron") is enabled in System Settings → Privacy & Security → Screen Recording`);
           diagnostics.troubleshooting.push(`Expected bundle ID: ${bundleId || 'com.supagigs.timetracker'}`);
           diagnostics.troubleshooting.push('After enabling permission, QUIT the app completely (Cmd+Q) and restart it.');
-          
+
           if (!isPackaged) {
             diagnostics.troubleshooting.push('⚠️ Running in DEV mode - permissions for dev builds are separate from packaged apps.');
             diagnostics.troubleshooting.push('If you granted permission to the packaged app, it won\'t work for dev mode and vice versa.');
@@ -5286,20 +5348,20 @@ ipcMain.handle('diagnose-screen-capture', async () => {
         logWarn('DIAGNOSTIC', `Permission check failed: ${permError?.message}`);
       }
     }
-    
+
     // Try to get screen sources - secondary verification (primary status from systemPreferences)
     let maxWidth = 1920;
     let maxHeight = 1080;
-    
+
     if (displays && displays.length > 0) {
       maxWidth = Math.max(...displays.map(d => d.size.width));
       maxHeight = Math.max(...displays.map(d => d.size.height));
     } else {
       logWarn('DIAGNOSTIC', 'No displays detected - using default thumbnail size');
     }
-    
+
     logInfo('DIAGNOSTIC', `Attempting desktopCapturer.getSources() with thumbnailSize: ${maxWidth}x${maxHeight}`);
-    
+
     let sources;
     try {
       sources = await desktopCapturer.getSources({
@@ -5312,22 +5374,22 @@ ipcMain.handle('diagnose-screen-capture', async () => {
       logError('DIAGNOSTIC', `desktopCapturer.getSources() failed: ${sourceError?.message}`, sourceError);
       sources = [];
     }
-    
+
     diagnostics.sources = (sources || []).map((source, idx) => ({
       index: idx + 1,
       id: source.id,
       name: source.name,
       thumbnailSize: source.thumbnail ? source.thumbnail.getSize() : null
     }));
-    
+
     // On macOS, use systemPreferences status as primary indicator
     // Sources check is secondary verification
     if (process.platform === 'darwin') {
       const statusFromSystemPreferences = diagnostics.permissionStatus || 'unknown';
-      
+
       // Primary status from systemPreferences (most reliable)
       diagnostics.permissions = statusFromSystemPreferences;
-      
+
       // Verify with sources if we have status
       if (statusFromSystemPreferences === 'granted') {
         if (!sources || sources.length === 0) {
@@ -5381,7 +5443,7 @@ ipcMain.handle('diagnose-screen-capture', async () => {
     } else {
       diagnostics.permissions = 'not_applicable';
     }
-    
+
     // Add TCC database check for macOS
     if (process.platform === 'darwin' && bundleId) {
       try {
@@ -5391,7 +5453,7 @@ ipcMain.handle('diagnose-screen-capture', async () => {
         logWarn('DIAGNOSTIC', `TCC database check failed: ${tccError?.message}`);
       }
     }
-    
+
     logInfo('DIAGNOSTIC', JSON.stringify(diagnostics, null, 2));
     return diagnostics;
   } catch (error) {
@@ -5417,7 +5479,7 @@ ipcMain.handle('save-active-session', async (event, sessionData) => {
 ipcMain.handle('save-session-before-close', async (event, sessionData) => {
   try {
     logInfo('IPC', 'save-session-before-close called', !!sessionData);
-    
+
     if (!sessionData) {
       return { saved: false, error: 'No session data provided' };
     }
@@ -5445,7 +5507,7 @@ ipcMain.handle('get-local-screenshots', async (event, email, startTime, endTime)
     const files = fs.readdirSync(dir);
     // simple filter - you can improve by parsing timestamps in filename if you have them
     const matched = files
-      .filter(f => typeof email === 'string' ? f.includes(email.replace(/@/g,'_at_')) : true)
+      .filter(f => typeof email === 'string' ? f.includes(email.replace(/@/g, '_at_')) : true)
       .map(f => path.join(dir, f));
     return matched;
   } catch (e) {
@@ -5560,6 +5622,15 @@ function safeQuitAndInstall() {
   }
 }
 
+ipcMain.handle('frappe:cleanup-and-start', async (_event, { timesheet, project, task, userEmail }) => {
+  try {
+    const rowId = await resolveRowForStart({ timesheet, project, task, userEmail });
+    return { success: true, rowId };
+  } catch (error) {
+    logError('App', `Cleanup/Start failed: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+});
 
 // ============ APP LIFECYCLE ============
 app.whenReady().then(() => {
@@ -5573,15 +5644,15 @@ app.whenReady().then(() => {
   // Enable cookie persistence for Frappe sessions
   // This allows the session cookie (sid) to persist across app restarts
   const defaultSession = session.defaultSession;
-  
+
   // Flush cookies to disk to ensure persistence
   defaultSession.cookies.flushStore().catch(err => {
     logWarn('Session', `Failed to flush cookie store: ${err.message}`);
   });
-  
+
   // Set up cookie persistence
   logInfo('Session', 'Cookie persistence enabled for Frappe sessions');
-  
+
   createWindow();
   // Register listeners FIRST
   autoUpdater.on('error', (err) => {
@@ -5597,12 +5668,12 @@ app.whenReady().then(() => {
   });
   // THEN trigger check
   if (app.isPackaged) {
-      try {
-        logInfo('Updater', 'Checking for updates...');
-        autoUpdater.checkForUpdates();
-      } catch (e) {
-        logWarn('Updater', 'Update check failed:', e.message);
-      }
+    try {
+      logInfo('Updater', 'Checking for updates...');
+      autoUpdater.checkForUpdates();
+    } catch (e) {
+      logWarn('Updater', 'Update check failed:', e.message);
+    }
 
   } else {
     logInfo('AutoUpdater', 'Skipping update check (dev mode)');
@@ -5611,16 +5682,16 @@ app.whenReady().then(() => {
   autoUpdater.on('update-downloaded', (info) => {
     logInfo('Updater', `Update downloaded: v${info.version}`);
     updateInfoCache = info;
-  
+
     if (isTimerActive) {
       updateDownloadedButDeferred = true;
       logInfo('Updater', 'Timer running → deferring update dialog');
       return;
     }
-  
+
     showUpdateDialogSafely();
   });
-  
+
 });
 
 function showUpdateDialogSafely() {
@@ -5685,11 +5756,11 @@ autoUpdater.on('before-quit-for-update', () => {
   isUpdateQuit = true;
 });
 app.on('before-quit', (event) => {
-    if (isTimerActive && updateInfoCache) {
-      logWarn('Updater', 'Blocked quit — timer still running');
-      e.preventDefault();
-    }
-  
+  if (isTimerActive && updateInfoCache) {
+    logWarn('Updater', 'Blocked quit — timer still running');
+    event.preventDefault();
+  }
+
 
   // If we're already flushing, prevent quit until flush completes
   if (isFlushingOnShutdown) {
@@ -5727,7 +5798,7 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   logInfo('App', 'Activate event triggered - checking if window needs restoration');
-  
+
   if (mainWindow === null || mainWindow.isDestroyed()) {
     logInfo('App', 'Main window is null or destroyed, creating new window');
     createWindow();
