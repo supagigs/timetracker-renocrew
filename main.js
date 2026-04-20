@@ -55,6 +55,42 @@ autoUpdater.on('error', (err) => {
 });
 
 
+// Helper function to prevent OS event spam
+function canProcessPowerEvent(eventName) {
+  const now = Date.now();
+  if (now - lastPowerEventTime < POWER_EVENT_COOLDOWN_MS) {
+    logInfo('PowerMonitor', `Ignored ${eventName} - too close to previous event.`);
+    return false;
+  }
+  lastPowerEventTime = now;
+  return true;
+}
+
+// Update your powerMonitor listeners to use the check:
+powerMonitor.on('suspend', () => {
+  if (!canProcessPowerEvent('suspend')) return;
+  logInfo('PowerMonitor', 'System suspended');
+  if (mainWindow) mainWindow.webContents.send('lock-suspend-clock-out');
+});
+
+powerMonitor.on('lock-screen', () => {
+  if (!canProcessPowerEvent('lock-screen')) return;
+  logInfo('PowerMonitor', 'Screen locked');
+  if (mainWindow) mainWindow.webContents.send('lock-suspend-clock-out');
+});
+
+powerMonitor.on('resume', () => {
+  if (!canProcessPowerEvent('resume')) return;
+  logInfo('PowerMonitor', 'System resumed');
+  if (mainWindow) mainWindow.webContents.send('unlock-resume-clock-in');
+});
+
+powerMonitor.on('unlock-screen', () => {
+  if (!canProcessPowerEvent('unlock-screen')) return;
+  logInfo('PowerMonitor', 'Screen unlocked');
+  if (mainWindow) mainWindow.webContents.send('unlock-resume-clock-in');
+});
+
 // Capture all screens once and queue uploads + per-screen toasts
 async function backgroundCaptureScreenshots() {
   try {
@@ -1332,8 +1368,9 @@ function createWindow() {
     }
 
     if (isTimerActive) {
+      // Stop default close behaviour while we ask the user
       event.preventDefault();
-
+    
       // Show native confirmation dialog (only when close icon or window-close is attempted)
       const resp = await dialog.showMessageBox(mainWindow, {
         type: 'warning',
@@ -1345,14 +1382,16 @@ function createWindow() {
         cancelId: 0,
         noLink: true
       });
-
+    
       // resp.response === 0 => Cancel, === 1 => Clock Out & Close
       if (resp.response === 0) {
         // user cancelled — do nothing, keep window open
         return;
       }
-
+    
+      // User chose "Clock Out & Close" — run your existing save flow (unchanged)
       try {
+        // the code below is your existing save-on-close flow (keeps current behavior)
         const savePromise = mainWindow.webContents.executeJavaScript(`
           new Promise(async (resolve) => {
             try {
@@ -1367,13 +1406,13 @@ function createWindow() {
             }
           })
         `);
-
+    
         const SAVE_ON_CLOSE_TIMEOUT_MS = 12000;
         const saveResult = await Promise.race([
           savePromise,
           new Promise((resolve) => setTimeout(() => resolve({ saved: false, error: 'Timeout' }), SAVE_ON_CLOSE_TIMEOUT_MS))
         ]);
-
+    
         if (saveResult && saveResult.saved) {
           logInfo('WindowClose', 'Session saved successfully before window close');
           isForceClosing = true;
@@ -5773,7 +5812,7 @@ app.on('activate', () => {
   }
 });
 
-// Import moved to top-level consolidation
+const { getEmployeeDetailsForUser }= require('./frappeService');
 
 ipcMain.handle('frappe:get-employee-for-user', async (_event, userEmail) => {
   try {

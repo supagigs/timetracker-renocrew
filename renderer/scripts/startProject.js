@@ -381,8 +381,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Start timer (Clock In)
   async function startTimer() {
     if (isActive) return;
-
-    // Prevent starting if we are currently clocking out or already starting
+    
+    // 1. THE LOCK: Prevent starting if we are currently clocking out or already starting
     if (clockOutInProgress || isTimerTransitioning) {
       if (typeof NotificationService !== 'undefined' && NotificationService.showWarning) {
         NotificationService.showWarning('Please wait, syncing with server...');
@@ -396,8 +396,8 @@ document.addEventListener('DOMContentLoaded', () => {
       NotificationService?.showError?.('Project is required to start tracking.');
       return;
     }
-
-    isTimerTransitioning = true;
+    
+    isTimerTransitioning = true; //locking the process
     const originalLabel = clockInBtn.textContent;
     clockInBtn.disabled = true;
     clockInBtn.textContent = 'Syncing...';
@@ -588,8 +588,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const msg = error?.message || 'Failed to start timer';
       NotificationService?.showError?.(msg);
-    } finally {
-      isTimerTransitioning = false;
+    }finally{
+      isTimerTransitioning - false;
     }
   }
 
@@ -599,7 +599,7 @@ document.addEventListener('DOMContentLoaded', () => {
       console.warn('[TRACKER] clockOut ignored — already in progress');
       return;
     }
-
+    
     // // 2. QUEUE IF STARTING: If the app is currently clocking IN, wait and try clocking OUT again
     // if (isTimerTransitioning) {
     //   console.warn('[TRACKER] clockOut delayed — timer is currently starting');
@@ -607,14 +607,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // }
 
     clockOutInProgress = true;
-    isTimerTransitioning = true; // Use common flag to block other transitions
-
-    // NEW: Update UI immediately to prevent multiple clicks and show status
-    const originalBtnText = clockInBtn.textContent;
-    clockInBtn.disabled = true;
-    clockInBtn.textContent = 'Syncing...';
-    if (takeBreakBtn) takeBreakBtn.disabled = true;
-
+    isTimerTransitioning = true;
     const wasActive = isActive;
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
     const clockOutTime = new Date();
@@ -679,14 +672,9 @@ document.addEventListener('DOMContentLoaded', () => {
         breakCount,
         reason
       );
-
-      // Clear any "Syncing" notifications
-      if (typeof NotificationService !== 'undefined') {
-        NotificationService.removeExistingNotifications('info');
-      }
-
-      // Session saved. Applying a short server sync buffer to ensure all IPC calls complete
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      console.log("Session saved. Applying 2-second server sync buffer...");
+      await new Promise(resolve => setTimeout(resolve, 200));
 
       // ✅ ONLY NOW mark as stopped
       isActive = false;
@@ -728,11 +716,11 @@ document.addEventListener('DOMContentLoaded', () => {
         window.electronAPI.showTimerStoppedNotification();
       }
 
-      // Only navigate if we aren't skipping project switch
-      if (!skipRedirect && reason !== 'project_switch') {
-        window.location.href = 'projects.html';
-      }
-
+    // 2. MODIFY THIS BLOCK: Only navigate if we aren't skipping it
+    if (!skipRedirect && reason !== 'project_switch') {
+      window.location.href = 'projects.html';
+    }
+  
       // Navigate to projects screen after any clock out (manual or auto)
       window.location.href = 'projects.html';
 
@@ -894,41 +882,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function handleProjectSwitch(newProjectData) {
     try {
-      // 'isActive' is your global variable in startproject.js tracking if a timer is on
-      if (typeof isActive !== 'undefined' && isActive) {
-        //console.log("!! Rapid Switch Detected: Stopping previous project in Frappe first...");
+        // 'isActive' is your global variable in startproject.js tracking if a timer is on
+        if (typeof isActive !== 'undefined' && isActive) {
+          console.log("!! Rapid Switch Detected: Stopping previous project in Frappe first...");
+            
+            // 1. Await clock out, but prevent it from navigating away
+            await clockOut({ auto: true, reason: 'project_switch', skipRedirect: true });
+            
+            console.log("Previous project closed. Enforcing strict 2-second cooldown...");
+            
+            // 2. The "Cooldown" - prevents the 417 error for overlapping logs
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
 
-        //Await clock out, but prevent it from navigating away
-        await clockOut({ auto: true, reason: 'project_switch', skipRedirect: true });
+        console.log("Starting new project:", newProjectData.project);
+        
+        // 3. Update the global variables and storage for the new project BEFORE starting
+        selectedProjectId = newProjectData.project;
+        StorageService.setItem('selectedProjectId', newProjectData.project);
+        
+        if (newProjectData.task) {
+          StorageService.setItem('selectedTaskId', newProjectData.task);
+        } else {
+          StorageService.removeItem('selectedTaskId');
+        }
 
-        //console.log("Previous project closed. Enforcing strict 2-second cooldown...");
-
-        // The "Cooldown" - prevents the 417 error for overlapping logs
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-
-      //console.log("Starting new project:", newProjectData.project);
-
-      // Update the global variables and storage for the new project BEFORE starting
-      selectedProjectId = newProjectData.project;
-      StorageService.setItem('selectedProjectId', newProjectData.project);
-
-      if (newProjectData.task) {
-        StorageService.setItem('selectedTaskId', newProjectData.task);
-      } else {
-        StorageService.removeItem('selectedTaskId');
-      }
-
-      //STart new timer safely
-      await startTimer();
+        //4. STart new timer safely
+        await startTimer(); 
 
     } catch (error) {
-      console.error("Critical Error during project switch:", error);
-      if (typeof NotificationService !== 'undefined') {
-        NotificationService.showError("Project switch failed. Please clock out manually.");
-      }
+        console.error("Critical Error during project switch:", error);
+        if (typeof NotificationService !== 'undefined') {
+          NotificationService.showError("Project switch failed. Please clock out manually.");
+        }
     }
-  }
+}
 
   // Take break
   function takeBreak() {
@@ -1124,28 +1112,30 @@ document.addEventListener('DOMContentLoaded', () => {
     window.location.href = 'projects.html';
   });
 
-  clockInBtn.addEventListener('click', async () => {
-    try {
-      // Disable button to prevent double-clicks during the network call
-      clockInBtn.disabled = true;
+  // REPLACE LINES 53-59 WITH THIS:
+// --- FIX THIS IN startProject.js ---
+clockInBtn.addEventListener('click', async () => {
+  try {
+    // Disable button to prevent double-clicks during the network call
+    clockInBtn.disabled = true;
 
-      if (isActive) {
-        //console.log("Stopping timer in Frappe Desk...");
-
-        // Await ensures we don't proceed until Frappe confirms the 'Stop'
-        await clockOut();
-
-        //console.log("✓ Timer successfully stopped in Frappe.");
-      } else {
-        //console.log("Starting new timer...");
-        await startTimer();
-      }
-    } catch (err) {
-      console.error("Operation failed:", err);
-    } finally {
-      clockInBtn.disabled = false;
+    if (isActive) {
+      console.log("Stopping timer in Frappe Desk...");
+      
+      // 1. Await ensures we don't proceed until Frappe confirms the 'Stop'
+      await clockOut(); 
+      
+      console.log("✓ Timer successfully stopped in Frappe.");
+    } else {
+      console.log("Starting new timer...");
+      await startTimer();
     }
-  });
+  } catch (err) {
+    console.error("Operation failed:", err);
+  } finally {
+    clockInBtn.disabled = false;
+  }
+});
 
   takeBreakBtn.addEventListener('click', () => {
     if (isActive) {
@@ -1326,20 +1316,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Clock out when laptop lid is closed (lock-screen) or system suspends.
   // Works for all session states: active working, idle, or on break.
   if (window.electronAPI && window.electronAPI.onLockOrSuspendClockOut) {
-    //console.log('[PowerEvents] Renderer startProject: registering onLockOrSuspendClockOut listener');
-    window.electronAPI.onLockOrSuspendClockOut(async (data) => {
+    console.log('[PowerEvents] Renderer startProject: registering onLockOrSuspendClockOut listener');
+    window.electronAPI.onLockOrSuspendClockOut(async(data) => {
       const reason = data?.reason || 'lock_screen';
       const ts = new Date().toISOString();
       const notifyDone = window.electronAPI?.notifyLidCloseClockOutDone;
-      // console.log('[PowerEvents] Renderer startProject: lock-or-suspend event received', {
-      //   timestamp: ts,
-      //   reason,
-      //   hasSessionStartTime: !!sessionStartTime,
-      //   isActive,
-      //   isOnBreak,
-      //   isIdle,
-      //   lockSuspendClockOutTriggered
-      // });
+      console.log('[PowerEvents] Renderer startProject: lock-or-suspend event received', {
+        timestamp: ts,
+        reason,
+        hasSessionStartTime: !!sessionStartTime,
+        isActive,
+        isOnBreak,
+        isIdle,
+        lockSuspendClockOutTriggered
+      });
 
       if (isTimerTransitioning || lockSuspendClockOutTriggered) {
         console.warn('[PowerEvents] Guarded: Transition already in progress.');
@@ -1347,25 +1337,25 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       // Clock out whenever we have an active session, regardless of active/idle/on break
-      if (!sessionStartTime || !isActive) {
-        //console.log('[PowerEvents] Renderer startProject: lock/suspend clock-out skipped due to guard');
+      if (!sessionStartTime || !isActive ) {
+        console.log('[PowerEvents] Renderer startProject: lock/suspend clock-out skipped due to guard');
         if (notifyDone) notifyDone();
         return;
       }
-
+      
       try {
         isTimerTransitioning = true; // Set the lock
         lockSuspendClockOutTriggered = true;
-
-        //console.log(`[PowerEvents] Clocking out due to: ${reason}`);
+        
+        console.log(`[PowerEvents] Clocking out due to: ${reason}`);
 
         // Perform the clock out
         await clockOut({ auto: true, reason });
-        //console.log('[PowerEvents] Clock out successful. Syncing with server clock...');
-      } catch (err) {
+        console.log('[PowerEvents] Clock out successful. Syncing with server clock...');
+      }catch (err) {
         console.error('[PowerEvents] Clock out failed:', err);
         // Reset guard on failure so user can try again manually
-        lockSuspendClockOutTriggered = false;
+        lockSuspendClockOutTriggered = false; 
       } finally {
         isTimerTransitioning = false; // Release the lock
         if (notifyDone) notifyDone();
@@ -1375,19 +1365,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (window.electronAPI && window.electronAPI.onUnlockResumeClockIn) {
     window.electronAPI.onUnlockResumeClockIn(() => {
-      //console.log('[PowerEvents] System resumed. Checking if we can auto-start...');
-
+      console.log('[PowerEvents] System resumed. Checking if we can auto-start...');
+  
       // CRITICAL: If the clock-out from the 'suspend' event is still 
       // waiting in its 2-second buffer, this lock will be TRUE.
       if (isTimerTransitioning || clockOutInProgress) {
         console.warn('[PowerEvents] Auto-start blocked: Previous session is still syncing.');
         // Optionally, retry once after 3 seconds
         setTimeout(() => {
-          if (!isActive && selectedProjectId && !isTimerTransitioning) startTimer();
+           if (!isActive && selectedProjectId && !isTimerTransitioning) startTimer();
         }, 3000);
         return;
       }
-
+  
       if (!isActive && selectedProjectId) {
         startTimer();
       }

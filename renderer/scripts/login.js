@@ -27,12 +27,7 @@
   }
 }*/
 
-const appVersionEl = document.getElementById('appVersion');
-if (appVersionEl && window.electronAPI?.getAppVersion) {
-  window.electronAPI.getAppVersion()
-    .then(v => { appVersionEl.textContent = `v${v}`; })
-    .catch(err => console.error('Failed to load app version:', err));
-}
+
 
 function resetStates() {
   const emailInput = document.getElementById("email");
