@@ -24,14 +24,14 @@ async function getEmployeeForUser(userEmail) {
     return null;
   }
 
-  const frappe = createFrappeClient();
-  
+  const frappe = createFrappeClient(true);
+
   try {
     // Method 1: Exact match on user_id
     if (logInfo) {
       logInfo('Frappe', `Looking up employee for user: ${userEmail}`);
     }
-    
+
     let employeeRes = await frappe.get('/api/resource/Employee', {
       params: {
         fields: JSON.stringify(['name', 'user_id', 'employee_name']),
@@ -43,7 +43,7 @@ async function getEmployeeForUser(userEmail) {
     });
 
     let employees = employeeRes?.data?.data || [];
-    
+
     // Method 1b: If no match on user_id, try email_id as query parameter (not in filters)
     // IMPORTANT: email_id as query parameter may return multiple results, so we need to filter
     if (employees.length === 0) {
@@ -59,16 +59,16 @@ async function getEmployeeForUser(userEmail) {
           },
         });
         let allEmployees = employeeRes?.data?.data || [];
-        
+
         // CRITICAL: Filter results to find employees whose user_id or email_id matches
         employees = allEmployees.filter(emp => {
           const empUserId = String(emp.user_id || '').trim().toLowerCase();
           const empEmailId = String(emp.email_id || '').trim().toLowerCase();
           const searchEmail = String(userEmail || '').trim().toLowerCase();
-          
+
           return empUserId === searchEmail || empEmailId === searchEmail;
         });
-        
+
         if (logInfo) {
           logInfo('Frappe', `email_id query returned ${allEmployees.length} employee(s), filtered to ${employees.length} matching user ${userEmail}`);
         }
@@ -78,7 +78,7 @@ async function getEmployeeForUser(userEmail) {
         }
       }
     }
-    
+
     if (logInfo) {
       logInfo('Frappe', `Exact match query returned ${employees.length} employee(s)`);
       if (employees.length > 0) {
@@ -87,13 +87,13 @@ async function getEmployeeForUser(userEmail) {
         });
       }
     }
-    
+
     // Method 2: If no exact match, try case-insensitive search (filter in code)
     if (employees.length === 0) {
       if (logInfo) {
         logInfo('Frappe', `No exact match found, trying case-insensitive search (fetching all employees)`);
       }
-      
+
       // Get all employees and filter in code
       // Note: We can't query email_id in filters or fields, so we fetch all and filter
       // IMPORTANT: email_id cannot be in fields array - Frappe doesn't permit it
@@ -103,26 +103,26 @@ async function getEmployeeForUser(userEmail) {
           limit_page_length: 1000,
         },
       });
-      
+
       const allEmployees = employeeRes?.data?.data || [];
       if (logInfo) {
         logInfo('Frappe', `Fetched ${allEmployees.length} total employee(s) from Frappe`);
       }
-      
+
       // First filter by user_id (we have this field)
       employees = allEmployees.filter(emp => {
         const empUserId = String(emp.user_id || '').trim().toLowerCase();
         const searchEmail = String(userEmail || '').trim().toLowerCase();
         return empUserId === searchEmail;
       });
-      
+
       // If no match on user_id, we need to fetch email_id individually for each employee
       // This is slower but necessary since email_id can't be queried
       if (employees.length === 0) {
         if (logInfo) {
           logInfo('Frappe', `No match on user_id, fetching email_id for each employee to check`);
         }
-        
+
         // Fetch email_id for employees that might match (limit to reasonable number)
         const candidates = allEmployees.slice(0, 50); // Limit to first 50 to avoid too many requests
         for (const emp of candidates) {
@@ -137,7 +137,7 @@ async function getEmployeeForUser(userEmail) {
               const empUserId = String(empDetail.user_id || '').trim().toLowerCase();
               const empEmailId = String(empDetail.email_id || '').trim().toLowerCase();
               const searchEmail = String(userEmail || '').trim().toLowerCase();
-              
+
               if (empUserId === searchEmail || empEmailId === searchEmail) {
                 employees.push(empDetail);
                 if (logInfo) {
@@ -154,11 +154,11 @@ async function getEmployeeForUser(userEmail) {
           }
         }
       }
-      
+
       if (logInfo && employees.length > 0) {
         logInfo('Frappe', `Filtered ${allEmployees.length} employees to ${employees.length} matching user ${userEmail}`);
       }
-      
+
       // If no match on user_id, try fetching employees with email_id query parameter
       // CRITICAL: email_id query parameter returns ALL employees, so we MUST filter
       if (employees.length === 0) {
@@ -171,16 +171,16 @@ async function getEmployeeForUser(userEmail) {
             },
           });
           const emailIdEmployees = emailIdRes?.data?.data || [];
-          
+
           // CRITICAL: Filter to only employees whose user_id or email_id matches
           const filteredEmployees = emailIdEmployees.filter(emp => {
             const empUserId = String(emp.user_id || '').trim().toLowerCase();
             const empEmailId = String(emp.email_id || '').trim().toLowerCase();
             const searchEmail = String(userEmail || '').trim().toLowerCase();
-            
+
             return empUserId === searchEmail || empEmailId === searchEmail;
           });
-          
+
           if (filteredEmployees.length > 0) {
             employees = filteredEmployees;
             if (logInfo) {
@@ -195,7 +195,7 @@ async function getEmployeeForUser(userEmail) {
           }
         }
       }
-      
+
       if (logInfo) {
         if (employees.length > 0) {
           logInfo('Frappe', `Found ${employees.length} employee(s) via case-insensitive match`);
@@ -212,13 +212,13 @@ async function getEmployeeForUser(userEmail) {
         }
       }
     }
-    
+
     // Method 3: Try get_list method endpoint first (more reliable than get_value)
     if (employees.length === 0) {
       if (logInfo) {
         logInfo('Frappe', `No match found via resource API, trying get_list method endpoint`);
       }
-      
+
       try {
         // Try user_id first
         let methodListRes = await frappe.get('/api/method/frappe.client.get_list', {
@@ -229,7 +229,7 @@ async function getEmployeeForUser(userEmail) {
             limit_page_length: 1,
           },
         });
-        
+
         // If no match, try email_id as query parameter (method endpoint might support it differently)
         if (!methodListRes?.data?.message || !Array.isArray(methodListRes.data.message) || methodListRes.data.message.length === 0) {
           if (logInfo) {
@@ -246,16 +246,16 @@ async function getEmployeeForUser(userEmail) {
               },
             });
             const emailIdEmployees = emailIdRes?.data?.data || [];
-            
+
             // CRITICAL: Filter to only employees whose user_id or email_id matches
             const filteredEmployees = emailIdEmployees.filter(emp => {
               const empUserId = String(emp.user_id || '').trim().toLowerCase();
               const empEmailId = String(emp.email_id || '').trim().toLowerCase();
               const searchEmail = String(userEmail || '').trim().toLowerCase();
-              
+
               return empUserId === searchEmail || empEmailId === searchEmail;
             });
-            
+
             if (filteredEmployees.length > 0) {
               // Convert to same format as get_list
               methodListRes = { data: { message: filteredEmployees } };
@@ -271,11 +271,11 @@ async function getEmployeeForUser(userEmail) {
             }
           }
         }
-        
+
         if (logInfo) {
           logInfo('Frappe', `get_list response: ${JSON.stringify(methodListRes?.data?.message || 'no message')}`);
         }
-        
+
         if (methodListRes?.data?.message) {
           if (Array.isArray(methodListRes.data.message)) {
             if (methodListRes.data.message.length > 0) {
@@ -284,14 +284,14 @@ async function getEmployeeForUser(userEmail) {
               if (logInfo) {
                 logInfo('Frappe', `get_list returned employee: ${JSON.stringify(emp)}`);
               }
-              
+
               // Verify employee belongs to the user
               const empUserId = String(emp.user_id || '').trim().toLowerCase();
               const empEmailId = String(emp.email_id || '').trim().toLowerCase();
               const searchEmail = String(userEmail || '').trim().toLowerCase();
-              
+
               const matches = empUserId === searchEmail || empEmailId === searchEmail;
-              
+
               if (!matches) {
                 if (logError) {
                   logError('Frappe', `get_list returned employee ${emp.name} with user_id="${empUserId}", email_id="${empEmailId}" but searching for "${searchEmail}" - REJECTING`);
@@ -329,7 +329,7 @@ async function getEmployeeForUser(userEmail) {
           }
         }
       }
-      
+
       // Fallback: Try get_value method endpoint
       try {
         const methodRes = await frappe.get('/api/method/frappe.client.get_value', {
@@ -339,14 +339,14 @@ async function getEmployeeForUser(userEmail) {
             fieldname: 'name',
           },
         });
-        
+
         if (methodRes?.data?.message) {
           let employeeId = methodRes.data.message;
-          
+
           if (logInfo) {
             logInfo('Frappe', `get_value response type: ${typeof employeeId}, value: ${JSON.stringify(employeeId)}`);
           }
-          
+
           // Handle different response formats:
           // - If it's a string, use it directly
           // - If it's an object, try to extract the 'name' field
@@ -381,7 +381,7 @@ async function getEmployeeForUser(userEmail) {
           logInfo('Frappe', `get_value method endpoint failed: ${methodErr.message}`);
         }
       }
-      
+
       // Method 3b: Try querying User doctype to see if there's an employee field
       try {
         if (logInfo) {
@@ -396,7 +396,7 @@ async function getEmployeeForUser(userEmail) {
             limit_page_length: 1,
           },
         });
-        
+
         const users = userRes?.data?.data || [];
         if (users.length > 0 && logInfo) {
           logInfo('Frappe', `Found user record: name=${users[0].name}, email=${users[0].email || 'EMPTY'}, full_name=${users[0].full_name || 'N/A'}`);
@@ -408,13 +408,13 @@ async function getEmployeeForUser(userEmail) {
         }
       }
     }
-    
+
     // Method 4: Try 'like' operator as final fallback
     if (employees.length === 0) {
       if (logInfo) {
         logInfo('Frappe', `No match found, trying 'like' operator`);
       }
-      
+
       // Try 'like' on user_id
       employeeRes = await frappe.get('/api/resource/Employee', {
         params: {
@@ -425,9 +425,9 @@ async function getEmployeeForUser(userEmail) {
           limit_page_length: 100,
         },
       });
-      
+
       employees = employeeRes?.data?.data || [];
-      
+
       // Also try email_id as query parameter (can't use in filters)
       if (employees.length === 0) {
         try {
@@ -445,18 +445,18 @@ async function getEmployeeForUser(userEmail) {
           }
         }
       }
-      
+
       if (logInfo) {
         logInfo('Frappe', `'Like' query returned ${employees.length} employee(s)`);
       }
-      
+
       // Filter to ensure it's actually the right user (in case of partial matches)
       employees = employees.filter(emp => {
         const empUserId = (emp.user_id || '').toLowerCase().trim();
         const searchEmail = userEmail.toLowerCase().trim();
         return empUserId === searchEmail;
       });
-      
+
       if (logInfo && employees.length > 0) {
         logInfo('Frappe', `Found ${employees.length} employee(s) after filtering 'like' results`);
       }
@@ -470,7 +470,7 @@ async function getEmployeeForUser(userEmail) {
       }
       return employeeId;
     }
-    
+
     if (logError) {
       logError('Frappe', `✗ No employee found for user ${userEmail} after trying all methods`);
       // Log ALL employees for debugging (we already fetched them in Method 2)
@@ -496,7 +496,7 @@ async function getEmployeeForUser(userEmail) {
         }
       }
     }
-    
+
     return null;
   } catch (err) {
     if (logError) {
@@ -617,7 +617,7 @@ async function getMyTasks() {
       });
     }
 
-    // 🔥 IMPORTANT: let UI decide how to show the error
+    //IMPORTANT: let UI decide how to show the error
     throw err;
   }
 }
@@ -631,9 +631,9 @@ async function verifyTimesheetBelongsToUser(timesheet, userEmail) {
   if (!timesheet || !timesheet.employee) {
     return false;
   }
-  
-  const frappe = createFrappeClient();
-  
+
+  const frappe = createFrappeClient(true);
+
   try {
     // Fetch the employee record from the timesheet
     const employeeRes = await frappe.get(`/api/resource/Employee/${timesheet.employee}`, {
@@ -641,7 +641,7 @@ async function verifyTimesheetBelongsToUser(timesheet, userEmail) {
         fields: JSON.stringify(['name', 'user_id', 'email_id']),
       },
     });
-    
+
     const employee = employeeRes?.data?.data;
     if (!employee) {
       if (logError) {
@@ -649,22 +649,22 @@ async function verifyTimesheetBelongsToUser(timesheet, userEmail) {
       }
       return false;
     }
-    
+
     // Compare user_id or email_id with the current user's email
     const employeeUserId = String(employee.user_id || '').trim().toLowerCase();
     const employeeEmailId = String(employee.email_id || '').trim().toLowerCase();
     const currentUserEmail = String(userEmail || '').trim().toLowerCase();
-    
+
     const matches = employeeUserId === currentUserEmail || employeeEmailId === currentUserEmail;
-    
+
     if (logInfo) {
       logInfo('Frappe', `Verifying timesheet ${timesheet.name} employee ${timesheet.employee}: user_id="${employeeUserId}", email_id="${employeeEmailId}", current user="${currentUserEmail}", matches=${matches}`);
     }
-    
+
     if (!matches && logError) {
       logError('Frappe', `✗ Timesheet ${timesheet.name} does NOT belong to user ${userEmail}. Employee ${timesheet.employee} has user_id="${employeeUserId}", email_id="${employeeEmailId}"`);
     }
-    
+
     return matches;
   } catch (err) {
     if (logError) {
@@ -690,7 +690,7 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
     throw new Error('Project is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     // Use frappe_employee_id from employees table (Supabase) when provided
@@ -710,7 +710,7 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
         }
       }
     }
-    
+
     if (!normalizedEmployeeId) {
       if (logInfo) {
         logInfo('Frappe', `No employee record found for user ${userEmail}, will search timesheets without employee filter`);
@@ -737,7 +737,7 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
     });
 
     let allTimesheets = res?.data?.data || [];
-    
+
     // CRITICAL: Filter by employee in code (don't trust Frappe's filter)
     if (normalizedEmployeeId && allTimesheets.length > 0) {
       const beforeCount = allTimesheets.length;
@@ -778,7 +778,7 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
       }
       return null;
     }
-    
+
     if (logInfo) {
       logInfo('Frappe', `Using normalized employee ID: "${normalizedEmployeeId}" for timesheet lookup and verification`);
     }
@@ -788,11 +788,11 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
       // CRITICAL: Only consider timesheets that match the current user's employee
       // Normalize employee IDs for comparison
       const tsEmployee = String(ts.employee || '').trim();
-      
+
       if (logInfo) {
         logInfo('Frappe', `Checking timesheet ${ts.name}: employee="${tsEmployee}" (expected: "${normalizedEmployeeId}")`);
       }
-      
+
       if (tsEmployee !== normalizedEmployeeId) {
         if (logError) {
           logError('Frappe', `REJECTING timesheet ${ts.name} - employee mismatch! Timesheet has "${tsEmployee}" but we need "${normalizedEmployeeId}"`);
@@ -817,11 +817,11 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
             const fullTimesheet = detailRes?.data?.data || ts;
             // Double-check employee matches (in case list response was incomplete)
             const fullTsEmployee = String(fullTimesheet.employee || '').trim();
-            
+
             if (logInfo) {
               logInfo('Frappe', `Fetched full timesheet ${fullTimesheet.name}: employee="${fullTsEmployee}" (expected: "${normalizedEmployeeId}")`);
             }
-            
+
             if (fullTsEmployee === normalizedEmployeeId) {
               // CRITICAL: Verify by email_id/user_id as well (more reliable than just employee ID)
               const belongsToUser = await verifyTimesheetBelongsToUser(fullTimesheet, userEmail);
@@ -856,11 +856,11 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
       // CRITICAL: Only check timesheets that match the current user's employee
       // Normalize employee IDs for comparison
       const tsEmployee = String(ts.employee || '').trim();
-      
+
       if (logInfo) {
         logInfo('Frappe', `Fetching details for timesheet ${ts.name}: employee="${tsEmployee}" (expected: "${normalizedEmployeeId}")`);
       }
-      
+
       if (tsEmployee !== normalizedEmployeeId) {
         if (logError) {
           logError('Frappe', `✗ REJECTING timesheet ${ts.name} in detail fetch - employee mismatch! Timesheet has "${tsEmployee}" but we need "${normalizedEmployeeId}"`);
@@ -875,11 +875,11 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
 
         // CRITICAL: Verify employee matches in full details
         const fullTsEmployee = String(fullTimesheet.employee || '').trim();
-        
+
         if (logInfo) {
           logInfo('Frappe', `Verifying timesheet ${fullTimesheet.name} employee: "${fullTsEmployee}" (expected: "${normalizedEmployeeId}")`);
         }
-        
+
         if (fullTsEmployee !== normalizedEmployeeId) {
           if (logError) {
             logError('Frappe', `✗ REJECTING timesheet ${fullTimesheet.name} - employee mismatch in details! Timesheet has "${fullTsEmployee}" but we need "${normalizedEmployeeId}" - SECURITY ISSUE!`);
@@ -889,28 +889,28 @@ async function getTimesheetForProject(project, frappeEmployeeId) {
 
         if (fullTimesheet && fullTimesheet.time_logs) {
           const timeLogs = Array.isArray(fullTimesheet.time_logs) ? fullTimesheet.time_logs : [];
-          
+
           if (logInfo && timeLogs.length > 0) {
             logInfo('Frappe', `Checking timesheet ${fullTimesheet.name} (employee: ${fullTimesheet.employee}) with ${timeLogs.length} time log(s)`);
           }
-          
+
           // Check if any time_log has this project
           const hasProject = timeLogs.some(tl => {
             if (!tl) return false;
-            
+
             // Handle different time_log formats
             const tlProject = tl.project;
-            
+
             // Compare project IDs
             if (tlProject === project) {
               return true;
             }
-            
+
             // Also check if project is a link field that might be stored as object
             if (typeof tlProject === 'object' && tlProject && tlProject.name === project) {
               return true;
             }
-            
+
             return false;
           });
 
@@ -993,7 +993,7 @@ async function addTimeLogToTimesheet(timesheetId, { project, task, hours = 0, ro
     throw new Error('Project is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     // Prepare payload for the method endpoint
@@ -1062,7 +1062,7 @@ async function addTimeLogToTimesheet(timesheetId, { project, task, hours = 0, ro
  */
 
 async function getOrCreateTimesheet({ project, task, frappeEmployeeId }) {
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   if (!project) throw new Error("Project is required");
 
@@ -1088,31 +1088,161 @@ async function getOrCreateTimesheet({ project, task, frappeEmployeeId }) {
   return { timesheet: newTimesheet.name };
 }
 
-async function resolveRowForStart({ timesheet, project, task }) {
-  const doc = await getTimesheetById(timesheet);
-  const timeLogs = Array.isArray(doc.time_logs) ? doc.time_logs : [];
+/**
+ * Stops all running rows for a user across all draft timesheets.
+ * @param {string} userEmail - User's email
+ * @param {string} excludeRowName - Optional row name to skip (e.g., if we want to reuse it)
+ * @returns {Promise<Array>} List of details for rows that were stopped
+ */
+async function stopAllRunningRowsForUser(userEmail, excludeRowName = null) {
+  const employeeId = await getEmployeeForUser(userEmail);
+  if (!employeeId) throw new Error("Employee record not found.");
 
-  const runningRows = timeLogs.filter(
-    row => row && row.from_time && !row.to_time
-  );
+  const frappe = createFrappeClient(true);
 
-  // 🚨 HARD GUARD
-  if (runningRows.length > 1) {
-    throw new Error(
-      'Multiple running rows detected. Please fix this timesheet manually in ERPNext.'
-    );
+  try {
+    // 1. Get all draft timesheets for this employee
+    const timesheetsRes = await frappe.get('/api/resource/Timesheet', {
+      params: {
+        filters: JSON.stringify([
+          ['employee', '=', employeeId],
+          ['docstatus', '=', 0] // Only drafts can have running timers
+        ]),
+        fields: JSON.stringify(['name']),
+        limit_page_length: 50
+      }
+    });
+
+    const timesheets = timesheetsRes.data?.data || [];
+    const runningRows = [];
+
+    // 2. Iterate through them to find running rows
+    for (const ts of timesheets) {
+      try {
+        const tsDetail = await frappe.get(`/api/resource/Timesheet/${ts.name}`);
+        const logs = tsDetail.data?.data?.time_logs || [];
+
+        for (const row of logs) {
+          if (row.from_time && !row.to_time) {
+            // Skip if this is the row we want to exclude (reuse)
+            if (excludeRowName && row.name === excludeRowName) {
+              if (logInfo) logInfo('Frappe', `Skipping stop for row ${row.name} (marked for reuse)`);
+              continue;
+            }
+
+            // Try to stop it immediately
+            try {
+              if (logInfo) logInfo('Frappe', `Stopping active row ${row.name} in Timesheet ${ts.name}`);
+              const stoppedRowDetails = await stopTimesheetSession({
+                timesheet: ts.name,
+                row: row.name
+              });
+
+              // Only push to runningRows if successfully stopped
+              runningRows.push(stoppedRowDetails);
+            } catch (stopErr) {
+              if (logError) logError('Frappe', `Failed to stop row ${row.name}: ${stopErr.message}`);
+            }
+          }
+        }
+      } catch (tsErr) {
+        if (logError) logError('Frappe', `Error reading timesheet ${ts.name}: ${tsErr.message}`);
+      }
+    }
+
+    if (runningRows.length > 0 && logInfo) {
+      logInfo('Frappe', `Cleaned up ${runningRows.length} active sessions globally for user.`);
+    }
+
+    return runningRows;
+  } catch (err) {
+    if (logError) logError('Frappe', `Error during global cleanup: ${err.message}`);
+    // Do not fail silently if it's a critical logic error, but we'll try to let it pass
+    return [];
   }
-
-  // Resume existing
-  if (runningRows.length === 1) {
-    return runningRows[0].name;
-  }
-
-  // Otherwise create new
-  const newRow = await createNewRowInTimesheet(timesheet, project, task);
-  return newRow.name;
 }
 
+async function resolveRowForStart({ timesheet, project, task, userEmail }) {
+  const employeeId = await getEmployeeForUser(userEmail);
+  if (!employeeId) throw new Error("Employee record not found.");
+
+  const frappe = createFrappeClient(true);
+
+  // 1. First, search for ANY already running row for this project/task globally for this employee
+  let existingActiveRow = null;
+  let existingActiveTimesheet = null;
+
+  try {
+    if (logInfo) logInfo('Frappe', `Searching for existing active row for project ${project} and task ${task || 'none'}`);
+
+    // Get all draft timesheets for this employee
+    const timesheetsRes = await frappe.get('/api/resource/Timesheet', {
+      params: {
+        filters: JSON.stringify([
+          ['employee', '=', employeeId],
+          ['docstatus', '=', 0]
+        ]),
+        fields: JSON.stringify(['name']),
+        limit_page_length: 20
+      }
+    });
+
+    const draftTimesheets = timesheetsRes.data?.data || [];
+
+    for (const ts of draftTimesheets) {
+      const tsDetail = await getTimesheetById(ts.name);
+      const logs = tsDetail.time_logs || [];
+
+      const found = logs.find(row =>
+        row.project === project &&
+        (task ? row.task === task : !row.task) &&
+        row.from_time && !row.to_time
+      );
+
+      if (found) {
+        existingActiveRow = found;
+        existingActiveTimesheet = ts.name;
+        if (logInfo) logInfo('Frappe', `✓ Found existing active row ${found.name} in timesheet ${ts.name} for project ${project}`);
+        break;
+      }
+    }
+  } catch (searchErr) {
+    if (logWarn) logWarn('Frappe', `Search for existing active row failed: ${searchErr.message}`);
+  }
+
+  // 2. Clean up ALL OTHER running rows, but skip the existing one if we found it
+  const stoppedRows = await stopAllRunningRowsForUser(userEmail, existingActiveRow?.name);
+
+  // 3. If we found an existing row, return it immediately
+  if (existingActiveRow) {
+    if (logInfo) logInfo('Frappe', `[RESOLVE] Reusing existing active row ${existingActiveRow.name} for project ${project}`);
+    return {
+      rowId: existingActiveRow.name,
+      isAlreadyRunning: true,
+      timesheet: existingActiveTimesheet,
+      stoppedRows: stoppedRows
+    };
+  }
+
+  // 4. Otherwise, proceed to create a clean new row in the target timesheet
+  try {
+    if (logInfo) logInfo('Frappe', `[RESOLVE] Creating new row for project ${project} in timesheet ${timesheet}`);
+    const newRow = await createNewRowInTimesheet(timesheet, project, task);
+    return { id: newRow.name, rowId: newRow.name, isAlreadyRunning: false, timesheet: timesheet, stoppedRows: stoppedRows };
+  } catch (err) {
+    if (logWarn) logWarn('Frappe', `Failed to add row to timesheet ${timesheet}: ${err.message}. Retrying with a new Timesheet...`);
+
+    try {
+      const newTimesheetDoc = await createTimesheet({ project, task, frappeEmployeeId: employeeId });
+      const newRow = await createNewRowInTimesheet(newTimesheetDoc.name, project, task);
+
+      return { id: newRow.name, rowId: newRow.name, isAlreadyRunning: false, timesheet: newTimesheetDoc.name, stoppedRows: stoppedRows };
+    } catch (fallbackErr) {
+      if (logError) logError('Frappe', `Fallback row creation also failed: ${fallbackErr.message}`);
+      throw err;
+    }
+  }
+}
 
 /**
  * Start a timesheet session
@@ -1154,6 +1284,66 @@ async function resolveRowForStart({ timesheet, project, task }) {
 //   });
 // }
 
+/**
+ * Stopping timesheet session explicitly (used by stopAllRunningRowsForUser)
+ */
+async function stopTimesheetSession({ timesheet, row }) {
+  const tsDetail = await getTimesheetById(timesheet);
+  const activeRow = tsDetail.time_logs?.find(r => r.name === row);
+  if (!activeRow) throw new Error('Row not found');
+
+  // Check if already stopped to avoid duplicate updates and discrepancies
+  if (activeRow.to_time) {
+    if (logInfo) logInfo('Frappe', `stopTimesheetSession: Row ${row} is already stopped (to_time: ${activeRow.to_time}). Skipping update.`);
+    return {
+      timesheetId: timesheet,
+      rowId: row,
+      hours: activeRow.hours,
+      fromTime: activeRow.from_time,
+      toTime: activeRow.to_time,
+      elapsedSeconds: Math.floor((new Date(activeRow.to_time) - new Date(activeRow.from_time)) / 1000)
+    };
+  }
+
+  const serverNow = await getFrappeServerTime();
+  activeRow.to_time = serverNow;
+
+  const fromTime = new Date(activeRow.from_time).getTime();
+  const toTime = new Date(serverNow).getTime();
+  let computedHours = 0;
+  if (!isNaN(fromTime) && !isNaN(toTime)) {
+    // Calculate difference in hours
+    computedHours = Math.max(0, (toTime - fromTime) / (1000 * 60 * 60));
+  }
+
+  activeRow.hours = computedHours;
+  activeRow.completed = 1;
+
+  if (!activeRow.doctype) {
+    activeRow.doctype = 'Timesheet Detail';
+  }
+
+  try {
+    const frappe = createFrappeClient();
+    await frappe.put(
+      `/api/resource/Timesheet/${timesheet}`,
+      { time_logs: tsDetail.time_logs }
+    );
+  } catch (putErr) {
+    if (logError) logError('Frappe', `Error strictly updating via PUT: ${putErr.message}. Trying savedocs fallback...`);
+    await saveTimesheetWithSavedocs(tsDetail);
+  }
+
+  return {
+    timesheetId: timesheet,
+    rowId: row,
+    hours: computedHours,
+    fromTime: activeRow.from_time,
+    toTime: serverNow,
+    elapsedSeconds: Math.floor((new Date(serverNow) - new Date(activeRow.from_time)) / 1000)
+  };
+}
+
 async function createNewRowInTimesheet(timesheetId, project, task) {
   const frappe = createFrappeClient();
 
@@ -1161,50 +1351,73 @@ async function createNewRowInTimesheet(timesheetId, project, task) {
     throw new Error('Timesheet ID required');
   }
 
-  const res = await frappe.get(`/api/resource/Timesheet/${timesheetId}`);
-  const doc = res?.data?.data;
+  try {
+    const res = await frappe.get(`/api/resource/Timesheet/${timesheetId}`);
+    const doc = res?.data?.data;
 
-  if (!doc) {
-    throw new Error('Failed to fetch timesheet');
+    if (!doc) {
+      throw new Error('Failed to fetch timesheet');
+    }
+
+    if (doc.docstatus !== 0) {
+      throw new Error('Cannot modify submitted timesheet');
+    }
+
+    const existingLogs = Array.isArray(doc.time_logs) ? doc.time_logs.map(log => ({
+      ...log,
+      doctype: 'Timesheet Detail',
+      is_billable: log.is_billable !== undefined ? log.is_billable : 1
+    })) : [];
+
+    const newRow = {
+      doctype: 'Timesheet Detail',
+      project,
+      task: task || null,
+      activity_type: 'Execution', // Default activity type
+      from_time: null,
+      to_time: null,
+      hours: 0,
+      is_billable: 1
+    };
+
+    const updatedLogs = [...existingLogs, newRow];
+
+    const updateRes = await frappe.put(
+      `/api/resource/Timesheet/${timesheetId}`,
+      { time_logs: updatedLogs }
+    );
+
+    const updatedDoc = updateRes?.data?.data;
+
+    const insertedRow = updatedDoc.time_logs[updatedDoc.time_logs.length - 1];
+
+    if (!insertedRow?.name) {
+      throw new Error('Failed to create new timesheet row');
+    }
+
+    return insertedRow;
+  } catch (err) {
+    let trueError = err.message;
+    if (err.response?.data) {
+      if (err.response.data._server_messages) {
+        try {
+          const msgs = JSON.parse(err.response.data._server_messages);
+          if (msgs.length > 0) {
+            trueError = JSON.parse(msgs[0]).message || trueError;
+          }
+        } catch (e) { }
+      } else if (err.response.data.message) {
+        trueError = typeof err.response.data.message === 'string' ? err.response.data.message : JSON.stringify(err.response.data.message);
+      } else if (err.response.data.exc) {
+        trueError = 'Server Exception: ' + err.response.data.exc.substring(0, 500);
+      }
+    }
+    throw new Error(`ERPNext Error: ${trueError}`);
   }
-
-  if (doc.docstatus !== 0) {
-    throw new Error('Cannot modify submitted timesheet');
-  }
-
-  const newRow = {
-    doctype: 'Timesheet Detail',
-    project,
-    task: task || null,
-    from_time: null,
-    to_time: null,
-    hours: 0
-  };
-
-  const updatedLogs = Array.isArray(doc.time_logs)
-    ? [...doc.time_logs, newRow]
-    : [newRow];
-
-  const updateRes = await frappe.put(
-    `/api/resource/Timesheet/${timesheetId}`,
-    { time_logs: updatedLogs }
-  );
-
-  const updatedDoc = updateRes?.data?.data;
-
-  const insertedRow =
-    updatedDoc.time_logs[updatedDoc.time_logs.length - 1];
-
-  if (!insertedRow?.name) {
-    throw new Error('Failed to create new timesheet row');
-  }
-
-  return insertedRow;
 }
 
-/**
+/*
  * Update a timesheet row with hours
- * Uses Frappe method endpoint: POST /api/method/update_timesheet_row
  */
 async function updateTimesheetRow({ timesheetId, timesheetRowId, hours }) {
   const userEmail = await getCurrentUser();
@@ -1224,7 +1437,7 @@ async function updateTimesheetRow({ timesheetId, timesheetRowId, hours }) {
     throw new Error('Hours is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     const payload = {
@@ -1278,22 +1491,18 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
     throw new Error('Project is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
-  // 1️⃣ Use frappe_employee_id from employees table when provided; otherwise fetch from Frappe
   let employeeId = frappeEmployeeId && String(frappeEmployeeId).trim()
     ? String(frappeEmployeeId).trim()
     : await getEmployeeForUser(userEmail);
-  
+
   if (!employeeId) {
-    // Employee is REQUIRED for proper user separation
-    // Don't create timesheet without employee - it will cause cross-user contamination
     const errorMsg = `No employee record found for user ${userEmail}. Employee record is required to create timesheets. Please ensure the user has an Employee record linked to their user account in Frappe (check that Employee.user_id matches the user email exactly).`;
     if (logError) {
       logError('Frappe', errorMsg);
-      // Try to get sample employees to help debug
       try {
-        const frappe = createFrappeClient();
+        const frappe = createFrappeClient(true);
         const debugRes = await frappe.get('/api/resource/Employee', {
           params: {
             fields: JSON.stringify(['name', 'user_id', 'employee_name']),
@@ -1310,7 +1519,7 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
     }
     throw new Error(errorMsg);
   }
-  
+
   // Ensure employeeId is a string (not an object)
   if (typeof employeeId !== 'string') {
     if (typeof employeeId === 'object' && employeeId !== null) {
@@ -1321,7 +1530,7 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
     }
   }
   employeeId = employeeId.trim();
-  
+
   if (!employeeId || employeeId === 'null' || employeeId === 'undefined' || employeeId === '[object Object]') {
     throw new Error(`Invalid employee ID: ${JSON.stringify(employeeId)}. Employee record is required to create timesheets.`);
   }
@@ -1333,13 +1542,13 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
         fields: JSON.stringify(['name', 'user_id', 'email_id', 'employee_name']),
       },
     });
-    
+
     const employee = employeeRes?.data?.data;
     if (employee) {
       const employeeUserId = String(employee.user_id || '').trim().toLowerCase();
       const employeeEmailId = String(employee.email_id || '').trim().toLowerCase();
       const currentUserEmail = String(userEmail || '').trim().toLowerCase();
-      
+
       if (logInfo) {
         logInfo('Frappe', `Verifying employee ${employeeId} before timesheet creation:`);
         logInfo('Frappe', `  Employee name: ${employee.employee_name || employee.name}`);
@@ -1347,9 +1556,9 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
         logInfo('Frappe', `  Employee email_id: "${employeeEmailId}"`);
         logInfo('Frappe', `  Current user email: "${currentUserEmail}"`);
       }
-      
+
       const matches = employeeUserId === currentUserEmail || employeeEmailId === currentUserEmail;
-      
+
       if (!matches) {
         const errorMsg = `CRITICAL: Employee ${employeeId} (${employee.employee_name || employee.name}) does NOT belong to user ${userEmail}. Employee has user_id="${employeeUserId}", email_id="${employeeEmailId}". Cannot create timesheet with wrong employee.`;
         if (logError) {
@@ -1357,7 +1566,7 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
         }
         throw new Error(errorMsg);
       }
-      
+
       if (logInfo) {
         logInfo('Frappe', `✓ Verified employee ${employeeId} (${employee.employee_name || employee.name}) belongs to user ${userEmail}`);
       }
@@ -1368,19 +1577,18 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
     }
   } catch (verifyErr) {
     if (verifyErr.message && verifyErr.message.includes('CRITICAL')) {
-      throw verifyErr; // Re-throw our critical errors
+      throw verifyErr;
     }
     if (logError) {
       logError('Frappe', `Error verifying employee before timesheet creation: ${verifyErr.message}`);
     }
-    // Continue anyway, but log the warning
   }
 
   if (logInfo) {
     logInfo('Frappe', `Using employee ${employeeId} for timesheet creation`);
   }
 
-  // 2️⃣ Fetch project to get company
+
   const projectRes = await frappe.get(`/api/resource/Project/${project}`);
   const projectDoc = projectRes?.data?.data;
 
@@ -1388,24 +1596,21 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
     throw new Error(`Company not found for project ${project}`);
   }
 
-  // 3️⃣ Create Timesheet with ZERO hours
-  // Task is optional - timesheet can be created without a task
+  // Create Timesheet with ZERO hours
   const timeLog = {
     activity_type: 'Execution',
     project,
-    hours: 0,   // ✅ VALID, no datetime issues
+    hours: 0,
   };
-  
-  // Only include task if provided
+
   if (task) {
     timeLog.task = task;
   }
 
   // Employee is now required (we throw error if not found above)
-  // Always include it in the payload as a string
   const payload = {
     company: projectDoc.company,
-    employee: employeeId, // REQUIRED - validated as string above
+    employee: employeeId,
     time_logs: [timeLog],
   };
 
@@ -1425,28 +1630,28 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
   }
 
   const createdTimesheet = res.data.data;
-  
+
   // CRITICAL: Verify employee was set correctly after creation
   if (logInfo) {
     logInfo('Frappe', `Timesheet created: ${createdTimesheet.name}`);
     logInfo('Frappe', `Created timesheet employee field: "${createdTimesheet.employee || 'NOT SET'}" (expected: "${employeeId}")`);
   }
-  
+
   // If employee doesn't match, fetch full details and check
   if (String(createdTimesheet.employee || '').trim() !== String(employeeId).trim()) {
     if (logError) {
       logError('Frappe', `⚠️ WARNING: Created timesheet ${createdTimesheet.name} has employee "${createdTimesheet.employee}" but we set "${employeeId}" - fetching full details to verify`);
     }
-    
+
     // Fetch full timesheet details to verify
     try {
       const verifyRes = await frappe.get(`/api/resource/Timesheet/${createdTimesheet.name}`);
       const fullTimesheet = verifyRes?.data?.data;
-      
+
       if (logInfo) {
         logInfo('Frappe', `Full timesheet details - employee: "${fullTimesheet.employee || 'NOT SET'}", name: "${fullTimesheet.name}"`);
       }
-      
+
       // Verify by email_id/user_id
       const belongsToUser = await verifyTimesheetBelongsToUser(fullTimesheet, userEmail);
       if (!belongsToUser) {
@@ -1456,22 +1661,21 @@ async function createTimesheet({ project, task, frappeEmployeeId }) {
         }
         throw new Error(errorMsg);
       }
-      
+
       return fullTimesheet;
     } catch (verifyErr) {
       if (logError) {
         logError('Frappe', `Error verifying created timesheet: ${verifyErr.message}`);
       }
-      // Still return the created timesheet, but log the warning
     }
   }
-  
-  // Verify employee was set correctly
+
+
   if (employeeId && createdTimesheet.employee !== employeeId) {
     if (logError) {
       logError('Frappe', `WARNING: Timesheet created but employee mismatch! Expected: ${employeeId}, Got: ${createdTimesheet.employee || 'null'}`);
     }
-    // Try to update the employee field
+
     try {
       if (logInfo) {
         logInfo('Frappe', `Attempting to update employee field on timesheet ${createdTimesheet.name}`);
@@ -1531,7 +1735,7 @@ async function getMyTasksForProject(project) {
   }
 
   try {
-    const frappe = createFrappeClient();
+    const frappe = createFrappeClient(true);
 
     const res = await frappe.get('/api/resource/Task', {
       params: {
@@ -1553,7 +1757,6 @@ async function getMyTasksForProject(project) {
 
     const tasks = res?.data?.data;
 
-    // Safety check – Frappe should always return an array
     if (!Array.isArray(tasks)) {
       const err = new Error(
         'Invalid response from Frappe while fetching project tasks'
@@ -1569,7 +1772,7 @@ async function getMyTasksForProject(project) {
       );
     }
 
-    return tasks; // ✅ [] is valid if no tasks exist
+    return tasks;
   } catch (err) {
     const errorMessage =
       err.response?.data?.message ||
@@ -1586,8 +1789,6 @@ async function getMyTasksForProject(project) {
         }
       );
     }
-
-    // 🔥 IMPORTANT: bubble error to UI
     throw err;
   }
 }
@@ -1608,9 +1809,8 @@ async function getUserProjects() {
       logInfo('Frappe', `Fetching projects for user via tasks: ${userEmail}`);
     }
 
-    const frappe = createFrappeClient();
+    const frappe = createFrappeClient(true);
 
-    // 1️⃣ Get tasks assigned to user
     const taskRes = await frappe.get('/api/resource/Task', {
       params: {
         fields: JSON.stringify(['project', 'name', 'subject']),
@@ -1628,20 +1828,18 @@ async function getUserProjects() {
 
     if (logInfo) {
       logInfo('Frappe', `Found ${tasks.length} task(s) assigned to user`);
-      // Log each task and its project for debugging
       tasks.forEach((task, idx) => {
         logInfo('Frappe', `  Task ${idx + 1}: ${task.name || task.subject || 'Unknown'} - Project: ${task.project || 'None'}`);
       });
     }
 
-    // Extract unique project IDs from tasks
     const projectIdsFromTasks = [...new Set(tasks.map(t => t.project).filter(p => p))];
 
     if (logInfo) {
       logInfo('Frappe', `Found ${projectIdsFromTasks.length} unique project(s) from tasks: ${projectIdsFromTasks.join(', ')}`);
     }
 
-    // Also check for directly assigned projects (via Project User or custom fields)
+
     const directProjects = await getUserProjectsDirect();
     let projectIdsFromDirect = directProjects.map(p => p.id);
 
@@ -1660,7 +1858,7 @@ async function getUserProjects() {
       if (logInfo) {
         logInfo('Frappe', `Checking for projects directly assigned to user via _assign field`);
       }
-      
+
       const projectWithAssignRes = await frappe.get('/api/resource/Project', {
         params: {
           fields: JSON.stringify(['name', 'project_name', '_assign']),
@@ -1708,7 +1906,7 @@ async function getUserProjects() {
     }
 
     let projects = [];
-    
+
     // Try batch fetch first (more efficient)
     try {
       const projectRes = await frappe.get('/api/resource/Project', {
@@ -1756,7 +1954,7 @@ async function getUserProjects() {
     // Verify we got all projects
     const foundProjectIds = projects.map(p => p.id);
     const missingProjectIds = allProjectIds.filter(id => !foundProjectIds.includes(id));
-    
+
     if (missingProjectIds.length > 0) {
       if (logError) {
         logError('Frappe', `Warning: Could not fetch details for ${missingProjectIds.length} project(s): ${missingProjectIds.join(', ')}`);
@@ -1811,7 +2009,7 @@ async function getUserProjectsDirect() {
 
     if (logInfo) logInfo('Frappe', `Fetching projects directly for user: ${userEmail}`);
 
-    const frappe = createFrappeClient();
+    const frappe = createFrappeClient(true);
 
     // Try method 1: Check if Project User doctype exists and has assignments
     try {
@@ -1826,14 +2024,14 @@ async function getUserProjectsDirect() {
       });
 
       const projectUsers = Array.isArray(projectUserRes?.data?.data) ? projectUserRes.data.data : [];
-      
+
       if (projectUsers.length > 0) {
         if (logInfo) {
           logInfo('Frappe', `Found ${projectUsers.length} project assignment(s) via Project User`);
         }
-        
+
         const projectIds = [...new Set(projectUsers.map(pu => pu.project).filter(p => p))];
-        
+
         // Fetch project details
         const projectRes = await frappe.get('/api/resource/Project', {
           params: {
@@ -1893,7 +2091,7 @@ async function getFrappeServerTime() {
     throw new Error('User not logged in');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     if (logInfo) {
@@ -1932,7 +2130,7 @@ async function getFrappeServerTime() {
       logError('Frappe', `Error fetching server time: ${err.message}. Falling back to local time.`);
       logError('Frappe', 'Please add get_server_now method to Frappe: @frappe.whitelist() def get_server_now(): return frappe.utils.now_datetime()');
     }
-    
+
     // Fallback: use current time in Frappe format
     const now = new Date();
     const fallbackTime = now.toISOString().slice(0, 19).replace('T', ' ');
@@ -1957,7 +2155,7 @@ async function getTimesheetById(timesheetId) {
     throw new Error('Timesheet ID is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     if (logInfo) {
@@ -2011,7 +2209,7 @@ async function saveTimesheetWithSavedocs(timesheetDoc) {
     throw new Error('Timesheet document is required');
   }
 
-  const frappe = createFrappeClient();
+  const frappe = createFrappeClient(true);
 
   try {
     if (logInfo) {
@@ -2053,6 +2251,13 @@ async function saveTimesheetWithSavedocs(timesheetDoc) {
     }
 
     const res = await frappe.post('/api/method/frappe.desk.form.save.savedocs', payload);
+
+    if (logInfo) {
+      logInfo('Frappe', `savedocs response status: ${res.status}`);
+      if (res.data?._server_messages) {
+        logInfo('Frappe', `Server messages: ${res.data._server_messages}`);
+      }
+    }
 
     // Validate savedocs response correctly
     // savedocs returns: { status: 200, data: { docs: [...], _server_messages: "..." } }
@@ -2207,7 +2412,7 @@ async function getUsersAssignedToProject(projectId) {
       logInfo('Frappe', `Fetching users assigned to project: ${projectId}`);
     }
 
-    const frappe = createFrappeClient();
+    const frappe = createFrappeClient(true);
     const assignedUsers = new Set();
 
     // Method 1: Get users from tasks assigned to this project
@@ -2224,7 +2429,7 @@ async function getUsersAssignedToProject(projectId) {
       });
 
       const tasks = Array.isArray(taskRes?.data?.data) ? taskRes.data.data : [];
-      
+
       tasks.forEach((task) => {
         if (task._assign) {
           // _assign field can be a JSON string array or comma-separated string
@@ -2237,11 +2442,11 @@ async function getUsersAssignedToProject(projectId) {
             }
           } catch {
             // If not JSON, treat as comma-separated string
-            assignees = typeof task._assign === 'string' 
+            assignees = typeof task._assign === 'string'
               ? task._assign.split(',').map(e => e.trim()).filter(e => e)
               : [task._assign];
           }
-          
+
           assignees.forEach(email => {
             if (email && typeof email === 'string') {
               assignedUsers.add(email.trim().toLowerCase());
@@ -2276,11 +2481,11 @@ async function getUsersAssignedToProject(projectId) {
             assignees = [project._assign];
           }
         } catch {
-          assignees = typeof project._assign === 'string' 
+          assignees = typeof project._assign === 'string'
             ? project._assign.split(',').map(e => e.trim()).filter(e => e)
             : [project._assign];
         }
-        
+
         assignees.forEach(email => {
           if (email && typeof email === 'string') {
             assignedUsers.add(email.trim().toLowerCase());
@@ -2343,11 +2548,11 @@ async function getUsersAssignedToProject(projectId) {
   }
 }
 
-module.exports = { 
-  getUserProjects, 
-  getUserProjectsDirect, 
-  getMyTasksForProject, 
-  setLoggers, 
+module.exports = {
+  getUserProjects,
+  getUserProjectsDirect,
+  getMyTasksForProject,
+  setLoggers,
   createTimesheet,
   getTimesheetForProject,
   addTimeLogToTimesheet,
