@@ -1098,12 +1098,14 @@ function createWindow() {
     maxWidth: PHONE_WIDTH,
     maxHeight: PHONE_HEIGHT,
     useContentSize: true,      // <--- ADD THIS: Ensures 360x640 is for the internal page
+    autoHideMenuBar: true,
     resizable: false,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      devTools: false,
       backgroundThrottling: false,
       zoomFactor: 1.0,         // <--- ADD THIS: Forces 100% zoom regardless of user screen scaling
       visualZoomLevelLimits: [1, 1] // <--- ADD THIS: Prevents manual zooming
@@ -1116,6 +1118,20 @@ function createWindow() {
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    const key = (input.key || '').toUpperCase();
+    const hasCtrlOrCmd = input.control || input.meta;
+
+    // Block all common shortcuts that open Chromium DevTools.
+    const openDevToolsShortcut =
+      key === 'F12' ||
+      (hasCtrlOrCmd && input.shift && (key === 'I' || key === 'J' || key === 'C'));
+
+    if (openDevToolsShortcut) {
+      event.preventDefault();
+    }
+  });
   mainWindow.loadFile('renderer/screens/login.html');
   mainWindow.on('closed', () => { mainWindow = null; });
 
@@ -4575,6 +4591,28 @@ ipcMain.handle('stop-background-screenshots', async () => {
   await flushScreenshotBatch();
   logInfo('IPC', 'Background screenshots stopped');
   return true;
+});
+
+ipcMain.handle('capture-background-screenshot-now', async () => {
+  try {
+    if (!currentUserEmail || !currentSessionId) {
+      logWarn('IPC', 'Skipping manual background screenshot: missing session context');
+      return { ok: false, skipped: true, reason: 'missing_session_context' };
+    }
+    if (isBackgroundTickRunning) {
+      logWarn('IPC', 'Skipping manual background screenshot: capture already in progress');
+      return { ok: false, skipped: true, reason: 'capture_in_progress' };
+    }
+
+    isBackgroundTickRunning = true;
+    await backgroundCaptureScreenshots();
+    return { ok: true };
+  } catch (error) {
+    logError('IPC', 'Manual background screenshot capture failed:', error);
+    return { ok: false, error: error?.message || 'unknown_error' };
+  } finally {
+    isBackgroundTickRunning = false;
+  }
 });
 
 ipcMain.handle('update-background-screenshot-session-id', async (event, supabaseSessionId) => {
