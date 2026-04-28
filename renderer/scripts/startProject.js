@@ -68,11 +68,13 @@ document.addEventListener('DOMContentLoaded', () => {
   let totalIdleTime = 0;
   let isIdle = false;
   let idleStartTime = null;
+  let currentActivityState = null;
+  let activityStateStartTime = null;
   let isTimerTransitioning = false;
   let idle2hClockOutTriggered = false;
   let break2mClockOutTriggered = false;
   let lockSuspendClockOutTriggered = false;
-  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 1800; // currently 5 minutes change it to "1800" for30 mins — auto clock out while continuously idle
+  const IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 1800; // currently 30 minutes — auto clock out while continuously idle
   const BREAK_AUTO_CLOCKOUT_THRESHOLD_SECONDS = 7200; // 2 hours — auto clock out when continuously on break
 
   // Initialize idle tracker
@@ -88,14 +90,17 @@ document.addEventListener('DOMContentLoaded', () => {
       onIdleStart: () => {
         console.log('User became idle');
         if (isActive && !isOnBreak && !isIdle) {
+          const idleTransitionTime = new Date();
           if (workStartTime) {
-            const now = new Date();
-            const workElapsed = Math.floor((now - new Date(workStartTime)) / 1000);
+            const workElapsed = Math.floor((idleTransitionTime - new Date(workStartTime)) / 1000);
             if (workElapsed > 0) {
               totalActiveDuration += workElapsed;
               StorageService.setItem('activeDuration', totalActiveDuration.toString());
             }
           }
+          transitionActivityState('idle', idleTransitionTime).catch((err) => {
+            console.error('Failed transitioning to idle state:', err);
+          });
           workStartTime = null;
           StorageService.removeItem('workStartTime');
         }
@@ -106,6 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
       },
       onIdleEnd: (idleDuration) => {
         //console.log(`User became active after ${idleDuration.toFixed(1)}s idle time`);
+        const idleEndTime = new Date();
         totalIdleTime += idleDuration;
         StorageService.setItem('totalIdleTime', totalIdleTime.toString());
         isIdle = false;
@@ -114,15 +120,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (idleDuration >= IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS && isActive && !isOnBreak) {
           console.log(`Auto clocking out: ${idleDuration}s idle (>= ${IDLE_AUTO_CLOCKOUT_THRESHOLD_SECONDS}s threshold)`);
-          clockOut({ auto: true, reason: 'idle_2m' }).catch(err => {
+          clockOut({ auto: true, reason: 'idle_30m' }).catch(err => {
             console.error('Failed to auto clock out after idle:', err);
           });
           return;
         }
 
         if (isActive && !isOnBreak) {
-          workStartTime = new Date();
+          workStartTime = idleEndTime;
           StorageService.setItem('workStartTime', workStartTime.toISOString());
+          transitionActivityState('active', idleEndTime, workStartTime).catch((err) => {
+            console.error('Failed transitioning from idle to active:', err);
+          });
         }
       }
     });
@@ -151,7 +160,7 @@ document.addEventListener('DOMContentLoaded', () => {
       timerInterval = null;
     }
     //console.log(`Auto clocking out: ${currentIdleDuration}s (${(currentIdleDuration / 60).toFixed(1)}m) continuous idle — ending session now`);
-    clockOut({ auto: true, reason: 'idle_2m' }).catch(err => {
+    clockOut({ auto: true, reason: 'idle_30m' }).catch(err => {
       console.error('Failed to auto clock out:', err);
     });
     return true;
@@ -178,10 +187,70 @@ document.addEventListener('DOMContentLoaded', () => {
       sessionDbUpdateInterval = null;
     }
     //console.log(`Auto clocking out: ${currentBreakDuration}s (${(currentBreakDuration / 60).toFixed(1)}m) continuous break — ending session now`);
-    clockOut({ auto: true, reason: 'break_2m' }).catch(err => {
+    clockOut({ auto: true, reason: 'break_2h' }).catch(err => {
       console.error('Failed to auto clock out after break:', err);
     });
     return true;
+  }
+
+  function getSupabaseSessionIdAsNumber() {
+    const raw = StorageService.getItem('supabaseSessionId');
+    if (!raw) return null;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function resolveStateStartTime(state, fallback = null) {
+    if (fallback instanceof Date && !isNaN(fallback.getTime())) return fallback;
+    if (state === 'active' && workStartTime) return new Date(workStartTime);
+    if (state === 'break' && breakStartTime) return new Date(breakStartTime);
+    if (state === 'idle' && idleStartTime) return new Date(idleStartTime);
+    return new Date();
+  }
+
+  async function insertActivityLogSegment(state, fromTime, toTime) {
+    const sessionId = getSupabaseSessionIdAsNumber();
+    if (!sessionId || !window.supabase) return;
+    if (!state || !fromTime || !toTime) return;
+
+    const from = fromTime instanceof Date ? fromTime : new Date(fromTime);
+    const to = toTime instanceof Date ? toTime : new Date(toTime);
+    if (isNaN(from.getTime()) || isNaN(to.getTime()) || to <= from) return;
+
+    const { error } = await window.supabase
+      .from('activity_logs')
+      .insert([{
+        session_id: sessionId,
+        state,
+        from_time: from.toISOString(),
+        to_time: to.toISOString()
+      }]);
+
+    if (error) {
+      console.error('Failed inserting activity_logs row:', error);
+    }
+  }
+
+  async function transitionActivityState(nextState, transitionAt = new Date(), explicitStart = null) {
+    const at = transitionAt instanceof Date ? transitionAt : new Date(transitionAt);
+    if (isNaN(at.getTime())) return;
+
+    if (currentActivityState && activityStateStartTime) {
+      try {
+        await insertActivityLogSegment(currentActivityState, activityStateStartTime, at);
+      } catch (err) {
+        console.error('Error writing activity state segment:', err);
+      }
+    }
+
+    if (!nextState) {
+      currentActivityState = null;
+      activityStateStartTime = null;
+      return;
+    }
+
+    currentActivityState = nextState;
+    activityStateStartTime = resolveStateStartTime(nextState, explicitStart || at);
   }
 
   // Update timer display
@@ -566,6 +635,8 @@ document.addEventListener('DOMContentLoaded', () => {
       StorageService.setItem('isActive', 'true');
 
       isActive = true;
+      currentActivityState = null;
+      activityStateStartTime = null;
       clockInBtn.textContent = 'Clock Out';
       clockInBtn.classList.remove('start-project-btn-primary');
       clockInBtn.classList.add('start-project-btn-danger');
@@ -578,6 +649,7 @@ document.addEventListener('DOMContentLoaded', () => {
       timerInterval = setInterval(updateTimer, 1000);
       sessionPersistInterval = setInterval(persistSessionSnapshotForRecovery, 15000);
       sessionDbUpdateInterval = setInterval(updateTimeTrackerSessionInDb, 30000); // Update DB every 30s
+      await transitionActivityState('active', workStartTime, workStartTime);
       updateTimer();
       startScreenshotCapture();
 
@@ -618,6 +690,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const wasActive = isActive;
     const previousWorkStartTime = workStartTime ? new Date(workStartTime) : null;
     const clockOutTime = new Date();
+    const finalStateAtClockOut = currentActivityState;
+    const finalStateFrom = activityStateStartTime;
 
     let finalBreakDuration = totalBreakDuration;
     if (isOnBreak && breakStartTime) {
@@ -636,7 +710,16 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Stop screenshots IMMEDIATELY
+     // Capture one final screenshot at clock-out, then stop background capture.
+     if (window.electronAPI && typeof window.electronAPI.captureBackgroundScreenshotNow === 'function') {
+      try {
+        await window.electronAPI.captureBackgroundScreenshotNow();
+      } catch (captureErr) {
+        console.warn('Final clock-out screenshot capture failed:', captureErr);
+      }
+    }
+
+    // Stop screenshots after final clock-out capture attempt
     stopScreenshotCapture();
     if (typeof NotificationService !== 'undefined' && !auto) {
       NotificationService.showInfo('Syncing session with server...', 0);
@@ -667,8 +750,14 @@ document.addEventListener('DOMContentLoaded', () => {
         finalBreakDuration,
         finalActiveDuration,
         finalIdleTime,
-        breakCount
+        breakCount,
+        reason
       );
+      if (finalStateAtClockOut && finalStateFrom) {
+        await insertActivityLogSegment(finalStateAtClockOut, finalStateFrom, clockOutTime);
+      }
+      currentActivityState = null;
+      activityStateStartTime = null;
 
       // Clear any "Syncing" notifications
       if (typeof NotificationService !== 'undefined') {
@@ -731,6 +820,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // 🔁 ROLLBACK
       isActive = true;
+      currentActivityState = finalStateAtClockOut;
+      activityStateStartTime = finalStateFrom;
       StorageService.setItem('isActive', 'true');
       updateTimerStateInMainProcess(true);
 
@@ -752,7 +843,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   // Save session to database
-  async function saveSession(totalDuration, breakDuration, activeDuration, idleDuration = 0, breakCountVal = 0) {
+  async function saveSession(
+    totalDuration,
+    breakDuration,
+    activeDuration,
+    idleDuration = 0,
+    breakCountVal = 0,
+    clockOutReason = null
+  ) {
     const email = StorageService.getItem('userEmail');
     const today = new Date().toISOString().split('T')[0];
 
@@ -845,7 +943,8 @@ document.addEventListener('DOMContentLoaded', () => {
           active_duration: activeDuration,
           idle_duration: idleDuration,
           break_count: breakCountVal,
-          total_duration: totalDuration
+          total_duration: totalDuration,
+          clock_out_reason: clockOutReason || 'manual'
         };
 
         if (company) {
@@ -915,8 +1014,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Take break
   function takeBreak() {
     if (isActive && !isOnBreak) {
+      const breakTransitionTime = new Date();
       if (workStartTime) {
-        const workElapsed = Math.floor((new Date() - new Date(workStartTime)) / 1000);
+        const workElapsed = Math.floor((breakTransitionTime - new Date(workStartTime)) / 1000);
         totalActiveDuration += workElapsed;
         StorageService.setItem('activeDuration', totalActiveDuration.toString());
       }
@@ -928,9 +1028,12 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       isOnBreak = true;
-      breakStartTime = new Date();
+      breakStartTime = breakTransitionTime;
       StorageService.setItem('isOnBreak', 'true');
       StorageService.setItem('breakStartTime', breakStartTime.toISOString());
+      transitionActivityState('break', breakTransitionTime, breakStartTime).catch((err) => {
+        console.error('Failed transitioning to break state:', err);
+      });
 
       // Show Resume button on left, Clock Out on right
       resumeBtn.style.display = 'inline-flex';
@@ -948,8 +1051,9 @@ document.addEventListener('DOMContentLoaded', () => {
       // Stop background screenshot capture while on break
       stopScreenshotCapture();
     } else if (isOnBreak) {
+      const breakEndTime = new Date();
       if (breakStartTime) {
-        const breakElapsed = Math.floor((new Date() - new Date(breakStartTime)) / 1000);
+        const breakElapsed = Math.floor((breakEndTime - new Date(breakStartTime)) / 1000);
         totalBreakDuration += breakElapsed;
         breakCount++;
         StorageService.setItem('breakDuration', totalBreakDuration.toString());
@@ -970,8 +1074,11 @@ document.addEventListener('DOMContentLoaded', () => {
       takeBreakBtn.classList.remove('start-project-btn-success');
       takeBreakBtn.classList.add('start-project-btn-secondary');
 
-      workStartTime = new Date();
+      workStartTime = breakEndTime;
       StorageService.setItem('workStartTime', workStartTime.toISOString());
+      transitionActivityState('active', breakEndTime, workStartTime).catch((err) => {
+        console.error('Failed transitioning from break to active:', err);
+      });
 
       if (idleTracker) {
         idleTracker.startTracking();
@@ -1009,6 +1116,8 @@ document.addEventListener('DOMContentLoaded', () => {
     isIdle = StorageService.getItem('isIdle') === 'true';
     const idleStored = StorageService.getItem('idleStartTime');
     idleStartTime = idleStored ? new Date(idleStored) : null;
+    currentActivityState = isOnBreak ? 'break' : (isIdle ? 'idle' : (isActive ? 'active' : null));
+    activityStateStartTime = resolveStateStartTime(currentActivityState);
     return true;
   }
 
@@ -1081,6 +1190,8 @@ document.addEventListener('DOMContentLoaded', () => {
     totalIdleTime = 0;
     isIdle = false;
     idleStartTime = null;
+    currentActivityState = null;
+    activityStateStartTime = null;
 
     clockInBtn.textContent = 'Clock In';
     clockInBtn.classList.remove('start-project-btn-danger', 'start-project-btn-danger-transparent');
@@ -1257,6 +1368,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (ts == null || typeof ts !== 'number') return;
       if (Date.now() - ts > RESUME_WINDOW_MS) return;
       if (lockSuspendClockOutTriggered || !sessionStartTime || !isActive) return;
+      if (sessionStartTime instanceof Date && !Number.isNaN(sessionStartTime.getTime()) && sessionStartTime.getTime() >= ts) return;
+
 
       lockSuspendClockOutTriggered = true;
       //console.log('[PowerEvents] Renderer startProject: clocking out on visibility/focus after recent system resume');
