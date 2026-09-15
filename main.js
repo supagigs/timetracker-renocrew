@@ -79,6 +79,32 @@ async function backgroundCaptureScreenshots() {
 
     const maxDimension = Math.max(...allDisplays.map(d => Math.max(d.size.width, d.size.height)));
 
+    // Resolve app names before desktopCapturer — getSources() can shift foreground focus.
+    let globalActiveAppName = null;
+    try {
+      globalActiveAppName = await getActiveAppName();
+      logInfo('BG-UPLOAD', `Pre-capture global active app: "${globalActiveAppName || 'null'}"`);
+    } catch (e) {
+      logWarn('BG-UPLOAD', `Failed to get global active app before capture: ${e.message}`);
+    }
+    // Get all open windows on WINDOWS
+    const windowsSnapshot = process.platform === 'win32' ? getWindowsSnapshot() : null;
+    // Create a Map for each display
+    const appNamesByDisplayIndex = new Map();
+    for (let i = 0; i < allDisplays.length; i++) {
+      let appName = null;
+      if (process.platform !== 'darwin') {
+        try {
+          // Find the app for this particular display
+          appName = await getAppNameForDisplay(i, windowsSnapshot);
+        } catch (e) {
+          logWarn('BG-UPLOAD', `Per-display app detection failed for display ${i + 1}: ${e.message}`);
+        }
+      }
+      appNamesByDisplayIndex.set(i, appName || globalActiveAppName || 'Unknown');
+      logInfo('BG-UPLOAD', `Display ${i + 1}: pre-captured app = "${appNamesByDisplayIndex.get(i)}"`);
+    }
+
     let sources;
     try {
       logInfo('BG-UPLOAD', `Requesting desktopCapturer sources with thumbnailSize: ${maxDimension}x${maxDimension}`);
@@ -191,24 +217,7 @@ async function backgroundCaptureScreenshots() {
           ? `Display ${index + 1} (${display.bounds.width}x${display.bounds.height})`
           : `Screen ${screenIndex}`;
 
-        // IMPORTANT: resolve app name PER SCREEN
-        let appNameForScreen = null;
-
-        // Windows / Linux → true per-display resolution
-        if (process.platform !== 'darwin') {
-          try {
-            appNameForScreen = await getAppNameForDisplay(index);
-          } catch (e) {
-            logWarn('BG-UPLOAD', `Per-display app detection failed for screen ${screenIndex}: ${e.message}`);
-          }
-        }
-
-        // macOS OR fallback → global foreground app
-        if (!appNameForScreen) {
-          appNameForScreen = await getActiveAppName();
-        }
-
-        appNameForScreen ||= 'Unknown';
+        const appNameForScreen = appNamesByDisplayIndex.get(index) || globalActiveAppName || 'Unknown';
 
         logInfo(
           'BG-UPLOAD',
@@ -983,7 +992,7 @@ let timeTrackingState = {
   pausedAt: null,
   totalActiveMs: 0,
 };
-const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'screenshots';
+const STORAGE_BUCKET = process.env.SUPABASE_SCREENSHOT_BUCKET || 'screenshots';
 
 // Track pending uploads that can be cancelled
 const pendingScreenshots = new Map();
@@ -1839,8 +1848,223 @@ function intersectionArea(a, b) {
   return x * y;
 }
 
-//Remove if doesn't work
-async function getAppNameForDisplay(displayIndex) {
+let cachedWindowsSnapshotScriptPath = null;
+
+function extractAppNameFromWindowTitle(windowTitle) {
+  if (!windowTitle || typeof windowTitle !== 'string') return null;
+  const trimmed = windowTitle.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(' - ').map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    return parts[parts.length - 1];
+  }
+  return null;
+}
+
+function isGenericProcessName(name) {
+  if (!name) return true;
+  const lower = name.toLowerCase();
+  return ['electron', 'node', 'nodejs'].some(
+    (generic) => lower === generic || lower === `${generic}.exe`
+  );
+}
+
+const friendlyNameCache = new Map();
+
+function getFriendlyNameFromExePath(exePath) {
+  if (!exePath || process.platform !== 'win32') return null;
+
+  const cacheKey = exePath.toLowerCase();
+  if (friendlyNameCache.has(cacheKey)) {
+    return friendlyNameCache.get(cacheKey);
+  }
+
+  try {
+    const { execFileSync } = require('child_process');
+    const escapedPath = exePath.replace(/'/g, "''");
+    const output = execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$vi = (Get-Item -LiteralPath '${escapedPath}').VersionInfo; 
+      if ($vi.ProductName) { $vi.ProductName } elseif ($vi.FileDescription) { $vi.FileDescription } else { '' }`
+    ], { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
+
+    const friendlyName = output || null;
+    friendlyNameCache.set(cacheKey, friendlyName);
+    return friendlyName;
+  } catch (e) {
+    logWarn('ActiveWindow', `getFriendlyNameFromExePath failed for ${exePath}: ${e.message}`);
+    friendlyNameCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+function cleanFriendlyAppName(name) {
+  if (!name || typeof name !== 'string') return null;
+  const trimmed = normalizeAppName(name);
+  if (!trimmed) return null;
+  return trimmed.replace(/^Microsoft\s+/i, '').trim() || trimmed;
+}
+
+function resolveFriendlyAppName({ ownerName, ownerPath, windowTitle, productName }) {
+  const fromProduct = cleanFriendlyAppName(productName);
+  if (fromProduct && !isGenericProcessName(fromProduct)) {
+    return fromProduct;
+  }
+
+  if (ownerPath && process.platform === 'win32') {
+    const fromExe = cleanFriendlyAppName(getFriendlyNameFromExePath(ownerPath));
+    if (fromExe && !isGenericProcessName(fromExe)) {
+      return fromExe;
+    }
+  }
+
+  if (process.platform === 'win32' && windowTitle) {
+    const fromTitle = cleanFriendlyAppName(extractAppNameFromWindowTitle(windowTitle));
+    if (fromTitle && !isGenericProcessName(fromTitle)) {
+      return fromTitle;
+    }
+  }
+
+  const fromOwner = cleanFriendlyAppName(ownerName);
+  if (fromOwner && !isGenericProcessName(fromOwner)) {
+    return fromOwner;
+  }
+
+  return null;
+}
+
+function getWindowsSnapshotScriptPath() {
+  if (cachedWindowsSnapshotScriptPath && fs.existsSync(cachedWindowsSnapshotScriptPath)) {
+    return cachedWindowsSnapshotScriptPath;
+  }
+
+  const os = require('os');
+  cachedWindowsSnapshotScriptPath = path.join(os.tmpdir(), 'timetracker-windows-snapshot-v2.ps1');
+  const script = `$ErrorActionPreference = 'Stop'
+Add-Type @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+using System.Collections.Generic;
+
+public class WindowEnumerator {
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int Left, Top, Right, Bottom;
+    }
+
+    public static List<object> windows = new List<object>();
+
+    public static bool Callback(IntPtr hWnd, IntPtr lParam) {
+        if (!IsWindowVisible(hWnd)) return true;
+        var sb = new StringBuilder(512);
+        GetWindowText(hWnd, sb, 512);
+        string title = sb.ToString();
+        if (string.IsNullOrWhiteSpace(title)) return true;
+
+        RECT rect;
+        GetWindowRect(hWnd, out rect);
+        int width = rect.Right - rect.Left;
+        int height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0) return true;
+
+        uint pid;
+        GetWindowThreadProcessId(hWnd, out pid);
+        string processName = null;
+        string processPath = null;
+        string productName = null;
+        try {
+            var proc = System.Diagnostics.Process.GetProcessById((int)pid);
+            processName = proc.ProcessName;
+            try {
+                processPath = proc.MainModule.FileName;
+                var versionInfo = System.Diagnostics.FileVersionInfo.GetVersionInfo(processPath);
+                productName = versionInfo.ProductName;
+                if (string.IsNullOrWhiteSpace(productName)) {
+                    productName = versionInfo.FileDescription;
+                }
+            } catch {}
+        } catch {}
+
+        windows.Add(new {
+            title = title,
+            processName = processName,
+            processPath = processPath,
+            productName = productName,
+            isMinimized = IsIconic(hWnd),
+            bounds = new { x = rect.Left, y = rect.Top, width = width, height = height }
+        });
+        return true;
+    }
+}
+"@
+
+[WindowEnumerator]::EnumWindows([WindowEnumerator+EnumWindowsProc]{ param($h,$l) [WindowEnumerator]::Callback($h,$l) }, [IntPtr]::Zero) | Out-Null
+[WindowEnumerator]::windows | ConvertTo-Json -Compress
+`;
+  fs.writeFileSync(cachedWindowsSnapshotScriptPath, script, 'utf8');
+  return cachedWindowsSnapshotScriptPath;
+}
+
+function getWindowsSnapshot() {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+
+  try {
+    const { execFileSync } = require('child_process');
+    const scriptPath = getWindowsSnapshotScriptPath();
+    const output = execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      scriptPath
+    ], { encoding: 'utf8', timeout: 8000, windowsHide: true });
+
+    const trimmed = (output || '').trim();
+    if (!trimmed) {
+      return [];
+    }
+
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+    if (parsed && typeof parsed === 'object') {
+      return [parsed];
+    }
+    return [];
+  } catch (e) {
+    logWarn('ActiveWindow', `getWindowsSnapshot failed: ${e.message}`);
+    return null;
+  }
+}
+
+async function getAppNameForDisplay(displayIndex, windowsSnapshot = null) {
   try {
     const displays = screen.getAllDisplays();
     const display = displays[displayIndex];
@@ -1851,8 +2075,7 @@ async function getAppNameForDisplay(displayIndex) {
       return null;
     }
 
-    // You already use this elsewhere — reuse it
-    const windows = getWindowsSnapshot();
+    const windows = windowsSnapshot ?? getWindowsSnapshot();
     if (!windows || !windows.length) return null;
 
     let bestMatch = null;
@@ -1873,10 +2096,11 @@ async function getAppNameForDisplay(displayIndex) {
     const owner = bestMatch.processName || bestMatch.executable || null;
     const title = bestMatch.title || null;
 
-    if (owner && title && owner !== title) {
-      return `${owner} - ${title}`;
-    }
-    return owner || title || null;
+    return processActiveWindowResult({
+      owner: { name: owner, path: bestMatch.processPath || null },
+      title: title,
+      productName: bestMatch.productName || null
+    });
 
   } catch (e) {
     logWarn('ActiveWindow', e.message);
@@ -1995,6 +2219,13 @@ async function getActiveAppNameForDisplayViaAppleScript(displayIndex, targetDisp
 }
 
 // Helper function to process active window result (extracted from getActiveAppName)
+function normalizeAppName(name) {
+  if (!name || typeof name !== 'string') return null;
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\.exe$/i, '');
+}
+
 function processActiveWindowResult(result) {
   if (!result) return null;
 
@@ -2002,7 +2233,9 @@ function processActiveWindowResult(result) {
   const appNameLower = appName.toLowerCase();
 
   let ownerName = typeof result.owner?.name === 'string' ? result.owner.name.trim() : null;
+  let ownerPath = typeof result.owner?.path === 'string' ? result.owner.path.trim() : null;
   let windowTitle = typeof result.title === 'string' ? result.title.trim() : null;
+  let productName = typeof result.productName === 'string' ? result.productName.trim() : null;
 
   const isOwnApp = (ownerName && ownerName.toLowerCase() === appNameLower) ||
     (windowTitle && windowTitle.toLowerCase() === appNameLower) ||
@@ -2013,54 +2246,20 @@ function processActiveWindowResult(result) {
     return appName;
   }
 
-  const genericNames = ['electron', 'node', 'nodejs'];
-  if (ownerName) {
-    const ownerNameLower = ownerName.toLowerCase();
-    if (genericNames.some(generic => ownerNameLower === generic || ownerNameLower === `${generic}.exe`)) {
-      ownerName = null;
-    }
+  const friendlyName = resolveFriendlyAppName({ ownerName, ownerPath, windowTitle, productName });
+  if (friendlyName) {
+    return friendlyName;
   }
 
+  // Last resort when friendly name is unavailable
   if (windowTitle) {
     const windowTitleLower = windowTitle.toLowerCase();
-    if (windowTitleLower === 'electron' || windowTitleLower === 'node') {
-      windowTitle = null;
+    if (windowTitleLower !== 'electron' && windowTitleLower !== 'node') {
+      return windowTitle;
     }
   }
 
-  let finalAppName = null;
-  if (process.platform === 'darwin') {
-    if (ownerName) {
-      if (windowTitle && windowTitle.length > 0) {
-        const windowTitleLower = windowTitle.toLowerCase();
-        const ownerNameLower = ownerName.toLowerCase();
-
-        if (windowTitleLower.includes(ownerNameLower) && windowTitleLower.length > ownerNameLower.length) {
-          finalAppName = windowTitle;
-        } else if (windowTitle !== ownerName) {
-          finalAppName = `${ownerName} - ${windowTitle}`;
-        } else {
-          finalAppName = ownerName;
-        }
-      } else {
-        finalAppName = ownerName;
-      }
-    } else if (windowTitle) {
-      finalAppName = windowTitle;
-    }
-  } else {
-    if (ownerName) {
-      if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
-        finalAppName = `${ownerName} - ${windowTitle}`;
-      } else {
-        finalAppName = ownerName;
-      }
-    } else if (windowTitle) {
-      finalAppName = windowTitle;
-    }
-  }
-
-  return finalAppName;
+  return null;
 }
 
 async function getActiveAppName() {
@@ -2127,7 +2326,6 @@ async function getActiveAppName() {
 
     // Get the app's own name for reference (but don't filter it out - we want to track when user is using our app)
     const appName = app.getName();
-    const appNameLower = appName.toLowerCase();
 
     // Extract available information from result
     // active-win returns: { owner: { name, processId }, title, url, bounds, etc. }
@@ -2137,89 +2335,7 @@ async function getActiveAppName() {
     // Log detected information for debugging on both platforms
     logInfo('ActiveWindow', `[${process.platform}] Detected - owner: ${ownerName || 'null'}, title: ${windowTitle || 'null'}, app: ${appName}`);
 
-    // Check if this is our own app - if so, we still want to return it, but use a consistent name
-    const isOwnApp = (ownerName && ownerName.toLowerCase() === appNameLower) ||
-      (windowTitle && windowTitle.toLowerCase() === appNameLower) ||
-      (ownerName && ownerName.toLowerCase().includes('time tracker')) ||
-      (ownerName && ownerName.toLowerCase().includes('electron') && ownerName.toLowerCase().includes('time'));
-
-    if (isOwnApp) {
-      // Return the app name consistently when our app is active
-      logInfo('ActiveWindow', `Detected own app - returning: ${appName}`);
-      return appName;
-    }
-
-    // Filter out only if it's clearly Electron or generic names that don't provide value
-    // But keep the app name if it's detected
-    const genericNames = ['electron', 'node', 'nodejs'];
-
-    if (ownerName) {
-      const ownerNameLower = ownerName.toLowerCase();
-      // Only filter out if it's a generic name AND not our app
-      if (genericNames.some(generic => ownerNameLower === generic || ownerNameLower === `${generic}.exe`)) {
-        logInfo('ActiveWindow', `Filtered out generic owner name: ${ownerName}`);
-        ownerName = null;
-      }
-    }
-
-    if (windowTitle) {
-      const windowTitleLower = windowTitle.toLowerCase();
-      // Only filter out generic Electron titles if they don't provide context
-      if (windowTitleLower === 'electron' || windowTitleLower === 'node') {
-        logInfo('ActiveWindow', `Filtered out generic window title: ${windowTitle}`);
-        windowTitle = null;
-      }
-    }
-
-    // Build the app name with better logic for both platforms
-    let finalAppName = null;
-
-    if (process.platform === 'darwin') {
-      // macOS: prefer owner.name (application name) as it's more reliable
-      // Use window title as fallback or to add context (similar to Windows)
-      if (ownerName) {
-        // If we have both, combine them for more context: "App Name - Window Title"
-        // This matches the Windows format for consistency
-        if (windowTitle && windowTitle.length > 0) {
-          // For browsers, the window title often contains the tab/page name
-          // Even if windowTitle contains the app name, include it for context
-          // Format: "App Name - Window Title" (e.g., "Google Chrome - YouTube")
-          // Check if window title already contains app name to avoid duplication
-          const windowTitleLower = windowTitle.toLowerCase();
-          const ownerNameLower = ownerName.toLowerCase();
-
-          if (windowTitleLower.includes(ownerNameLower) && windowTitleLower.length > ownerNameLower.length) {
-            // Window title already contains app name with additional info (e.g., "Google Chrome - YouTube")
-            // Use the full window title as it has more context
-            finalAppName = windowTitle;
-          } else if (windowTitle !== ownerName) {
-            // Window title is different from app name, combine them
-            finalAppName = `${ownerName} - ${windowTitle}`;
-          } else {
-            // Window title is same as app name, just use app name
-            finalAppName = ownerName;
-          }
-        } else {
-          finalAppName = ownerName;
-        }
-      } else if (windowTitle) {
-        finalAppName = windowTitle;
-      }
-    } else {
-      // Windows: prefer owner.name (application name) as it's more useful than window title
-      // Window titles on Windows can be very generic or change frequently
-      if (ownerName) {
-        // If we have both, combine them: "App Name - Window Title"
-        if (windowTitle && windowTitle.length > 0 && windowTitle !== ownerName) {
-          finalAppName = `${ownerName} - ${windowTitle}`;
-        } else {
-          finalAppName = ownerName;
-        }
-      } else if (windowTitle) {
-        finalAppName = windowTitle;
-      }
-    }
-
+    const finalAppName = processActiveWindowResult(result);
     if (finalAppName) {
       logInfo('ActiveWindow', `Final app name: ${finalAppName}`);
       return finalAppName;
