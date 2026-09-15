@@ -306,10 +306,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (isOnBreak && breakStartTime) {
       computedBreak += Math.floor((now - new Date(breakStartTime)) / 1000);
     }
-    const computedIdle = idleTracker ? idleTracker.getTotalIdleTime() : totalIdleTime;
+    const computedIdle = idleTracker 
+    ? idleTracker.getTotalIdleTime() 
+    : totalIdleTime;
+
     StorageService.setItem('activeDuration', String(computedActive));
     StorageService.setItem('breakDuration', String(computedBreak));
     StorageService.setItem('totalIdleTime', String(computedIdle));
+
+     // NEW: Save the actual timestamp as a direct heartbeat
+    StorageService.setItem('lastActivityTimestamp', now.toISOString());
   }
 
   /** Update time_sessions row in DB with current durations (called every 30s while session is active). */
@@ -705,7 +711,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     let finalActiveDuration = totalActiveDuration;
     if (wasActive && !isOnBreak && !isIdle && previousWorkStartTime) {
       const workElapsed = Math.floor((clockOutTime - previousWorkStartTime) / 1000);
-      if (workElapsed > 0) {
+      // In recovery mode, the snapshot already includes accumulated active time,
+      // so adding workElapsed again would double-count.
+      if (workElapsed > 0 && !isRecoveryMode) {
         finalActiveDuration += workElapsed;
       }
     }
@@ -793,6 +801,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       StorageService.removeItem('breakCount');
       StorageService.removeItem('totalIdleTime');
       StorageService.removeItem('isOnBreak');
+      StorageService.removeItem('lastActivityTimestamp');
 
       if (idleTracker) {
         idleTracker.destroy();
@@ -1512,29 +1521,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (isRecoveryMode && isActive && sessionStartTime) {
     let crashTimeStr = null;
     
-    // First Attempt: Calculate from LocalStorage
+    // BEST: Read the direct heartbeat timestamp (no math needed)
     try {
-      const storedStart = StorageService.getItem('sessionStartTime');
-      const storedActive = parseInt(StorageService.getItem('activeDuration') || '0', 10);
-      const storedBreak = parseInt(StorageService.getItem('breakDuration') || '0', 10);
-      const storedIdle = parseInt(StorageService.getItem('totalIdleTime') || '0', 10);
-
-      if (storedStart) {
-        const startTime = new Date(storedStart);
-        const totalSeconds = storedActive + storedBreak + storedIdle;
-        const crashTime = new Date(startTime.getTime() + (totalSeconds * 1000));
-        crashTimeStr = crashTime.toISOString();
-        console.log(`[Recovery] Calculated crash time from LocalStorage: ${crashTimeStr} (start: ${storedStart}, active: ${storedActive}s, break: ${storedBreak}s, idle: ${storedIdle}s)`);
+      const lastHeartbeat = StorageService.getItem('lastActivityTimestamp');
+      if (lastHeartbeat) {
+        const heartbeatDate = new Date(lastHeartbeat);
+        if (!isNaN(heartbeatDate.getTime())) {
+          crashTimeStr = heartbeatDate.toISOString();
+          console.log('[Recovery] Using direct heartbeat timestamp:', crashTimeStr);
+        }
       }
-    } catch (localErr) {
-      console.warn('[Recovery] Local crash time calculation failed:', localErr);
+    } catch (heartbeatErr) {
+      console.warn('[Recovery] Heartbeat read failed:', heartbeatErr);
     }
 
-    // Second Attempt: Query Supabase if LocalStorage calculation failed
+    // FALLBACK 1: Calculate from duration values in LocalStorage (with NaN protection)
+    if (!crashTimeStr) {
+      try {
+        const storedStart = StorageService.getItem('sessionStartTime');
+        const storedActive = parseInt(StorageService.getItem('activeDuration') || '0', 10) || 0;
+        const storedBreak = parseInt(StorageService.getItem('breakDuration') || '0', 10) || 0;
+        const storedIdle = parseInt(StorageService.getItem('totalIdleTime') || '0', 10) || 0;
+
+        if (storedStart) {
+          const startTime = new Date(storedStart);
+          if (!isNaN(startTime.getTime())) {
+            const totalSeconds = storedActive + storedBreak + storedIdle;
+            const crashTime = new Date(startTime.getTime() + (totalSeconds * 1000));
+            if (!isNaN(crashTime.getTime())) {
+              crashTimeStr = crashTime.toISOString();
+              console.log(`[Recovery] Calculated crash time from LocalStorage: ${crashTimeStr} (start: ${storedStart}, active: ${storedActive}s, break: ${storedBreak}s, idle: ${storedIdle}s)`);
+            }
+          }
+        }
+      } catch (localErr) {
+        console.warn('[Recovery] Local crash time calculation failed:', localErr);
+      }
+    }
+
+    // FALLBACK 2: Query Supabase if both local methods failed
     if (!crashTimeStr) {
       try {
         const supabaseSessionId = StorageService.getItem('supabaseSessionId') || StorageService.getItem('currentSessionId');
-        if (supabaseSessionId && window.supabase) {
+        if (supabaseSessionId && window.supabase && !isNaN(parseInt(supabaseSessionId, 10))) {
           const { data: sessionData, error } = await window.supabase
             .from('time_sessions')
             .select('start_time, total_duration')
@@ -1543,10 +1572,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             
           if (!error && sessionData && sessionData.start_time) {
             const startTime = new Date(sessionData.start_time);
-            const totalSeconds = sessionData.total_duration || 0;
-            const crashTime = new Date(startTime.getTime() + (totalSeconds * 1000));
-            crashTimeStr = crashTime.toISOString();
-            console.log(`[Recovery] Calculated crash time from Supabase fallback: ${crashTimeStr} (start: ${sessionData.start_time}, duration: ${totalSeconds}s)`);
+            if (!isNaN(startTime.getTime())) {
+              const totalSeconds = parseInt(sessionData.total_duration, 10) || 0;
+              const crashTime = new Date(startTime.getTime() + (totalSeconds * 1000));
+              if (!isNaN(crashTime.getTime())) {
+                crashTimeStr = crashTime.toISOString();
+                console.log(`[Recovery] Calculated crash time from Supabase fallback: ${crashTimeStr} (start: ${sessionData.start_time}, duration: ${totalSeconds}s)`);
+              }
+            }
           } else if (error) {
             console.error('[Recovery] Supabase fallback query error:', error);
           }
@@ -1554,6 +1587,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       } catch (err) {
         console.error('[Recovery] Supabase fallback query exception:', err);
       }
+    }
+
+    // FINAL FALLBACK: Use current time if all methods failed (should never reach here)
+    if (!crashTimeStr) {
+      console.error('[Recovery] CRITICAL: All crash time recovery methods failed. Defaulting to current time.');
+      crashTimeStr = new Date().toISOString();
     }
 
     // Clock out with calculated crash time and reason set to 'termination'

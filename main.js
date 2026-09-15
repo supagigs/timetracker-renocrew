@@ -3,6 +3,9 @@ const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor, powerSaveBlo
 const path = require('path');
 const fs = require('fs');
 
+// Disable hardware acceleration to prevent GPU process crashes
+app.disableHardwareAcceleration();
+
 const log1 = require('electron-log');
 
 // Load environment variables as soon as app is ready to check its packaged status
