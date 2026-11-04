@@ -6,7 +6,7 @@ const TIMESHEET_SYNC_ERROR_MESSAGE =
   'We couldn\'t sync your timesheet with the server right now. Your time may still have been saved—please check the Timesheet list in ERP Next. If the problem continues, try submitting any draft timesheet for this project in ERP Next and try again.';
 
 // Logging functions will be passed from main.js
-let logInfo, logError, logWarn;
+// let logInfo, logError, logWarn;
 
 function setLoggers(loggers) {
   logInfo = loggers.logInfo;
@@ -2085,12 +2085,13 @@ async function getFrappeServerTime() {
     // This requires a server script: get_server_now
     // Using POST as per the server script implementation
     const res = await frappe.post('/api/method/get_server_now');
-
+    logInfo('Frappe', `Response from get_server_now: ${JSON.stringify(res?.data)}`);
     if (!res?.data?.message) {
       throw new Error('Invalid response from get_server_now');
     }
 
-    const serverTime = res.data.message;
+    const serverTime = res.data.message.server_time;
+    logInfo('Frappe', `Server time fetched: ${serverTime}`);
 
     if (logInfo) {
       logInfo('Frappe', `Server time: ${serverTime}`);
